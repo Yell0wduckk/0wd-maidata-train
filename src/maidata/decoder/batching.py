@@ -62,7 +62,7 @@ def audio_key_spans(valid, *, validate=True):
     return tuple(spans)
 
 
-def audio_query_layout(valid, mapping, audio_count, *, spans=None, validate=True):
+def audio_query_layout(valid, mapping, audio_count, *, spans=None, condition_valid=None, validate=True):
     """CPU indices collect a song's queries without repeating its full K/V bank."""
     if validate and (valid.device.type != 'cpu' or mapping.device.type != 'cpu'):
         raise ValueError('audio query layout must be prepared on CPU')
@@ -97,7 +97,12 @@ def audio_query_layout(valid, mapping, audio_count, *, spans=None, validate=True
             songs.append(song)
             offset += width
     cat = lambda rows: torch.cat(rows) if rows else torch.empty(0, dtype=torch.long)
+    from .row_layout import window_layout
+    rows = window_layout(valid)
+    compact = torch.zeros(valid.numel(), dtype=torch.long)
+    compact[rows['indices']] = torch.arange(len(rows['indices']))
     return dict(mapping=mapping, shape=tuple(valid.shape), spans=spans, indices=indices,
                 songs=torch.tensor(songs, dtype=torch.long), groups=tuple(groups),
                 gather=cat(gather), take=cat(take), put=cat(put),
-                valid_indices=valid.flatten().nonzero().flatten())
+                valid_indices=rows['indices'], compact_gather=compact[cat(gather)], compact_put=compact[cat(put)],
+                rows=rows, condition_rows=rows if condition_valid is None else window_layout(valid, condition_valid))

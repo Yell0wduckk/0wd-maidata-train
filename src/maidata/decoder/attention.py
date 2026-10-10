@@ -31,6 +31,8 @@ class Attention(nn.Module):
             beats = memory.beats.flatten().index_select(0, indices)[None]
             raw = self.split(self.key(x))
             key = apply_rope(raw, beats, self.base, self.scale)
+            if plan_index is not None:
+                key = torch.where((indices % length >= plan_index)[None, None, :, None], raw, key)
             value = self.split(self.value(x))
             def restore(t):
                 flat = t[0].transpose(0, 1)
@@ -76,7 +78,7 @@ class Attention(nn.Module):
         y = y.transpose(1, 2).reshape(*valid.shape, self.dim)
         return self.output(y).masked_fill(~(valid & kv.valid.any(-1, keepdim=True))[..., None], 0)
 
-    def mapped(self, q, valid, kv):
+    def mapped(self, q, valid, kv, *, packed=False):
         layout = kv.query_layout
         if self.validate_inputs and (tuple(valid.shape) != layout['shape'] or len(layout['indices']) != len(kv.valid)):
             raise ValueError('audio query layout shape mismatch')
@@ -84,7 +86,8 @@ class Attention(nn.Module):
         # instead of each song's SliceBackward allocating the full-song batch.
         flat = q.transpose(1, 2).flatten(0, 1)
         sizes = [g[0] for g in layout['groups']]
-        queries = flat.index_select(0, layout['gather']).split([g[0]*g[1] for g in layout['groups']])
+        queries = flat.index_select(0, layout['compact_gather'] if packed else layout['gather']).split(
+            [g[0]*g[1] for g in layout['groups']])
         keys = kv.key.index_select(0, layout['songs']).split(sizes)
         values = kv.value.index_select(0, layout['songs']).split(sizes)
         masks = kv.valid.index_select(0, layout['songs']).split(sizes)
@@ -96,9 +99,11 @@ class Attention(nn.Module):
                 attn_mask=mask[:, None, None, lo:hi], dropout_p=self.dropout if self.training else 0.)
             pieces.append(result.transpose(1, 2).reshape(-1, self.heads, self.dim//self.heads))
         selected = torch.cat(pieces).index_select(0, layout['take']) if pieces else flat[:0]
-        output = torch.zeros_like(flat).index_copy(0, layout['put'], selected)
-        y = output.reshape(*valid.shape, self.dim)
+        output = torch.zeros_like(flat).index_copy(0, layout['compact_put'] if packed else layout['put'], selected)
+        y = output.reshape(flat.shape[0], self.dim) if packed else output.reshape(*valid.shape, self.dim)
         active = valid & kv.valid.any(-1)[layout['mapping']][:, None]
+        if packed:
+            active = active.flatten().index_select(0, layout['valid_indices'])
         return self.output(y).masked_fill(~active[..., None], 0)
 
     def self_attention(self, x, beats, valid, previous):

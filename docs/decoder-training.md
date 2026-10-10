@@ -80,7 +80,11 @@ IPC 使用现有 `training.transport` 的 dtype 连续缓冲实现，整曲条�
 
 NOTE 输入、MMoE gate、kind→pad/flags 使用固定形状张量运算，避免 CUDA 布尔索引产生动态 `nonzero`；flags 的条件适配每个 NOTE 仅计算一次。常规 loss 统计在设备累积，输出 update/epoch 日志时统一回读；不逐步执行额外有限值断言。
 
-有效音频与谱面行索引、小批SDPA布局均在worker整理现有张量时生成，并随dtype缓冲传输，不读取字段或Physical、不改离线缓存。FFN的LayerNorm、所有专家与gate只计算有效谱面行；attention所需的因果布局保持完整。self-attn通过拼接现有Q/K/V权重执行一次线性投影，不改变参数名称或optimizer槽位。Z/plan通过互不重叠的两半Q/K特征实现单次SDPA：Z使用旋转后分量，plan使用未旋转分量，显式保留原head维度的缩放；仍为同一个联合softmax，plan没有位置编码。
+有效音频与谱面行索引、小批SDPA布局均在worker整理现有张量时生成，并随dtype缓冲传输，不读取字段或Physical、不改离线缓存。每层四个LayerNorm、self-attn QKV、两路cross-attn query及三路输出投影、FFN专家与gate均只计算有效谱面行；条件K/V仅投影有效Z/plan槽。self-attn通过拼接现有Q/K/V权重执行一次线性投影，不改变参数名称或optimizer槽位。
+
+独立`decoder.row_layout`按有效token数的二次幂档组织窗内self-attn；内部无效位置按序移除，原始绝对拍坐标不变。每个小批只补齐到组内最长窗口，padding key位于全部真实query之后，使用`is_causal=True`保持原因果关系。`decoder.packed_attention`只消费张量和布局，输出按原窗口/行索引恢复，不改随机窗口顺序、batch成员、row budget或loss分母。self K/V仍恢复原窗口形状及有效位，增量续接和不可变快照沿用现有接口。
+
+Z/plan attention同时按query长度和有效key数分组；独立key mask保留空条件及plan有效性，原有效槽的拍坐标和归属不变。Z/plan通过互不重叠的两半Q/K特征实现单次SDPA：Z使用旋转后分量，plan使用未旋转分量，显式保留原head维度的缩放；仍为同一个联合softmax，plan没有位置编码。分组减少attention内部padding，不把它计为有效token或改变8192的预算口径。
 
 | 对照项 | 原仓库实现 | 当前阶段二 |
 |---|---|---|

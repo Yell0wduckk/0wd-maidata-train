@@ -31,8 +31,11 @@ def prepare_batch(batch, config):
         tokens, types, labels = collate_prepared(rows)
         index = torch.tensor(indices, dtype=torch.long)
         audio = conditions.audio_mapping[conditions.occurrence_mapping[index]]
+        unique = conditions.occurrence_mapping[index]
+        condition_valid = torch.cat((conditions.decoder_z.valid[unique], conditions.plan_valid[unique, None]), -1)
         batch.chunks.append(Chunk(index, tokens, types, labels,
-            audio_query_layout(tokens.valid, audio, len(batch.audio_variants), spans=spans, validate=False), tokens.valid.numel()))
+            audio_query_layout(tokens.valid, audio, len(batch.audio_variants), spans=spans,
+                               condition_valid=condition_valid, validate=False), tokens.valid.numel()))
     batch.token_budget = config['decoder_train_chunk_token_budget']
     # Transport only tensors + small occurrence metadata. Rule objects, complete
     # support dictionaries and GT token trees stay inside the worker.

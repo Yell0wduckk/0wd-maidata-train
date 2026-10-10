@@ -59,13 +59,15 @@ class Decoder(nn.Module):
             if self.validate_inputs:
                 require((audio_mapping == audio_layout['mapping']).all(), 'audio query layout ownership differs')
         condition = self.condition(z, plan, plan_valid)
+        condition_indices = None if audio_layout is None else audio_layout.get('condition_rows', {}).get('key_indices')
         def select(kv):
             if audio_layout is not None:
                 return KV(kv.key, kv.value, kv.valid, audio_layout)
             return KV(kv.key.index_select(0, audio_mapping), kv.value.index_select(0, audio_mapping),
                       kv.valid.index_select(0, audio_mapping))
         return DecoderMemory(tuple(select(kv) for kv in audio_kv),
-            tuple(layer.condition_attn.project(condition, plan_index=z.values.shape[1]) for layer in self.layers),
+            tuple(layer.condition_attn.project(condition, plan_index=z.values.shape[1], indices=condition_indices)
+                  for layer in self.layers),
             z.values.shape[1], None if audio_layout is None else audio_layout['valid_indices'])
 
     def begin(self, tokens, memory, *, cache=None):
