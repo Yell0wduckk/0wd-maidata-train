@@ -1,17 +1,114 @@
 """Compact time integration agrees with the dense-cell oracle, including gradients."""
 from types import SimpleNamespace
 from unittest.mock import patch
+import random
 import torch
 import pytest
 
 from maidata.decoder.probability import TimeDistribution, interval_log_probabilities
 from maidata.decoder.losses import physical_categories
-from maidata.decoder_training.intervals import compact_time_group, compact_labels
+from maidata.decoder_training.intervals import compact_time_group, compact_labels, time_intervals
+from maidata.decoder.supports import time_candidates
+from maidata.chart import Moment, HoldDuration, SlideDuration
+from maidata.chart.windows import TimeTarget
+from maidata.time import TimingMap
 from maidata.decoder_training.compact_windows import convert_window
 from maidata.decoder_training.window_cache import tensor_pack, tensor_unpack, select_window
 from maidata.decoder_training.supervision import loss, Prepared
 from maidata.model import build_decoder, decoder_time_distributions
 from test_decoder_network import config
+
+
+def decision(*, basic=False, penalty=0):
+    return dict(basic=['outside'] if basic else [], penalty=penalty, physical=penalty)
+
+
+def compare_direct(stage, timing, target, kind, *, end, cap):
+    dense = time_candidates(stage, timing, kind=kind, window_end=end, cap_tick=cap, device='cpu')
+    expected = compact_time_group(dict(lower=dense.lower[None], upper=dense.upper[None],
+        allowed=dense.valid[None], penalty=dense.penalty[None],
+        target=dense.target_mask(target, timing, stage['cursor_tick'])[None]))
+    direct = time_intervals(stage, timing, target, kind=kind, window_end=end, cap_tick=cap)
+    assert direct.choices == dense.choices
+    for key in ('lower', 'upper', 'penalty', 'target', 'allowed'):
+        actual = getattr(direct, 'valid' if key == 'allowed' else key)
+        torch.testing.assert_close(actual, expected[key][0], rtol=0, atol=0)
+
+
+@pytest.mark.parametrize('cursor,end,cap', [(-30, 40, 200), (0, 80, 140.25),
+    (0, 1, 1), (0, 1, 1.25), (0, 1, 1.75), (0, .25, .5), (180, 190, 200)])
+def test_direct_moment_partitions_match_dense_bpm_holes_and_terminal(cursor, end, cap):
+    timing = TimingMap([(0, 131), (1, 177), (2, 83)])
+    support = dict(domain=[-29, 149], outside_basic='onset_outside_audio', intervals=[
+        [-29, -2, decision(penalty=1)], [0, 29, decision()], [30, 34, decision(basic=True)],
+        [35, 42, decision(penalty=3)], [43, 65, decision(penalty=8)],
+        [70, 90, decision(penalty=3)], [91, 149, decision()]])
+    stage = dict(cursor_tick=cursor, moment=support)
+    cells = time_candidates(stage, timing, kind='MOMENT', window_end=end, cap_tick=cap, device='cpu')
+    # All valid GT cells plus the censored tail, including exact out-of-window labels.
+    for label, valid in zip(cells.labels, cells.valid.tolist()):
+        if not valid:
+            continue
+        tick = cap if label is None else label
+        target = TimeTarget(timing.delta_ms(cursor, tick), tick, label is None, tick >= end)
+        compare_direct(stage, timing, target, 'MOMENT', end=end, cap=cap)
+    if end > cursor+1 and cells.valid[0]:
+        compare_direct(stage, timing, Moment(timing.delta_ms(cursor, cursor+1)), 'MOMENT', end=end, cap=cap)
+
+
+@pytest.mark.parametrize('kind,constructor,minimum', [('HOLD_DURATION', HoldDuration, 2),
+                                                     ('SLIDE_DURATION', SlideDuration, 1)])
+def test_direct_duration_partitions_match_dense_clamped_representatives(kind, constructor, minimum):
+    timing, rng = TimingMap([(0, 131), (1, 177), (2, 83)]), random.Random(817)
+    for n in range(40):
+        lower, upper = minimum+n%7, minimum+n%7+rng.randrange(50)
+        intervals, at = [], lower
+        while at <= upper:
+            stop = min(upper, at+rng.randrange(6))
+            intervals.append([at, stop, decision(basic=rng.random()<.2, penalty=rng.randrange(16))])
+            at = stop+1
+        stage = dict(cursor_tick=n*7-10, duration=dict(domain=[lower, upper],
+                     intervals=intervals, outside_basic='duration_outside_audio'))
+        cells = time_candidates(stage, timing, kind=kind, window_end=100, cap_tick=200, device='cpu')
+        for tick in range(lower-1, upper+2):
+            if tick < minimum:
+                continue
+            target = constructor(tick)
+            try:
+                cells.target_mask(target, timing, stage['cursor_tick'])
+            except ValueError:
+                with pytest.raises(ValueError):
+                    time_intervals(stage, timing, target, kind=kind, window_end=100, cap_tick=200)
+            else:
+                compare_direct(stage, timing, target, kind, end=100, cap=200)
+
+
+def test_direct_duration_retains_exact_gt_legality_and_representative_legality():
+    support = dict(domain=[2, 18], outside_basic='duration_outside_audio', intervals=[
+        [2, 2, decision(basic=True)], [3, 7, decision()], [8, 8, decision(basic=True)], [9, 18, decision()]])
+    stage, timing = dict(cursor_tick=0, duration=support), TimingMap([(0, 120)])
+    # GT 2 is illegal even though its representative 4 is legal; GT 6 is legal
+    # but its bucket representative 8 is illegal. Neither may be silently kept.
+    for tick in (2, 6):
+        with pytest.raises(ValueError):
+            time_intervals(stage, timing, HoldDuration(tick), kind='HOLD_DURATION', window_end=96, cap_tick=192)
+    compare_direct(stage, timing, HoldDuration(18), 'HOLD_DURATION', end=96, cap=192)
+
+
+@pytest.mark.parametrize('kind', ['MOMENT', 'HOLD_DURATION', 'SLIDE_DURATION'])
+def test_direct_producer_uses_boundaries_instead_of_expanding_huge_domains(kind):
+    upper, timing = 10**9, TimingMap([(0, 120), (3, 137)])
+    support = dict(domain=[2, upper], intervals=[[2, upper, decision()]], outside_basic='outside')
+    stage = dict(cursor_tick=0, moment=support, duration=support)
+    target = {'MOMENT': Moment(timing.delta_ms(0, 96)),
+              'HOLD_DURATION': HoldDuration(96), 'SLIDE_DURATION': SlideDuration(96)}[kind]
+    with patch('maidata.decoder.supports.time_candidates', side_effect=AssertionError('dense candidates')), \
+         patch('maidata.time.support.duration_cells', side_effect=AssertionError('dense duration')), \
+         patch.object(timing, 'delta_ms', wraps=timing.delta_ms) as endpoints:
+        cells = time_intervals(stage, timing, target, kind=kind, window_end=upper-96, cap_tick=upper)
+    assert len(cells.lower) == 3
+    assert cells.choices == (upper-1 if kind == 'MOMENT' else upper//4)
+    assert endpoints.call_count <= 10
 
 
 def dense_group():

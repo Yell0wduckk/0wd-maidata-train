@@ -36,7 +36,9 @@ def test_compiled_history_dropout_chain_and_terminal_match_oracle(config, monkey
     cached, wanted = [], []
     for start, dropped in ((-96,False),(0,False),(384,True),(576,False),(672,True),(1344,False)):
         row = dict(start_tick=start,end_tick=start+192)
-        value = compile_window(chart,row,cfg,12,onsets)
+        with patch('maidata.decoder.supports.time_candidates', side_effect=AssertionError('dense candidates')), \
+             patch('maidata.time.support.duration_cells', side_effect=AssertionError('dense duration')):
+            value = compile_window(chart,row,cfg,12,onsets)
         path = tmp_path/f'{start}.pt'
         torch.save(tensor_pack(value),path)
         restored = tensor_unpack(torch.load(path,weights_only=True))

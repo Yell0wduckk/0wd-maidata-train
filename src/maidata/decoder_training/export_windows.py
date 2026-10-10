@@ -1,4 +1,4 @@
-"""Explicit offline preparation of selected windows from accepted field/Physical caches."""
+"""Export compact window tensors directly from accepted field/Physical intervals."""
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import fields
 from hashlib import sha256
@@ -90,7 +90,8 @@ def export(config, *, workers=12):
             tasks.append((key, chart['chart_cache_path'], rows,
                           plan.groups[rows[0]['audio_variant']]['audio_end_seconds']))
     (root/'windows').mkdir(parents=True)
-    meta = dict(schema=SCHEMA, complete=False, contract=contract(config, binding), windows={})
+    meta = dict(schema=SCHEMA, complete=False, contract=contract(config, binding), windows={},
+                time_support='merged-equal-target-and-physical-intervals')
     write_json(root/'manifest.json', meta)
     with ProcessPoolExecutor(max_workers=workers, initializer=initialize, initargs=(config, hashes)) as pool:
         for n, result in enumerate(pool.map(export_chart, tasks), 1):

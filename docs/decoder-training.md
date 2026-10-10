@@ -12,7 +12,7 @@
 | `decoder_training.preparation/transport` | worker 内整理去重映射、padding 和分块；按 dtype 打包 IPC、pin memory 与分块 H2D |
 | `decoder_training.export_windows/support_cache` | 离线恢复真实动作与首次归责账本，准备窗首、窗内和终端支持 |
 | `decoder_training.window_cache` | 读取已打包的输入与监督张量，执行历史 dropout、padding 和行索引平移 |
-| `decoder_training.intervals/compact_windows` | 离线合并等价时间积分区间；从已有窗口张量转换，不重查规则 |
+| `decoder_training.intervals/compact_windows` | 从Physical区间直接生成loss积分区间；另支持已有窗口张量转换，不重查规则 |
 | `decoder_training.network` | 只持有 M；接收已选取的公开缓存张量，执行可训练投影 |
 | `decoder_training.batching` | 按实际 M 输入长度连续分块，不改变 occurrence 顺序或裁剪历史 |
 | `decoder_training.supervision` | 离线整理支持与计数；训练执行批量小头及三组独立 loss 归约 |
@@ -64,7 +64,9 @@ python -m maidata.decoder_training.export_windows --config decoder-stage2.json -
 
 将 `decoder_train_window_cache` 指向输出目录。该步骤复用已有字段、Physical，不重建源缓存或 P0/Z/plan；只处理计划中的基础窗和空尾窗，重复 occurrence 共用一份产物。每个窗口保存不压缩的 dtype 连续张量缓冲及轻量布局，新增产物在离线生成时检查一次落盘往返。历史长度和目标长度保存在 manifest。
 
-窗口张量v2使用上述紧凑时间积分区间。已有v1窗口可直接转换到新目录：
+窗口导出直接从Physical整数区间生成v2时间积分张量，不先枚举逐tick候选或逐桶duration再压缩。只在基础合法性、四类新增归责或GT归属改变处切分，MOMENT窗尾和无穷尾部独立处理。duration按原四tick桶代表值映射支持，同时检查GT实际tick的基础合法性；完整BPM映射与原始有效选择数保持不变。时间张量生成成本随区间数量增长，不随候选tick总数增长。整谱Physical仍保留原区间与具体冲突证据，不能仅按四类mask相同就合并丢失首次归责账本。
+
+已生成的紧凑v2窗口语义不变，无需重建。已有v1窗口可直接转换到新目录：
 
 ```sh
 python -m maidata.decoder_training.compact_windows --source OLD_WINDOW_CACHE --output COMPACT_WINDOW_CACHE --workers 12

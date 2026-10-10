@@ -35,7 +35,9 @@ SLIDE_DURATION类型表示结束当前链，通过全部基础合法整数durati
 | `deferred`、`penalty_deferred` | 两种查询各自的未确定标志；未知不当作非法 |
 | stage的 `attribution` | GT在每个阶段实际选中的首次归责证据 |
 
-`candidate_decision/type_decision/time_decision` 默认读取penalty；`penalty=False`读取完整Physical。`time_decision`仍接受当前 `window_end/censored`，窗外/尾部查询放行。缓存不固化目标stride、历史长度、dropout或网络容量。外部边界及重新切窗后的前缀由运行时适配，不能用旧位置的类型mask替代不同语法状态。
+`candidate_decision/type_decision/time_decision` 默认读取penalty；`penalty=False`读取完整Physical。`time_decision`仍接受当前 `window_end/censored`，窗外/尾部查询放行。缓存不固化目标stride、历史长度、dropout或网络容量。外部边界及重新切窗后的前缀由独立适配器处理，不能用旧位置的类型mask替代不同语法状态；阶段二训练的适配在离线窗口导出时完成，不留给DataLoader。
+
+整谱生产器按规则交点生成整数时间区间，只合并完整判定和冲突证据一致的相邻区间。阶段二的 `python -m maidata.decoder_training.export_windows` 从这些区间直接生成紧凑loss张量，不展开逐tick/逐桶候选；GT边界、基础非法缺口及四类新增归责位均保留。两层格式独立：整谱支持供规则和账本复用，窗口张量供模型训练，推理仍沿用原候选定义。窗口导出优化不改变整谱Physical缓存，也不要求重建已经生成的紧凑窗口。命令与配置见[主Decoder训练](decoder-training.md)。
 
 ## 仅重建支持
 

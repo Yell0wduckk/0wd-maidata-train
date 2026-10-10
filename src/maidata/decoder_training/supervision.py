@@ -7,10 +7,10 @@ from torch.nn.utils.rnn import pad_sequence
 from maidata.chart.types import GENERATED_TYPES, KINDS, FLAGS, APPLICABLE, BUTTON_PADS, TOUCH_PADS, Note, Route
 from maidata.chart.windows import TimeTarget
 from maidata.time import duration_end
-from maidata.decoder.supports import categorical_support, time_candidates
+from maidata.decoder.supports import categorical_support
 from maidata.decoder.probability import categorical_log_probabilities, interval_log_probabilities
 from maidata.decoder.losses import Reduction, DecoderLoss, physical_categories
-from .intervals import compact_time_group
+from .intervals import time_intervals
 
 
 KEYS = ('main', 'physical', 'judge', 'trajectory')
@@ -78,10 +78,10 @@ def prepare(windows):
                     add('break', index, torch.ones(2,dtype=torch.bool), torch.zeros(2,4,dtype=torch.bool),
                         torch.arange(2)==target.track_break, physical=0, args=(target.route_id,))
             else:
-                cells = time_candidates(s,timing,kind=name,window_end=w.end_tick,cap_tick=w.cap_tick,device='cpu')
+                cells = time_intervals(s,timing,target,kind=name,window_end=w.end_tick,cap_tick=w.cap_tick)
                 choice = cells.choices > 1
                 counts['physical'] += choice
-                add(name,index,cells.valid,cells.penalty,cells.target_mask(target,timing,s['cursor_tick']),
+                add(name,index,cells.valid,cells.penalty,cells.target,
                     physical=float(choice),bounds=(cells.lower,cells.upper))
     packed = {}
     for key, group in rows.items():
@@ -96,7 +96,6 @@ def prepare(windows):
         if bounds[0] is not None:
             packed[key].update(lower=pad_sequence([v[0] for v in bounds],batch_first=True),
                                upper=pad_sequence([v[1] for v in bounds],batch_first=True,padding_value=1))
-            packed[key] = compact_time_group(packed[key])
     return Prepared(packed, counts, dict(indices=torch.tensor(list(flag_rows),dtype=torch.long).reshape(-1,2),
         args=torch.tensor(list(flag_rows.values()),dtype=torch.long).reshape(-1,2)))
 
