@@ -11,6 +11,7 @@ from maidata.training.data import epoch_iterator
 from . import checkpoint, recipe
 from .data import make_loader
 from .network import DecoderTrainer
+from .shared_audio import SharedAudioGradients
 from .plan import DecoderPlan
 from .frozen_cache import FrozenCache
 from .window_cache import WindowCache
@@ -71,25 +72,29 @@ def update(model, batches, opt, sched, config, geometry, *, audit=False):
             conditions = model.conditions(batch)
             bank = conditions.audio
             audio_kv = model.decoder.prepare_audio(Memory(bank.values,bank.beats,bank.valid), indices=conditions.audio_indices)
-        for j,cpu_chunk in enumerate(chunks):
+        shared_audio = SharedAudioGradients(audio_kv)
+        for cpu_chunk in chunks:
             chunk = cpu_chunk.to(device)
             with recipe.autocast(device,config):
-                terms,output = chunk_loss(model,conditions,audio_kv,chunk,config,geometry)
+                terms,output = chunk_loss(model,conditions,shared_audio.memory,chunk,config,geometry)
                 value = objective(terms,counts,config)
-            value.backward(retain_graph=j+1<len(chunks))
+            value.backward()
+            shared_audio.collect()
             metrics.add(terms)
             costs.append(chunk.cost)
             del terms,output,value,chunk
-        del batch,conditions,audio_kv
-    norm = torch.nn.utils.clip_grad_norm_(model.decoder.parameters(),config['decoder_train_gradient_clip'])
+        shared_audio.backward()
+        del batch,conditions,bank,audio_kv,shared_audio
+    norm = torch.nn.utils.clip_grad_norm_(model.parameters(),config['decoder_train_gradient_clip'])
     gradients = {name:sum(float(p.grad.float().square().sum()) for p in m.parameters() if p.grad is not None)**.5
                  for name,m in model.named_children()} if audit else {}
     opt.step()
     sched.step()
     changed = {name:sum(not torch.equal(a,b) for a,b in zip(before[name],m.parameters()))
                for name,m in model.named_children()} if audit else {}
-    if audit and (set(changed) != {'decoder'} or not gradients['decoder'] or not changed['decoder']):
-        raise ValueError('offline stage II must construct and update M only')
+    if audit and (set(changed) != {'encoder','decoder'} or
+                  any(not gradients[name] or not changed[name] for name in changed)):
+        raise ValueError('joint stage II must construct and update Encoder and M')
     return metrics,dict(gradient_norm=float(norm),gradients=gradients,changed_parameter_tensors=changed,
                         chunks=len(costs),padded_token_costs=costs,
                         batch_costs=[b.budget_cost for b in batches])
@@ -163,7 +168,7 @@ def run(config, *, resume=None, cuda_check=False, check_step=0):
     model = DecoderTrainer(config)
     model.to(device)
     geometry = load_route_distances(config['decoder_train_route_distances']).to(device)
-    opt = recipe.optimizer(model.decoder.parameters(),config)
+    opt = recipe.optimizer(model.parameters(),config)
     sched = recipe.scheduler(opt,steps,config)
     completed,step,best,restored = 0,0,None,[None,None]
     if resume:
@@ -192,7 +197,8 @@ def run(config, *, resume=None, cuda_check=False, check_step=0):
         metrics,audit = update(model,batches,opt,sched,config,geometry,audit=True)
         torch.cuda.synchronize(device)
         report = dict(metrics=metrics.report(config),**audit,component_forward_calls=calls,
-            conditioning='offline_cache',constructed_components=list(dict(model.named_children())),
+            conditioning='online_audio_fixed_draft_plan',encoder_initialization='scratch',
+            constructed_components=list(dict(model.named_children())),
             data_wait_seconds=data_seconds,
             seconds=time.perf_counter()-start,peak_allocated=torch.cuda.max_memory_allocated(device),
             peak_reserved=torch.cuda.max_memory_reserved(device),optimizer_step_in_epoch=check_step+1,

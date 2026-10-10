@@ -30,8 +30,10 @@ class StderrProgress:
     """Line-oriented CLI progress, with throttled encoder/token updates."""
     LABELS = {
         'runtime': 'Runtime imports', 'models': 'Model loading', 'audio': 'Audio input',
-        'geometry': 'Physical geometry', 'encoder_global': 'Encoder global audio',
-        'encoder_windows': 'Encoder audio windows', 'draft': 'Full-song Draft',
+        'geometry': 'Physical geometry', 'encoder_global': 'Draft encoder global audio',
+        'encoder_windows': 'Draft encoder audio windows', 'draft': 'Full-song Draft',
+        'decoder_encoder_global': 'Decoder encoder global audio',
+        'decoder_encoder_windows': 'Decoder encoder audio windows',
         'planner': 'Window Planner', 'generation': 'Autoregressive generation',
         'decoder_audio': 'Decoder audio projection',
         'chart_ir': 'Chart IR conversion', 'write_outputs': 'Writing outputs',
@@ -65,10 +67,11 @@ class StderrProgress:
                 if kind == 'stage_error':
                     message += f"; {event['error']}"
         elif kind == 'encoder_progress':
-            key = ('encoder',)
+            key = ('encoder', event.get('encoder'))
             complete = event['completed'] == event['total']
             if complete or now - self.last_update.get(key, self.started) >= self.interval:
-                message = f"Encoder audio windows: {event['completed']}/{event['total']}"
+                label = {'draft': 'Draft encoder', 'decoder': 'Decoder encoder'}.get(event.get('encoder'), 'Encoder')
+                message = f"{label} audio windows: {event['completed']}/{event['total']}"
                 self.last_update[key] = now
         elif kind == 'window_start':
             self.window = dict(event)

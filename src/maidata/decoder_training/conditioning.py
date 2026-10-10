@@ -1,4 +1,4 @@
-"""CPU selection of public cached conditions, independent of labels and networks."""
+"""CPU selection of fixed Draft/Plan and online-audio geometry, without networks."""
 from dataclasses import dataclass
 import torch
 from torch.nn.utils.rnn import pad_sequence
@@ -18,10 +18,9 @@ class Conditions:
     audio_indices: torch.Tensor | None = None
 
 
-def collate_conditions(items, windows, config):
-    # Full P0 is shared by songs. Only selected Z context/plan tensors cross IPC.
-    audio = Memory(*(pad_sequence([item['p0'][k] for item in items], batch_first=True)
-                     for k in ('values', 'beats', 'valid')))
+def collate_conditions(items, windows, config, *, audio):
+    # Full audio geometry is shared by songs. Only selected frozen Z context and
+    # plan tensors cross IPC; current Encoder values are supplied by the model.
     songs = {item['variant']: i for i, item in enumerate(items)}
     chart_sources = {chart: (item, group) for item in items for chart, group in item['dp']['chart_to_group'].items()}
     groups, unique, indices = {}, {}, []

@@ -110,7 +110,8 @@ def main(argv=None):
         with torch.inference_mode(), torch.autocast(device.type, dtype=torch.bfloat16, enabled=args.precision == 'bf16'):
             conditions = prepare_conditions(models.encoder, models.draft, models.planner, models.config, grid,
                 timing, duration, difficulty=args.difficulty, level=args.level, device=device,
-                encoder_window_batch=args.encoder_window_batch, progress=progress)
+                encoder_window_batch=args.encoder_window_batch, progress=progress,
+                decoder_encoder=models.decoder_encoder)
             with stage(progress, 'generation'):
                 encoded, windows = generate(models.decoder, conditions, timing, geometry, models.config, metadata,
                                              duration, device=device, options=options, progress=progress)

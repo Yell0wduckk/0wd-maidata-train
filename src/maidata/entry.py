@@ -105,8 +105,8 @@ CONFIG = {
     "decoder_z_before_beats": 4,
     "decoder_z_after_beats": 4,
     "decoder_history_dropout": 0.15,
-    "decoder_train_checkpoint": None,  # Explicit paired E/D/P stage-I producer.
-    "decoder_train_p0_cache": None,  # Existing complete frozen P0 bank export.
+    "decoder_train_checkpoint": None,  # Offline-export producer; optional in training, never initializes stage-II E.
+    "decoder_train_p0_cache": None,  # Optional offline-export path; joint training does not read P0 caches.
     "decoder_train_dp_cache": None,  # Matching frozen Z and predicted plan12 export.
     "decoder_train_optimizer": "adamw",
     "decoder_train_fused_optimizer": True,  # CUDA backend; optimizer moments are preserved on resume.

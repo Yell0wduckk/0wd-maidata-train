@@ -1,4 +1,4 @@
-"""Stage-II cache, vectorized supervision, frozen producers and strict epoch resume."""
+"""Stage-II fixed D/P, online audio, vectorized supervision and epoch resume."""
 from copy import deepcopy
 from dataclasses import replace, asdict
 import json
@@ -217,27 +217,34 @@ def distances():
     return RouteGeometryLoss(d,d.square())
 
 
-def test_actual_cached_update_only_constructs_m_and_preserves_chunk_denominators(config,monkeypatch):
+def test_joint_update_constructs_encoder_and_m_and_preserves_chunk_denominators(config,monkeypatch):
     rows = [training_item(0,config,monkeypatch,remaster=True),training_item(1,config,monkeypatch)]
     batches = [collate_audio([r],config=config) for r in rows]
     model = DecoderTrainer(config)
     other = deepcopy(model)
     one = dict(config,decoder_train_chunk_token_budget=10000)
     together = collate_audio(rows,config=one)
-    opts = [recipe.optimizer(m.decoder.parameters(),config) for m in (model,other)]
+    # SGD isolates the loss-denominator/gradient oracle: regrouping E's FP32
+    # kernels changes roundoff that Adam can amplify for nearly-zero gradients.
+    opts = [torch.optim.SGD(m.parameters(),lr=config['decoder_train_learning_rate']) for m in (model,other)]
     scheds = [recipe.scheduler(o,[1]*6,config) for o in opts]
     with patch.object(model.decoder,'prepare_audio',wraps=model.decoder.prepare_audio) as project:
         a,audit = runner.update(model,[together],opts[0],scheds[0],one,distances(),audit=True)
     assert project.call_count==1
     b,_ = runner.update(other,batches,opts[1],scheds[1],config,distances(),audit=True)
-    assert set(audit['changed_parameter_tensors'])=={'decoder'}
-    assert set(dict(model.named_children()))=={'decoder'}
+    assert set(audit['changed_parameter_tensors'])=={'encoder','decoder'}
+    assert set(dict(model.named_children()))=={'encoder','decoder'}
     assert all(not t.requires_grad for t in (together.conditions.audio.values,together.conditions.decoder_z.values,together.conditions.plan))
     assert model.decoder.condition.z.weight.grad.abs().sum()>0
     assert a.counts==b.counts
     assert a.report(config)['loss']==pytest.approx(b.report(config)['loss'],rel=1e-5)
-    for x,y in zip(model.decoder.parameters(),other.decoder.parameters()):
-        torch.testing.assert_close(x,y,atol=2e-5,rtol=3e-4)
+    for (name,x),(other_name,y) in zip(model.named_parameters(),other.named_parameters()):
+        assert name==other_name
+        torch.testing.assert_close(x,y,atol=2e-5,rtol=3e-4,msg=name)
+        if x.grad is None or y.grad is None:
+            assert x.grad is y.grad
+        else:
+            torch.testing.assert_close(x.grad,y.grad,atol=2e-5,rtol=3e-4,msg=name+' gradient')
     assert not hasattr(model,'reconstruction')
 
 
@@ -304,7 +311,7 @@ def test_real_dataset_reads_fields_supports_and_plan_without_rebuilding(config,t
         cached[str(i)] = freeze_item(item,c)
     class Cache:
         def read(self,variant):
-            return cached[variant]['p0'],cached[variant]['dp']
+            return cached[variant]['dp']
     from maidata.decoder_training.export_windows import compile_window
     from maidata.decoder.windows import real_onsets
     compiled = {}
@@ -575,13 +582,15 @@ def test_gt_targets_do_not_enter_cached_conditions(config,monkeypatch):
     batch = collate_audio([training_item(0,config,monkeypatch)],config=config)
     model = DecoderTrainer(config).train()
     first = model.conditions(batch)
-    # Neither current targets nor cropped GT histories are read by E/D/P.
+    # Current targets and GT histories never enter E or fixed D/P conditions.
     changed = replace(batch,windows=[])
     second = model.conditions(changed)
     torch.testing.assert_close(first.audio.values,second.audio.values,rtol=0,atol=0)
     torch.testing.assert_close(first.decoder_z.values,second.decoder_z.values,rtol=0,atol=0)
     torch.testing.assert_close(first.plan,second.plan,rtol=0,atol=0)
     assert not first.plan.requires_grad
+    assert not first.decoder_z.values.requires_grad
+    assert first.audio.values.requires_grad
 
 
 def test_required_recipe_is_not_filled_from_pretraining_defaults(config):
@@ -594,6 +603,15 @@ def test_required_recipe_is_not_filled_from_pretraining_defaults(config):
     assert CONFIG['decoder_train_learning_rate'] is None and CONFIG['decoder_train_checkpoint'] is None
     with pytest.raises(ValueError,match='explicit Decoder training recipe'):
         recipe.validate(CONFIG)
+
+
+def test_joint_training_does_not_require_export_only_paths(config,tmp_path):
+    from maidata.decoder_training.recipe import PATH_KEYS
+    c = dict(config,**{k:str(tmp_path/k) for k in PATH_KEYS})
+    c.update(decoder_train_checkpoint=None,decoder_train_p0_cache=None)
+    recipe.validate(c)
+    assert 'decoder_train_checkpoint' not in checkpoint.data_provenance(c)['paths']
+    assert 'decoder_train_p0_cache' not in checkpoint.data_provenance(c)['paths']
 
 
 def test_row_budget_ignores_audio_preserves_padding_oversize_and_final_accumulation(config):

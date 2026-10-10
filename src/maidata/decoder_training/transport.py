@@ -1,4 +1,4 @@
-"""Bounded dtype-packed IPC and H2D: context once, one Decoder chunk at a time."""
+"""Dtype-packed IPC/H2D: online audio and fixed context once, M chunks separately."""
 from dataclasses import dataclass, replace
 from maidata.training.transport import pack_batch
 

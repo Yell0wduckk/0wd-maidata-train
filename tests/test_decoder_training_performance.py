@@ -79,7 +79,7 @@ def test_worker_packet_has_bounded_buffers_and_no_runtime_cpu_geometry(config,mo
     assert sum([c.indices.tolist() for c in packet.chunks],[])==list(range(len(packet.windows)))
     model = DecoderTrainer(config)
     other = deepcopy(model)
-    opts = [recipe.optimizer(m.decoder.parameters(),config) for m in (model,other)]
+    opts = [recipe.optimizer(m.parameters(),config) for m in (model,other)]
     scheds = [recipe.scheduler(o,[1]*6,config) for o in opts]
     # Everything below executes after DataLoader collation. Neither a full
     # chart/token replay nor GPU-to-CPU index preparation is permitted here.
@@ -93,7 +93,7 @@ def test_worker_packet_has_bounded_buffers_and_no_runtime_cpu_geometry(config,mo
         a,_ = runner.update(model,[packet],opts[0],scheds[0],config,distances(),audit=True)
         b,_ = runner.update(other,[plain],opts[1],scheds[1],config,distances(),audit=True)
     assert a.counts==b.counts
-    for x,y in zip(model.decoder.parameters(),other.decoder.parameters()):
+    for x,y in zip(model.parameters(),other.parameters()):
         torch.testing.assert_close(x,y,rtol=0,atol=0)
     assert a.report(config)==b.report(config)
 
@@ -114,7 +114,7 @@ def test_decoder_hot_path_has_no_dynamic_boolean_gathers_and_flags_run_once(conf
     terms.objective(physical_weight=.1,judge_weight=.2,trajectory_weight=.3).backward()
     assert model.decoder.layers[0].audio_attn.key.weight.grad.abs().sum()>0
     assert model.decoder.condition.plan[0].weight.grad.abs().sum()>0
-    assert set(dict(model.named_children()))=={'decoder'}
+    assert set(dict(model.named_children()))=={'encoder','decoder'}
 
 
 def test_parsed_onsets_preserve_window_labels_without_full_chart_replay(monkeypatch):

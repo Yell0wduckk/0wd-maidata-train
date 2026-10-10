@@ -12,7 +12,7 @@ from .plan import read_json
 from .recipe import PATH_KEYS, restore_optimizer
 
 
-SCHEMA = 'maidata.decoder-training.v1'
+SCHEMA = 'maidata.decoder-training.v2'
 PLANNER_KEYS = ('planner_dim','planner_heads','planner_mlp_dim','planner_dropout','planner_norm_eps')
 
 
@@ -33,7 +33,8 @@ def data_binding(plans, config):
     alias = {k.replace('decoder_train_','pretrain_'):v for k,v in config.items() if k.startswith('decoder_train_')}
     alias['samples_per_beat'] = config['samples_per_beat']
     binding = stage_one.data_binding(plans, alias)
-    binding['paths'] = {k:str(Path(config[k]).resolve()) for k in PATH_KEYS if k != 'decoder_train_output'}
+    binding['paths'] = {k:str(Path(config[k]).resolve()) for k in PATH_KEYS
+                        if k != 'decoder_train_output' and config[k] is not None}
     fields = read_json(Path(config['decoder_train_chart_cache'])/'production-summary.json')
     hashes = {r['chart_id']:r.get('original_storage',r)['sha256'] for r in fields['results'] if r['status']=='success'}
     root = Path(config['decoder_train_physical_cache'])
@@ -109,7 +110,7 @@ def _load(module, actual):
 
 
 def capture(model, opt, sched, *, epoch, step, config, binding, source, producer, steps, loaders, best, metrics):
-    result = dict(schema=SCHEMA,model_state=model.decoder.state_dict(),optimizer_state=opt.state_dict(),
+    result = dict(schema=SCHEMA,model_state=model.state_dict(),optimizer_state=opt.state_dict(),
         scheduler_state=sched.state_dict(),completed_epochs=epoch,step=step,recipe=recipe(config),binding=binding,
         source=source,producer=producer,steps_by_epoch=steps,rng=rng_state(),
         loader_rng=[l.generator.get_state() for l in loaders],loader_started=[l._iterator is not None for l in loaders],
@@ -120,7 +121,9 @@ def capture(model, opt, sched, *, epoch, step, config, binding, source, producer
 def restore(payload, model, opt, sched, *, config, binding, source, producer, steps, loaders):
     # The user/training operator selects the checkpoint. Source, budget, recipe,
     # plan and cache provenance are recorded, not used as resume vetoes.
-    _load(model.decoder,payload['model_state'])
+    if payload.get('schema') != SCHEMA:
+        raise ValueError('joint stage-II resume requires a v2 checkpoint with Encoder and M states')
+    _load(model,payload['model_state'])
     restore_optimizer(opt, payload['optimizer_state'])
     sched.load_state_dict(payload['scheduler_state'])
     for loader,state in zip(loaders,payload['loader_rng']):

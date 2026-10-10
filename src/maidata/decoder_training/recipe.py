@@ -12,7 +12,8 @@ PATH_KEYS = tuple('decoder_train_'+k for k in ('checkpoint','p0_cache','dp_cache
 
 def validate(config):
     keys = [k for k in config if k.startswith('decoder_train_')]
-    missing = [k for k in keys if config[k] is None]
+    export_only = {'decoder_train_checkpoint', 'decoder_train_p0_cache'}
+    missing = [k for k in keys if k not in export_only and config[k] is None]
     if missing:
         raise ValueError('set explicit Decoder training recipe: '+', '.join(missing))
     for key in ('gradient_accumulation_steps','row_budget','chunk_token_budget','scheduler_epochs','stop_after_epochs'):

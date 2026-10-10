@@ -1,5 +1,4 @@
-"""Offline bank contracts, mixed-window alignment and absence of producer execution."""
-from copy import deepcopy
+"""Fixed D/P contracts and mixed-window alignment with trainable audio."""
 from dataclasses import replace
 import json
 from types import SimpleNamespace
@@ -60,16 +59,17 @@ def assets(config,tmp_path,monkeypatch):
     return c,plans,binding,items,roots
 
 
-def test_read_cache_and_select_interleaved_occurrences_without_building_edp(assets):
+def test_read_fixed_dp_and_select_interleaved_occurrences_without_stage_one_execution(assets):
     c,plans,binding,items,roots = assets
     # Startup reads selected manifests without bank scans or input verification.
     with patch('torch.load',side_effect=AssertionError('startup cannot load banks')):
         cache = FrozenCache(plans,c,binding)
     selected = []
     for i,item in enumerate(items):
-        p0,dp = cache.read(item['variant'])
+        dp = cache.read(item['variant'])
         windows = [dict(w,sequence_index=2*j+i) for j,w in enumerate(item['windows'])]
-        selected.append(dict(variant=item['variant'],p0=p0,dp=dp,windows=windows))
+        selected.append(dict(variant=item['variant'],grid=item['grid'],coverage=item['coverage'],
+                             dp=dp,windows=windows))
     packet = collate_audio(selected,config=c,packed=True)
     raw = packet.to('cpu')
     expected = sorted([w for item in selected for w in item['windows']],key=lambda w:w['sequence_index'])
@@ -95,19 +95,20 @@ def test_read_cache_and_select_interleaved_occurrences_without_building_edp(asse
     assert len(cond.plan)<len(expected)  # repeated occurrences share cached conditions
     from contextlib import ExitStack
     with ExitStack() as stack:
-        for name in ('maidata.model.build_model','maidata.model.build_draft','maidata.model.build_planner',
+        for name in ('maidata.model.build_draft','maidata.model.build_planner',
                      'maidata.preparation.cache.load_grid','maidata.decoder_training.checkpoint.load_producer'):
-            stack.enter_context(patch(name,side_effect=AssertionError('online producer is forbidden')))
+            stack.enter_context(patch(name,side_effect=AssertionError('stage-I execution is forbidden')))
         model = DecoderTrainer(c)
         opt = recipe.optimizer(model.parameters(),c)
         sched = recipe.scheduler(opt,[1]*6,c)
         metrics,audit = runner.update(model,[packet],opt,sched,c,distances(),audit=True)
-    assert set(dict(model.named_children()))=={'decoder'}
-    assert audit['gradients']['decoder']>0
+    assert set(dict(model.named_children()))=={'encoder','decoder'}
+    assert audit['gradients']['encoder']>0 and audit['gradients']['decoder']>0
     assert model.decoder.condition.z.weight.grad.abs().sum()>0
     assert model.decoder.condition.plan[0].weight.grad.abs().sum()>0
     assert metrics.counts['main']>0
-    assert not cond.audio.values.requires_grad and not cond.plan.requires_grad
+    assert cond.audio.values.shape[-1]==0
+    assert not cond.decoder_z.values.requires_grad and not cond.plan.requires_grad
 
 
 @pytest.mark.parametrize('field',['complete','producer','normalization','p0_manifest_sha256','plans','splits'])
@@ -119,25 +120,41 @@ def test_training_does_not_revalidate_accepted_manifest(assets,field):
     path.write_text(json.dumps(data))
     with patch('maidata.training.checkpoint.digest_file',side_effect=AssertionError('startup hash')):
         cache = FrozenCache(plans,c,binding)
-        assert cache.read('0')[0]['values'].numel()>0
+        assert cache.read('0')['z']['values'].numel()>0
 
 
 def test_training_reads_do_not_rescan_accepted_values(assets):
     c,plans,binding,_,roots = assets
     cache = FrozenCache(plans,c,binding)
     with patch('torch.isfinite',side_effect=AssertionError('training payload scan')):
-        p0,dp=cache.read('0')
-    assert p0['values'].numel()>0 and dp['window_index']
+        dp=cache.read('0')
+    assert dp['z']['values'].numel()>0 and dp['window_index']
 
 
-def test_bf16_frozen_values_can_feed_fp32_decoder_without_gradients(assets):
+def test_bf16_fixed_dp_can_feed_joint_fp32_encoder_decoder_without_cache_gradients(assets):
     c,_,_,items,_ = assets
     batch = collate_audio(items,config=c)
     source = batch.conditions
-    batch.conditions = replace(source,audio=replace(source.audio,values=source.audio.values.bfloat16()),
+    batch.conditions = replace(source,
         decoder_z=replace(source.decoder_z,values=source.decoder_z.values.bfloat16()),plan=source.plan.bfloat16())
     model = DecoderTrainer(c)
     opt = recipe.optimizer(model.parameters(),c)
     _,audit = runner.update(model,[batch],opt,recipe.scheduler(opt,[1]*6,c),c,distances(),audit=True)
-    assert audit['gradients']['decoder']>0
-    assert batch.conditions.audio.values.dtype==torch.bfloat16
+    assert audit['gradients']['encoder']>0 and audit['gradients']['decoder']>0
+    assert batch.conditions.decoder_z.values.dtype==torch.bfloat16
+    assert batch.conditions.plan.dtype==torch.bfloat16
+    assert not batch.conditions.decoder_z.values.requires_grad and not batch.conditions.plan.requires_grad
+
+
+def test_offline_exported_p0_and_dp_payloads_remain_readable(assets):
+    _,_,_,items,roots = assets
+    # P0 remains a valid optional exporter input, even though M training reads no P0.
+    for item in items:
+        variant=item['variant']
+        p0=torch.load(roots['p0']/f'banks/{variant}.pt',weights_only=True)
+        dp=torch.load(roots['dp']/f'banks/{variant}.pt',weights_only=True)
+        assert p0['schema']==P0_SCHEMA and dp['schema']==DP_SCHEMA
+        for name in ('values','beats','valid'):
+            assert torch.equal(p0[name],item['p0'][name])
+            assert torch.equal(dp['z'][name],item['dp']['z'][name])
+        assert torch.equal(dp['planner']['plan_values'],item['dp']['planner']['plan_values'])

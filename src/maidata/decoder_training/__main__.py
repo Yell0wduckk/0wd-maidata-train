@@ -6,9 +6,9 @@ from maidata.entry import CONFIG
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Stage II: freeze E/D/P, train Decoder and its adapters.')
+    parser = argparse.ArgumentParser(description='Stage II: train a fresh audio Encoder and Decoder with fixed Draft/Plan.')
     parser.add_argument('--config',type=Path,help='JSON overrides for entry.CONFIG')
-    parser.add_argument('--resume',type=Path,help='complete-epoch Decoder checkpoint (not stage-I initialization)')
+    parser.add_argument('--resume',type=Path,help='v2 complete-epoch joint Encoder/Decoder checkpoint')
     parser.add_argument('--show-config',action='store_true')
     parser.add_argument('--cuda-check',action='store_true',help='one actual configured update; no training checkpoint')
     parser.add_argument('--check-step',type=int,default=0,help='zero-based first-epoch logical batch for CUDA check')

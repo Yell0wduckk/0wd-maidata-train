@@ -1,25 +1,32 @@
-"""Stage II owns only M; frozen public conditions arrive from the data layer."""
+"""Stage II trains a fresh audio Encoder and M with fixed Draft/Plan conditions."""
 from dataclasses import replace
 import torch
 from torch import nn
 
-from maidata.model import build_decoder, decoder_time_distributions
+from maidata.model import build_model, build_decoder, decoder_time_distributions
 from maidata.decoder.types import Memory
+from maidata.draft.windows import assemble_full_p0
 
 
 class DecoderTrainer(nn.Module):
     def __init__(self, config):
         super().__init__()
+        self.encoder = build_model(config)
         self.decoder = build_decoder(config)
+        self.p0_rate = config['fpn_rates'][0]
         self.distributions = decoder_time_distributions(config)
-        for module in self.decoder.modules():
+        for module in self.modules():
             if hasattr(module, 'validate_inputs'):
                 module.validate_inputs = False
 
     def conditions(self, batch):
-        # Cached BF16 outputs can also feed FP32 training. Autocast training
-        # keeps the stored dtype, without doubling bank transport/storage.
-        conditions = batch.conditions
+        inputs = batch.online_audio
+        local = self.encoder(inputs.songs, inputs.windows)
+        audio = assemble_full_p0(local.P0, inputs.windows.target_start_beats,
+            inputs.windows.window_to_song, inputs.coverages, p0_rate=self.p0_rate,
+            layout=inputs.p0_layout)
+        conditions = replace(batch.conditions, audio=Memory(audio.values, audio.beats, audio.valid))
+        # Fixed D/P caches may have BF16 values while this run uses FP32.
         device = conditions.audio.values.device.type
         if torch.is_autocast_enabled(device):
             return conditions

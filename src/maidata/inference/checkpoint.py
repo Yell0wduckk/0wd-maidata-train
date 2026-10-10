@@ -16,6 +16,7 @@ class Models:
     decoder: object
     config: dict
     provenance: dict
+    decoder_encoder: object = None
 
 
 def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device):
@@ -23,7 +24,7 @@ def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device):
     consumer = torch.load(decoder_checkpoint, map_location='cpu', weights_only=False)
     if producer.get('schema') != 'maidata.encoder-draft-training.v1':
         raise ValueError('expected an Encoder/Draft stage-I checkpoint')
-    if consumer.get('schema') != 'maidata.decoder-training.v1':
+    if consumer.get('schema') not in ('maidata.decoder-training.v1', 'maidata.decoder-training.v2'):
         raise ValueError('expected a Decoder stage-II checkpoint')
     # These are architecture/representation settings, not source or asset identities.
     keys = [k for k in producer['recipe'] if k in ENCODER_KEYS or k.startswith(('draft_', 'planner_'))]
@@ -37,14 +38,24 @@ def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device):
         prefix = name + '.'
         module.load_state_dict({k[len(prefix):]: v for k, v in producer['model_state'].items()
                                 if k.startswith(prefix)}, strict=True)
-    modules[-1].load_state_dict(consumer['model_state'], strict=True)
-    for model in modules:
+    decoder_encoder = None
+    if consumer['schema'] == 'maidata.decoder-training.v2':
+        decoder_encoder = build_model(config)
+        # The stage-II encoder is independently trained with M. It must never
+        # replace the stage-I encoder used by the fixed Draft/Planner.
+        torch.nn.ModuleDict(dict(encoder=decoder_encoder, decoder=modules[-1])).load_state_dict(
+            consumer['model_state'], strict=True)
+    else:
+        modules[-1].load_state_dict(consumer['model_state'], strict=True)
+    for model in modules + ([decoder_encoder] if decoder_encoder is not None else []):
         model.to(device).eval().requires_grad_(False)
         for module in model.modules():
             if hasattr(module, 'validate_inputs'):
                 module.validate_inputs = False
     def describe(path, payload):
-        return dict(path=str(path), epoch=payload.get('completed_epochs'), step=payload.get('step'),
+        return dict(path=str(path), schema=payload['schema'], epoch=payload.get('completed_epochs'), step=payload.get('step'),
                     source=payload.get('source'))
     return Models(*modules, config, dict(encoder_draft=describe(encoder_draft_checkpoint, producer),
-                                        decoder=describe(decoder_checkpoint, consumer)))
+                                        decoder=describe(decoder_checkpoint, consumer),
+                                        decoder_audio_encoder='stage_ii' if decoder_encoder is not None else 'stage_i'),
+                  decoder_encoder=decoder_encoder)

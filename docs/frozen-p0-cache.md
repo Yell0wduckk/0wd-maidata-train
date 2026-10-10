@@ -7,4 +7,4 @@
 
 每曲保存唯一目标中心拼接的全曲P0：values保留实际输出dtype，beats/valid逐项保留，包含真实音频边界处无效padding；不保存Encoder内部G0/S，也不把额外空尾监督窗制造成音频。每曲文件内保存生产者checkpoint SHA、variant、coverage与schema。manifest记录精确生产者、归一化元数据、split、资产/时间映射、shape/dtype/有效数、本次生成文件的SHA和大小。旧输入不重扫、不重哈希载荷。
 
-写完每曲后记录进度，全部完成才置complete=true；首曲重读逐位核对values/beats/valid。目录必须独立；失败保留部分产物和日志，不自动覆盖或冒充完成。阶段二训练通过 decoder_train_p0_cache 消费本缓存，并要求配套的 decoder_train_dp_cache；使用manifest绑定生产者及normalization，正常读取检查shape/dtype/mask，不重复全量载荷验收。训练与验证不运行E，见[训练接入](decoder-training.md)。
+写完每曲后记录进度，全部完成才置complete=true；首曲重读逐位核对values/beats/valid。目录必须独立；失败保留部分产物和日志，不自动覆盖或冒充完成。本缓存供固定阶段一 D/P 的离线导出使用。阶段二训练与验证从既有 Mel/aux32 网格在线计算新 Encoder 的 P0，不读取 `decoder_train_p0_cache`；该路径在训练中可留空。固定 Z/plan 仍通过 `decoder_train_dp_cache` 读取，见[训练接入](decoder-training.md)。
