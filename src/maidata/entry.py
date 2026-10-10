@@ -72,6 +72,18 @@ CONFIG = {
     "pretrain_seed": 20261010,
     "pretrain_audio_groups_per_batch": 2,
     "pretrain_gradient_accumulation_steps": 1,
+    "pretrain_token_budget": 45056,
+    "pretrain_audio_token_weight": 1.0,
+    "pretrain_row_token_weight": 1.0,
+    "pretrain_workers": 12,
+    "pretrain_device": "cuda",
+    "pretrain_train_plan": "../artifacts/pilot320-encoder-draft-sampling-20261010/train",
+    "pretrain_validation_plan": "../artifacts/pilot320-encoder-draft-sampling-20261010/validation",
+    "pretrain_chart_cache": "../artifacts/chart-cache-original-v2-master-remaster-fields-20261010",
+    "pretrain_audio_cache": "../artifacts/encoder-audio-cache-all-official-20261010",
+    "pretrain_mel_root": "../../repos/maidata-baseline/training-dataset/full-dataset/runtime-lr-repaired/audio/features",
+    "pretrain_source_root": "../../data/extracted",
+    "pretrain_output": "../artifacts/pilot320-encoder-draft-training-20261010",
     "decoder_dim": 256,
     "decoder_layers": 6,
     "decoder_router_layer": 2,
@@ -110,7 +122,7 @@ CONFIG = {
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="python -m maidata",
-        description="Maidata Encoder, Draft and Decoder components; training is not implemented.",
+        description="Maidata components; Encoder/Draft training: python -m maidata.training.",
     )
     parser.add_argument("--show-config", action="store_true", help="show the configuration in entry.py")
     parser.add_argument("--component", choices=("encoder", "draft", "planner", "reconstruction", "decoder"),
@@ -125,5 +137,6 @@ def main(argv=None):
         module = builders[args.component](CONFIG)
     except ValueError as exc:
         parser.error(str(exc))
-    print(f"{type(module).__name__} built. End-to-end generation and training are not implemented.")
+    print(f"{type(module).__name__} built. Encoder/Draft training: python -m maidata.training. "
+          "End-to-end generation is not implemented.")
     return 0

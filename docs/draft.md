@@ -46,7 +46,8 @@ D始终一拍生成一个Z token。默认16拍目标对应16个Z；R读取含邻
 | 线性warmup | `pretrain_warmup_steps=200` 次optimizer update；不按窗口或累积小批次计数 |
 | 余弦调度／绝对停止 | `pretrain_scheduler_epochs=100`、`pretrain_stop_after_epochs=50` |
 | 精度／初始化／种子 | `pretrain_precision='bf16'`、`pretrain_initialization='scratch'`、`pretrain_seed=20261010` |
-| 实际batch／梯度累积 | `pretrain_audio_groups_per_batch=2`、`pretrain_gradient_accumulation_steps=1`；默认每2个完整音频组更新一次 |
+| 实际batch／梯度累积 | `pretrain_audio_groups_per_batch=2`、`pretrain_gradient_accumulation_steps=1`；最多2组，且受加权token预算约束 |
+| token预算／权重 | `pretrain_token_budget=45056`，`pretrain_audio_token_weight=1.0`、`pretrain_row_token_weight=1.0` |
 | 数据 | [既有split](../../artifacts/pilot320-master-20261010/encoder-draft-split.json)：训练288首307谱，验证32首36谱；同曲及相同音频标识不跨侧 |
 | 监督实例 | [阶段一基础计划](../../artifacts/pilot320-encoder-draft-sampling-20261010/README.md)：训练7924窗、验证904窗，每个基础窗监督1次，无复杂节奏过采样 |
 
@@ -54,11 +55,11 @@ D始终一拍生成一个Z token。默认16拍目标对应16个Z；R读取含邻
 
 `make_scheduler` 接收完整100轮每轮的optimizer更新次数，按总和构造线性warmup＋余弦曲线；该次数须来自实际完整音频组batch与梯度累积安排。`epoch_range(completed_epochs, config)` 以已完成轮数生成后续轮：完成40轮则运行41–50，完成50轮则不再运行，不把恢复后的50理解为再跑50轮，也不将调度曲线缩为50轮。完整停止与原仓库 [audio_draft](../src/maimai_baseline/training/audio_draft.py)、[调度及autocast](../src/maimai_baseline/training/chart_encoder_pretrain.py) 一致。checkpoint、验证和诊断时机见[训练计划](../../0wd-v3-refactor-docs/training-plan.md#73-配置与执行约定)。
 
-`training.batching.optimizer_batches` 消费两项batch配置，保持计划中的音频组顺序、完整谱面及全部窗口，不切开音频组、不丢弃末尾不足量batch。默认实际batch与逻辑batch均为2个完整audio_variant组，梯度累积1；同variant的不同level/difficulty分别生成Z，共用音频计算图。每项损失按整个逻辑batch的total/count归约，完成所有监督反传后统一裁剪、optimizer.step与scheduler.step。改动累积步数时按实际逻辑batch合并有效计数，不能直接平均不同大小microbatch的均值。
+`training.batching.optimizer_batches`同时约束最多2个完整audio_variant组与加权token预算45056，音频/row权重各1，累积1；均可配置。音频计每窗重叠上下文和全曲G0，row计全部R窗口固定207个query，含各难度、空窗和尾窗。超出双组预算时按原顺序拆成单组批，不切曲、不回填、不丢弃。单组超限时报出，不静默越界。同variant不同条件各自生成Z并共享音频；每项loss按完整逻辑batch的total/count归约，统一裁剪和更新。完整计费公式见[阶段一训练](encoder-draft-training.md#双重-batch-上限)。
 
-当前288个训练组对应每轮144次更新，100轮调度共14400步，第50轮停止时共7200步，200步warmup约1.39轮；32个验证组按每批2组共16批，验证不更新参数。第1轮的[训练batch边界](../../artifacts/pilot320-encoder-draft-sampling-20261010/train/batches.json)已从既有元数据生成，后续轮按各自计划顺序使用同一batch函数；不将epoch1顺序复用成所有轮。batch与累积配置改变时重新推导更新次数，不硬编码144。
+当前第1轮173次更新，100轮各164–177次更新，总17272步，第50轮完成8647步；验证固定19批。200步warmup仍按optimizer更新计数。[第1轮batch边界](../../artifacts/pilot320-encoder-draft-sampling-20261010/train/batches.json)已保存，后续轮按各自seed/epoch顺序及预算分批；调度由实际逐轮batch数计算。
 
-这些函数不包含训练循环、数据迭代或checkpoint执行。正式启动前尚缺的实际接入见[阶段一执行状态](encoder-draft-training.md)，不能把可构建模块或batch边界视为已经可运行完整训练。
+`maidata.training`已实现独立Dataset/Collator、workers12 DataLoader、E/D/R/P组合、训练验证与完整轮checkpoint。Linux路径显式可配置。CPU接口与恢复测试已通过，真实CUDA batch检查由训练会话执行，见[阶段一训练](encoder-draft-training.md)。
 
 ## 全曲计算与复用
 

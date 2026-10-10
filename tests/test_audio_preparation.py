@@ -202,6 +202,11 @@ def test_existing_mel_reference_and_missing_position_only(tmp_path):
     write_json(path.with_suffix('.json'),dict(mel_reference=candidate))
     loaded = load_grid(path)
     np.testing.assert_array_equal(loaded['mel_patches'],mel)
+    # A Linux consumer can relocate a Windows producer reference without edits.
+    candidate['feature_path'] = r'D:\producer\features\old.npy'
+    write_json(path.with_suffix('.json'),dict(mel_reference=candidate))
+    relocated = load_grid(path, mel_root=tmp_path)
+    np.testing.assert_array_equal(relocated['mel_patches'], mel)
     with np.load(path) as a:
         assert 'mel_patches' not in a.files and len(a['mel_new_values'])==4
 

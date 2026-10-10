@@ -4,7 +4,7 @@
 
 ## 新 maidata：独立音频 Encoder
 
-入口为 `python -m maidata`，调用方式与 CPU 验证命令见 [maidata-entry](maidata-entry.md)。`entry.py` 顶部普通 `CONFIG` 集中Encoder、Draft与Decoder架构参数，构造器无第二套默认值；`--help` 与 `--show-config` 仅依赖标准库。默认命令延迟导入 Torch，成功构建 `AudioEncoder` 并提示整曲生成和训练调度未实现。
+入口为 `python -m maidata`，调用方式与 CPU 验证命令见 [maidata-entry](maidata-entry.md)。`entry.py` 顶部普通 `CONFIG` 集中Encoder、Draft与Decoder架构参数，构造器无第二套默认值；`--help` 与 `--show-config` 仅依赖标准库。默认命令延迟导入 Torch，成功构建 `AudioEncoder`，独立阶段一训练入口为 `python -m maidata.training`，整曲生成调度未实现。
 
 当前代码位于 `src/maidata/audio/{types,frontend,geometry,attention,blocks,pyramid,encoder}.py`，不导入旧 `maimai_baseline`、`maimai_dataset` 或朋友仓库。已实现：
 
@@ -29,7 +29,7 @@ Encoder 合成验证见[入口文档](maidata-entry.md#cpu-合成验证)。独�
 
 D只消费公开音频张量和独立条件，R/P各自只消费Z；网络不读文件，窗口组合不持有模型。Decoder的Z/plan12投影及attention未放入Draft。Encoder与D/P仅共享无状态RoPE数学，所有可学习参数独立。完整空尾窗保持有效Z与R/P监督，音频mask不替代Draft mask。
 
-CPU验证覆盖默认/非默认容量、源字段/simai标签、复用与mask、辅助loss及外部消费者经Z/plan12到Encoder的梯度和实际冻结。pilot320的R容量已按343谱、8828个16拍基础窗口统计为207行（含结束标记），D仍一拍一个Z。`maidata.training.pretrain`已提供可配置的五项损失加权、AdamW、warmup＋余弦调度、绝对停止轮及精度/种子辅助函数；独立batch函数默认每2个完整音频组更新一次、梯度累积1，每轮144次更新。默认配方见[Draft接口](draft.md#阶段一训练默认值)。完整训练/验证循环、DataLoader、Linux输入映射及checkpoint执行尚未落实，见[阶段一执行状态](encoder-draft-training.md)；未运行CUDA、原训练batch成本测量或训练。
+CPU验证覆盖默认/非默认容量、源字段/simai标签、复用与mask、辅助loss及跨模块梯度。pilot320的R容量为每16拍窗207行，D仍一拍一个Z。`maidata.training`已接入独立Dataset/Collator、workers12 DataLoader、全曲E/D/R/P、五项total/count归约、训练/验证和严格完整轮恢复。batch同时受最多2个完整组及加权token预算45056约束，累积1；100轮17272步，绝对50轮8647步。Linux路径可配置，CPU完整更新和中断恢复一致性已验证；CUDA检查与正式启动交给训练会话，见[阶段一训练](encoder-draft-training.md)。
 
 ## 新 Decoder：网络、窗口与监督
 
@@ -78,7 +78,7 @@ CPU验证覆盖默认与非默认架构、并行/增量一致、目标类型隔�
 
 ## 新 Encoder 尚未衔接的部分
 
-新 Encoder 的全曲 G₀、每窗动态 S、局部 L、块内共享处理和三路局部输出已进入代码。Mel/aux32离线输入、公开P0全曲组合、新Draft D/R/P及辅助loss已实现；Decoder、Router/MMoE与主loss已独立实现，完整训练循环与checkpoint尚未接入，不能把可构建模块称为可训练完整模型的入口。
+新 Encoder 的全曲 G₀、每窗动态 S、局部 L、块内共享处理和三路局部输出已进入代码。Mel/aux32离线输入、公开P0全曲组合、新Draft D/R/P及辅助loss已实现；Decoder、Router/MMoE与主loss已独立实现，阶段一E/D/R/P训练循环与checkpoint已接入；主Decoder训练及整曲生成调度仍另行实现。
 
 aux32 采用全曲统一的18维声学量、4维节奏统计和10维时间上下文，L 的 `k/R` 网格与 G0 的 `j+0.5` 拍中心按位置取值。网络模块只消费准备好的张量，输入模块独立计算全曲声学源及派生网格。新隐藏表示不自动兼容现有 native cache；内容未变的原始音频/Mel 不因新源码失效。
 

@@ -1,1 +1,1 @@
-"""Training recipe helpers. Dataset iteration and checkpoint execution are separate."""
+"""Independent Encoder/Draft pretraining orchestration."""

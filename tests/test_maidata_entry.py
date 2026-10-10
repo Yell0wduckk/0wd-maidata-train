@@ -26,7 +26,7 @@ assert not any(name.startswith(('maimai_baseline', 'maimai_dataset', 'maichart')
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
     assert "AudioEncoder built" in result.stdout
-    assert "training are not implemented" in result.stdout
+    assert "python -m maidata.training" in result.stdout
 
 
 @pytest.fixture(autouse=True)

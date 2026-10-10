@@ -1,0 +1,9 @@
+{
+  "pretrain_train_plan": "/root/autodl-tmp/pilot320-encoder-draft-inputs-20261010/plans/train",
+  "pretrain_validation_plan": "/root/autodl-tmp/pilot320-encoder-draft-inputs-20261010/plans/validation",
+  "pretrain_chart_cache": "/root/autodl-tmp/chart-cache-original-v2-master-remaster-fields-20261010",
+  "pretrain_audio_cache": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/audio/encoder-inputs-all-official-20261010",
+  "pretrain_mel_root": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/audio/features",
+  "pretrain_source_root": "/root/autodl-tmp/pilot320-encoder-draft-inputs-20261010/sources",
+  "pretrain_output": "/root/autodl-tmp/pilot320-encoder-draft-training-20261010"
+}

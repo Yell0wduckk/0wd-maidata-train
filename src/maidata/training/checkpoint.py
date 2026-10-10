@@ -1,0 +1,142 @@
+"""Complete-epoch state, atomic writes and strict source/recipe/input binding."""
+import hashlib
+import json
+from pathlib import Path
+import random
+
+import numpy as np
+import torch
+
+from maidata.model import ENCODER_KEYS
+from .data import read_json
+
+
+SCHEMA = 'maidata.encoder-draft-training.v1'
+PATH_KEYS = ('pretrain_train_plan', 'pretrain_validation_plan', 'pretrain_chart_cache',
+             'pretrain_audio_cache', 'pretrain_mel_root', 'pretrain_source_root', 'pretrain_output')
+
+
+def digest_file(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def recipe(config):
+    # Unused Decoder/sampling knobs cannot change this training contract.
+    return json.loads(json.dumps({k: v for k, v in config.items()
+        if (k in ENCODER_KEYS or k.startswith(('draft_', 'reconstruction_', 'planner_', 'pretrain_')))
+        and k not in PATH_KEYS}, sort_keys=True))
+
+
+def source_identity():
+    root = Path(__file__).resolve().parents[1]
+    files = [root / 'model.py', root / '__init__.py']
+    for directory in ('audio', 'draft', 'nn', 'chart', 'chart_cache', 'time', 'preparation', 'training'):
+        files.extend(sorted((root / directory).glob('*.py')))
+    files.extend(sorted((root / 'chart/assets').glob('*.json')))
+    return {p.relative_to(root).as_posix(): digest_file(p) for p in files}
+
+
+def data_binding(plans, config):
+    """Hash small contract metadata only, never walk/cache-hash old payloads."""
+    result = {'plans': [], 'paths': {k: str(Path(config[k]).resolve()) for k in PATH_KEYS
+                                    if k != 'pretrain_output' and config[k] is not None}}
+    for plan in plans:
+        names = ('plan.json', *plan.manifest['files'].values())
+        result['plans'].append({name: digest_file(plan.root / name) for name in names})
+    for key in ('pretrain_chart_cache', 'pretrain_audio_cache'):
+        root = Path(config[key])
+        result[key] = {name: digest_file(root / name) for name in ('catalog.json', 'production-summary.json')}
+    charts = read_json(Path(config['pretrain_chart_cache']) / 'catalog.json')
+    audio = read_json(Path(config['pretrain_audio_cache']) / 'catalog.json')
+    if charts['schema'] != 'maidata.full-chart-original.v2' or charts['view'] != 'original':
+        raise ValueError('incorrect chart cache representation')
+    chart_index = {c['chart_id']: c for c in charts['charts']}
+    for plan in plans:
+        if charts['producer_recipe'] != plan.manifest['sources']['chart_recipe']:
+            raise ValueError('chart cache producer recipe differs from plan')
+        for variant, group in plan.groups.items():
+            actual = audio['variants'][variant]
+            if (actual['asset'] != group['audio_asset'] or actual['timing'] != group['timing']
+                    or actual['samples_per_beat'] != config['samples_per_beat']):
+                raise ValueError('audio producer/plan identity differs')
+        for key, chart in plan.charts.items():
+            actual = chart_index[key]
+            if actual['path'] != chart['chart_cache_path'] or actual['audio_variant'] != chart['audio_variant']:
+                raise ValueError('chart catalog/plan identity differs')
+    if set(plans[0].groups) & set(plans[1].groups):
+        raise ValueError('train/validation audio groups overlap')
+    if set(c['song_id'] for c in plans[0].charts.values()) & set(c['song_id'] for c in plans[1].charts.values()):
+        raise ValueError('train/validation songs overlap')
+    return result
+
+
+def rng_state():
+    return dict(python=random.getstate(), numpy=np.random.get_state(), torch=torch.get_rng_state(),
+                cuda=torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [])
+
+
+def restore_rng(state):
+    if set(state) != {'python', 'numpy', 'torch', 'cuda'}:
+        raise ValueError('checkpoint is missing complete RNG state')
+    random.setstate(state['python'])
+    np.random.set_state(state['numpy'])
+    torch.set_rng_state(state['torch'].cpu())
+    if torch.cuda.is_available():
+        if len(state['cuda']) != torch.cuda.device_count():
+            raise ValueError('CUDA RNG device inventory changed')
+        torch.cuda.set_rng_state_all([s.cpu() for s in state['cuda']])
+    elif state['cuda']:
+        raise ValueError('cannot resume CUDA training on CPU')
+
+
+def atomic_save(path, payload):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + '.tmp')
+    torch.save(payload, temporary)
+    temporary.replace(path)
+
+
+def validate_cursor(payload, steps):
+    epoch, step = payload['completed_epochs'], payload['step']
+    if (type(epoch) is not int or not 1 <= epoch <= len(steps) or type(step) is not int
+            or step != sum(steps[:epoch]) or payload['scheduler_state']['last_epoch'] != step):
+        raise ValueError('checkpoint is not at a complete epoch boundary')
+
+
+def capture(model, optimizer, scheduler, *, completed_epochs, step, config, binding, source,
+            steps, loaders, best, metrics):
+    payload = dict(schema=SCHEMA, model_state=model.state_dict(), optimizer_state=optimizer.state_dict(),
+        scheduler_state=scheduler.state_dict(), completed_epochs=completed_epochs, step=step,
+        recipe=recipe(config), binding=binding, source=source, steps_by_epoch=steps,
+        rng=rng_state(), loader_rng=[loader.generator.get_state() for loader in loaders],
+        loader_started=[loader._iterator is not None for loader in loaders],
+        best_validation_loss=best, metrics=metrics)
+    validate_cursor(payload, steps)
+    return payload
+
+
+def restore(payload, model, optimizer, scheduler, *, config, binding, source, steps, loaders):
+    current, saved = recipe(config), payload['recipe']
+    stop = 'pretrain_stop_after_epochs'
+    if (payload.get('schema') != SCHEMA or payload['source'] != source
+            or payload['binding'] != binding or payload['steps_by_epoch'] != steps
+            or {k:v for k,v in current.items() if k != stop} != {k:v for k,v in saved.items() if k != stop}
+            or current[stop] < saved[stop]):
+        raise ValueError('resume source, architecture, recipe, input or plan binding changed')
+    validate_cursor(payload, steps)
+    if payload['completed_epochs'] > saved[stop]:
+        raise ValueError('saved epoch exceeds the original absolute stop')
+    expected, actual = model.state_dict(), payload['model_state']
+    if (expected.keys() != actual.keys() or any(expected[k].shape != v.shape or expected[k].dtype != v.dtype
+            or not torch.isfinite(v).all() for k, v in actual.items())):
+        raise ValueError('model tensor inventory/shape/dtype/finite mismatch')
+    if len(payload['loader_rng']) != len(loaders) or len(payload['loader_started']) != len(loaders):
+        raise ValueError('DataLoader RNG inventory differs')
+    model.load_state_dict(actual, strict=True)
+    optimizer.load_state_dict(payload['optimizer_state'])
+    scheduler.load_state_dict(payload['scheduler_state'])
+    for loader, state in zip(loaders, payload['loader_rng']):
+        loader.generator.set_state(state.cpu())
+    restore_rng(payload['rng'])
+    return payload['completed_epochs'], payload['step'], payload['best_validation_loss']

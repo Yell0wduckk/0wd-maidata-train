@@ -32,14 +32,18 @@ def validate_grid(a):
         raise ValueError('invalid positions must be zero')
 
 
-def load_grid(path):
+def load_grid(path, *, mel_root=None):
     path = Path(path)
     with np.load(Path(path), allow_pickle=False) as archive:
         result = {key: archive[key] for key in archive.files}
     if 'mel_patches' not in result:
         meta = json.loads(path.with_suffix('.json').read_text(encoding='utf-8'))
         reference = meta['mel_reference']
-        old = np.load(reference['feature_path'],mmap_mode='r',allow_pickle=False)
+        # Consumer relocation leaves the producer's metadata/identity untouched.
+        from pathlib import PureWindowsPath
+        feature = (Path(mel_root) / PureWindowsPath(reference['feature_path']).name
+                   if mel_root is not None else Path(reference['feature_path']))
+        old = np.load(feature,mmap_mode='r',allow_pickle=False)
         if old.dtype!=np.float32 or list(old.shape)!=reference['shape']:
             raise ValueError('referenced Mel shape/dtype mismatch')
         indices = result['mel_source_indices']

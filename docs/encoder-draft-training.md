@@ -1,28 +1,56 @@
-# Encoder＋Draft 阶段一执行状态
+# Encoder＋Draft 阶段一训练
 
-目标为pilot320上的新E/D/R/P联合预训练，主Decoder不参与。架构、损失和已确认配方见[Draft接口](draft.md#阶段一训练默认值)及[训练计划](../../0wd-v3-refactor-docs/training-plan.md)。本页记录可执行条件，不增加旧资产重验或额外审批。
+入口为 `python -m maidata.training`，仅训练可学习的 E/D/R/P；不构建主 Decoder，不消费训练 Physical 候选，不读取旧冻结音频隐藏表示。所有默认值统一来自 `entry.CONFIG`，`--config JSON`可覆盖现有键，路径也可覆盖；相对路径相对于命令工作目录。服务器配置见 [Linux配置](../configs/encoder-draft-pilot320-linux.json)，操作交接见 [训练交接](encoder-draft-training-handoff.md)。
 
-## 已落实
+## 数据与计算
 
-- 独立E/D/R/P、全曲P0和Z组合、原谱R/Planner标签及五项损失接口；D全曲一拍一个Z，R每16拍目标窗容量207。
-- 固定训练288首307谱、验证32首36谱；R/P全部基础窗各监督一次，训练7924窗、验证904窗，含空窗及追加尾窗。
-- `pretrain_audio_groups_per_batch=2`、`pretrain_gradient_accumulation_steps=1`，由独立batch函数消费，保持完整音频组和顺序。第1轮batch边界已保存，144批/144次更新；验证16批。实际batch及累积步数可配置。
-- 五项权重1/1/1/1/0.25，AdamW、lr=2e-4、weight decay=0.01、全局裁剪1、bf16、scratch、seed=20261010、workers12。warmup200次更新，100轮调度/绝对50轮停止；当前batch对应调度14400步、停止7200步。
+固定pilot320：训练288首307谱、7924基础窗；验证32首36谱、904基础窗。同曲及同音频标识不跨侧。R/P全部基础窗、有效空窗和追加完整尾窗各监督一次，无镜像、无复杂窗口过采样。
 
-## 尚缺的执行接入
+`training.data`使用原仓库同类PyTorch Dataset/Collator/DataLoader：默认12个persistent workers，每worker计算线程数为1。每个Dataset项是一整个audio_variant组；采样器保持既有seed/epoch组间和组内排列，不能跨组找小曲回填。原缓存只在正常取样时读取和校验，不在启动前扫描载荷。
 
-| 部分 | 当前状态与需要完成的工作 |
+`training.network.Pretrainer`负责组合，E/D/R/P不持有彼此。E每组计算一次全曲G0，每个音频覆盖窗编码一次，中心P0拼成全曲bank；同音频不同等级/难度各生成完整逐拍Z，共享音频计算。R/P读取所有基础窗，R固定每窗207个query，P预测plan12。无detach或跨参数更新缓存。
+
+## 双重 batch 上限
+
+每批同时满足 `pretrain_audio_groups_per_batch=2`（最多两组）和 `pretrain_token_budget=45056`。梯度累积 `pretrain_gradient_accumulation_steps=1`。预算、两种权重、组数上限及累积均可配置。
+
+```text
+A = 音频覆盖窗数 × (before + target + after) × samples_per_beat
+    + ceil(actual_audio_end_beat) − first_beat
+R = 本组全部基础监督窗数 × reconstruction_query_rows
+cost = pretrain_audio_token_weight × A + pretrain_row_token_weight × R
+```
+
+两种权重默认各1.0。A计入每窗重复计算的重叠音频上下文和全曲G0拍token；R使用实际固定query容量，包含同音频各难度、空窗及尾窗，不能只按GT有效行数计费。此线性指标限制批次规模，不等于精确显存模型；全曲attention和不同长度padding成本仍由CUDA实测确认。预算显式设为`null`可关闭，只保留组数上限。
+
+顺序遍历当轮既定完整组；加入下一组将超出任一上限时，先提交当前batch。整曲不拆、顺序不改、末尾不足量保留。单组超过预算时指出该组并失败，不截断或静默越界。当前训练最大单组cost=34616，验证最大28575，均低于初始上限。
+
+第1轮173批（115个双组批＋58个单组批）；100轮各164–177次更新，总17272步；前50轮8647步。验证保持固定第1轮顺序，共19批。每轮调度计数由同一预算组批函数计算，不能硬编码旧144步，也不能用epoch1顺序代替所有轮。第1轮边界见 [batches.json](../../artifacts/pilot320-encoder-draft-sampling-20261010/train/batches.json)。
+
+## 优化与恢复
+
+五项loss权重1/1/1/1/0.25；AdamW，lr=2e-4，weight decay=0.01，全局裁剪1；CUDA bf16 autocast、FP32参数和损失归约；scratch，seed=20261010。线性warmup200次optimizer更新，100轮余弦调度，绝对完成50轮停止。
+
+`runner`按完整逻辑batch的各项有效计数归约；累积时各物理batch的分子除以共同分母，再分别反传，最后一次裁剪、optimizer.step与scheduler.step。不平均不同大小batch的均值。训练与验证统计也分别累加五项total/count。
+
+验证每5轮及显式末轮，重合一次；全字段准确率与预测示例仅末轮收集。`last.ckpt`每完整轮保存，`best.ckpt`只在轮末验证改善时保存，`epoch-NNN.ckpt`每5轮及末轮保存。best只是损失诊断，不是谱面质量判定。中途异常不保存、不伪造完整轮。
+
+checkpoint保存成套E/D/R/P、optimizer、scheduler、完整轮游标、全部Python/NumPy/Torch/CUDA RNG、两个DataLoader RNG及启用状态、各轮步数、源码和配方、缓存生产元数据及计划绑定。严格恢复，允许延长绝对停止轮但不改变调度合同；完成40轮从41轮继续，完成50轮不再更新。替换persistent workers后补偿额外base-seed消耗；CPU测试覆盖连续运行与中断恢复权重/RNG逐位一致。
+
+## Linux 输入
+
+已核对 `ssh -p 16079 root@connect.cqa1.seetacloud.com`：单张RTX4090 D，24564 MiB；数据盘约111GB可用。现成路径：
+
+| 配置 | 服务器路径 |
 |---|---|
-| 训练入口和数据批次 | `python -m maidata`只构建组件；`maidata.training`只有配方与batch函数。尚需独立Dataset/Collator和workers12的DataLoader，将音频输入、完整组、条件、全曲P0/Z与R/P监督接起来；按各轮计划的实际组顺序形成固定batch，不重抽歌曲、不做过采样 |
-| 完整训练/验证循环 | 尚需实现E/D/R/P的模式切换、前向、五项total/count归约、反传、统一裁剪及一次optimizer/scheduler更新；验证每5轮及显式末轮、重合一次，完整诊断仅末轮。不能调用旧冻结音频训练器替代新E的联合反传 |
-| 完整轮保存/恢复 | 尚需保存成套E/D/R/P、optimizer、scheduler、完整轮游标、全部RNG及源码/架构/输入/计划绑定；last每完整轮、best只在轮末验证改善时、编号每5轮及末轮保存。轮内/异常不保存，从上一完整轮恢复，绝对补到50轮 |
-| Linux输入接入 | 音频grid旧Mel引用和原谱source_path仍可能是Windows绝对路径。已读样本185:5的grid引用本机旧Mel，源记录无level_text且source_path指向本机maidata.txt；`read_condition`会从该源读取等级。尚需消费端路径映射或独立的精确条件元数据，保留原生产者身份；Planner缺render_end_beat时也要能读取对应源时间格或显式元数据。不要求重算Mel/aux32或重建原谱缓存 |
-| 默认batch的CUDA执行 | 尚无新E/D/R/P、bf16、2个完整组的完整更新峰值/梯度/计算复用证据。训练接入完成后核对该实际batch，覆盖E和D/R/P更新与mask；不拿CPU合成或旧冻结音频路径的显存实测代替，也不擅自缩小batch或改变累积 |
+| `pretrain_chart_cache` | `/root/autodl-tmp/chart-cache-original-v2-master-remaster-fields-20261010` |
+| `pretrain_audio_cache` | `/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/audio/encoder-inputs-all-official-20261010` |
+| `pretrain_mel_root` | `/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/audio/features` |
 
-## 远端启动范围
+计划与320首源文本准备为 [新增输入包](../../artifacts/pilot320-encoder-draft-inputs-20261010)，约9.8MB，目标为 `/root/autodl-tmp/pilot320-encoder-draft-inputs-20261010`。源文本提供精确等级和必要时的源时间格，副本与既有source_sha256一致。消费端通过source_root和Mel根目录定位，不改写缓存的生产者身份，不重算Mel、aux32或原谱。
 
-目标为 `ssh -p 16079 root@connect.cqa1.seetacloud.com`，单张RTX4090 D约24GB。用户授权在上述执行接入齐备后新建 `gpt-6.1-sol` 训练会话，上传固定源码及必要新增资产并启动pilot320；实验状态只在该训练会话报告。
+## 训练会话执行
 
-停止当前Physical计算的时机为正式训练实际准备启动时，不在本地补齐代码期间提前停止。目标是远端 `0wd-v3-physical-attribution-f372ec2-20261010/run-production.py` 及其 `maidata.chart_cache.rebuild_supports` 子进程；执行时重新核对该进程树，保留已产出文件和进度，不按宽泛python进程名终止。阶段一不消费主Decoder的训练Physical候选，因此不以它全部计算完成作为E/D/R/P训练前提。
+新会话上传固定源码和新增输入包，只验证本次传输；已有缓存使用维护元数据与普通读取检查。`--cuda-check`从第1轮既定batch中选择加权cost最大的实际batch，以相同12 workers、bf16和完整组进行一次前向/反向/更新，记录峰值显存、耗时、各模块梯度和更新、调用次数。检查模型独立丢弃，正式训练仍scratch。
 
-当前仍有上述实现缺口，未创建训练会话、未上传本次源码、未启动训练，也未停止Physical计算。
+CUDA验证交给训练会话；CPU通过不代表CUDA通过。若OOM，不自行缩小预算、组数或改累积，先报告实测。在正式训练准备启动时按确切命令和父子树停止当前远端Physical，保留产物和进度；不提前停止，不宽泛终止python。阶段一不等待Physical全部完成。实验进度只在训练会话报告，主会话交接后不主动轮询。
