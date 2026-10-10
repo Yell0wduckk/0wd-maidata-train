@@ -101,7 +101,7 @@ def test_worker_packet_has_bounded_buffers_and_no_runtime_cpu_geometry(config,mo
 def test_decoder_hot_path_has_no_dynamic_boolean_gathers_and_flags_run_once(config,monkeypatch):
     batch = collate_audio([training_item(0,config,monkeypatch)],config=config)
     model = DecoderTrainer(config)
-    conditions = model.produce(batch)
+    conditions = model.conditions(batch)
     keys = model.decoder.prepare_audio(Memory(conditions.audio.values,conditions.audio.beats,conditions.audio.valid))
     chunk = batch.chunks[0]
     mem = model.memory(conditions,keys,chunk.indices,chunk.audio_layout)
@@ -114,7 +114,7 @@ def test_decoder_hot_path_has_no_dynamic_boolean_gathers_and_flags_run_once(conf
     terms.objective(physical_weight=.1,judge_weight=.2,trajectory_weight=.3).backward()
     assert model.decoder.layers[0].audio_attn.key.weight.grad.abs().sum()>0
     assert model.decoder.condition.plan[0].weight.grad.abs().sum()>0
-    assert all(p.grad is None for m in (model.encoder,model.draft,model.planner) for p in m.parameters())
+    assert set(dict(model.named_children()))=={'decoder'}
 
 
 def test_parsed_onsets_preserve_window_labels_without_full_chart_replay(monkeypatch):

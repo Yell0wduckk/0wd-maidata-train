@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 
-PATH_KEYS = tuple('decoder_train_'+k for k in ('checkpoint','train_plan','validation_plan','chart_cache',
+PATH_KEYS = tuple('decoder_train_'+k for k in ('checkpoint','p0_cache','dp_cache','train_plan','validation_plan','chart_cache',
     'physical_cache','audio_cache','mel_root','source_root','geometry','slide_data','route_distances','output'))
 
 

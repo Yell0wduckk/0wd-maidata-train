@@ -1,6 +1,6 @@
 """Stage-II cache, vectorized supervision, frozen producers and strict epoch resume."""
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import replace, asdict
 import json
 import random
 from pathlib import Path
@@ -23,6 +23,7 @@ from maidata.decoder_training.support_cache import ChartSupports
 from maidata.decoder_training import supervision,checkpoint,recipe,runner
 from maidata.decoder_training.data import collate_audio,history_rng,DecoderDataset
 from maidata.decoder_training.network import DecoderTrainer
+from maidata.decoder_training.producer import FrozenProducer
 from maidata.decoder_training.batching import window_chunks
 from test_decoder_supervision import geometry
 from test_decoder_network import config as decoder_config,inputs,prepare as memory
@@ -160,7 +161,41 @@ def training_item(index,c,monkeypatch,*,remaster=False,epoch=1,training=True):
                     training=training,rng=history_rng(c['decoder_train_seed'],epoch,identity,occurrence))
                 windows.append(dict(identity=(identity,occurrence),chart_id=key,start=start,example=w,
                     stages=chart.window(w)[0],timing=chart.timing,audio_end=1.2))
-    return dict(item,windows=windows)
+    return freeze_item(dict(item,windows=windows),c)
+
+
+def freeze_item(item,c):
+    """Small independent online oracle, used only to create test cache tensors."""
+    from maidata.decoder_training.p0_cache import collate,SCHEMA as P0_SCHEMA
+    from maidata.decoder_training.dp_cache import SCHEMA as DP_SCHEMA
+    from maidata.draft.conditions import make_draft_inputs
+    from maidata.draft.windows import assemble_full_p0,select_windows
+    with torch.random.fork_rng(), torch.no_grad():
+        torch.manual_seed(614)
+        producer = FrozenProducer(c)
+        audio = collate([(item['variant'],item['grid'],item['coverage'])],config=c).to('cpu')
+        local = producer.encoder(audio.songs,audio.windows)
+        bank = assemble_full_p0(local.P0,audio.windows.target_start_beats,audio.windows.window_to_song,
+            audio.coverages,p0_rate=c['fpn_rates'][0],layout=audio.p0_layout)
+        inputs,mapping = make_draft_inputs(list(item['conditions'].values()),[item['variant']],[item['coverage']],device='cpu')
+        z = producer.draft(bank,inputs)
+        owner = dict(zip(item['conditions'],mapping.tolist()))
+        rows = list({w['identity'][0]:w for w in item['windows']}.values())
+        groups = torch.tensor([owner[w['chart_id']] for w in rows])
+        starts = torch.tensor([w['start'] for w in rows],dtype=torch.float32)
+        valid = torch.ones(len(rows),dtype=torch.bool)
+        predicted = producer.planner(select_windows(z,groups,starts,valid,target_beats=c['target_beats'],
+            before_beats=0,after_beats=0))
+    p0 = dict(schema=P0_SCHEMA,audio_variant=item['variant'],producer_sha256='fixed-producer',
+        coverage=asdict(item['coverage']),**{k:getattr(bank,k)[0] for k in ('values','beats','valid')})
+    dp = dict(schema=DP_SCHEMA,audio_variant=item['variant'],producer_sha256='fixed-producer',
+        chart_to_group=owner,conditions=[asdict(v) for v in item['conditions'].values()],
+        z={k:getattr(z,k) for k in ('values','beats','valid')},
+        planner=dict(window_ids=[w['identity'][0] for w in rows],chart_ids=[w['chart_id'] for w in rows],
+            groups=groups,starts=starts,plan_values=predicted.plan_values,valid=predicted.valid))
+    dp['window_index'] = {key:i for i,key in enumerate(dp['planner']['window_ids'])}
+    dp['chart_conditions'] = dict(zip(owner,dp['conditions']))
+    return dict(item,p0=p0,dp=dp)
 
 
 def distances():
@@ -168,7 +203,7 @@ def distances():
     return RouteGeometryLoss(d,d.square())
 
 
-def test_actual_frozen_update_reuses_producers_and_chunk_global_denominators(config,monkeypatch):
+def test_actual_cached_update_only_constructs_m_and_preserves_chunk_denominators(config,monkeypatch):
     rows = [training_item(0,config,monkeypatch,remaster=True),training_item(1,config,monkeypatch)]
     batches = [collate_audio([r],config=config) for r in rows]
     model = DecoderTrainer(config)
@@ -177,16 +212,13 @@ def test_actual_frozen_update_reuses_producers_and_chunk_global_denominators(con
     together = collate_audio(rows,config=one)
     opts = [recipe.optimizer(m.decoder.parameters(),config) for m in (model,other)]
     scheds = [recipe.scheduler(o,[1]*6,config) for o in opts]
-    with patch.object(model.encoder,'forward',wraps=model.encoder.forward) as enc, \
-         patch.object(model.draft,'forward',wraps=model.draft.forward) as draft, \
-         patch.object(model.planner,'forward',wraps=model.planner.forward) as planner, \
-         patch.object(model.decoder,'prepare_audio',wraps=model.decoder.prepare_audio) as project:
+    with patch.object(model.decoder,'prepare_audio',wraps=model.decoder.prepare_audio) as project:
         a,audit = runner.update(model,[together],opts[0],scheds[0],one,distances(),audit=True)
-    assert enc.call_count==draft.call_count==planner.call_count==project.call_count==1
+    assert project.call_count==1
     b,_ = runner.update(other,batches,opts[1],scheds[1],config,distances(),audit=True)
-    assert audit['changed_parameter_tensors']['encoder']==audit['changed_parameter_tensors']['draft']==audit['changed_parameter_tensors']['planner']==0
-    assert not model.encoder.training and not model.draft.training and not model.planner.training
-    assert all(p.grad is None for module in (model.encoder,model.draft,model.planner) for p in module.parameters())
+    assert set(audit['changed_parameter_tensors'])=={'decoder'}
+    assert set(dict(model.named_children()))=={'decoder'}
+    assert all(not t.requires_grad for t in (together.conditions.audio.values,together.conditions.decoder_z.values,together.conditions.plan))
     assert model.decoder.condition.z.weight.grad.abs().sum()>0
     assert a.counts==b.counts
     assert a.report(config)['loss']==pytest.approx(b.report(config)['loss'],rel=1e-5)
@@ -250,7 +282,16 @@ def test_real_dataset_reads_fields_supports_and_plan_without_rebuilding(config,t
         np.savez(tmp_path/f'audio/grids/{i}.npz',**audio_item(i,c)['grid'])
     write_plan(tmp_path/'plan',records,c,training=True)
     plan = DecoderPlan(tmp_path/'plan',c,training=True)
-    dataset = DecoderDataset(plan,c,hashes)
+    cached = {}
+    for i in (0,1):
+        item = audio_item(i,c)
+        item['windows'] = [dict(identity=(r['window_id'],r['occurrence']),chart_id=r['chart_id'],start=r['start_beat'])
+                           for r in plan.rows(str(i),2)]
+        cached[str(i)] = freeze_item(item,c)
+    class Cache:
+        def read(self,variant):
+            return cached[variant]['p0'],cached[variant]['dp']
+    dataset = DecoderDataset(plan,c,hashes,Cache())
     dataset.geometry = g
     with patch('maidata.chart_cache.training.build_supports',side_effect=AssertionError('no cache rebuild')):
         one = dataset[('0',2)]
@@ -291,6 +332,11 @@ def test_real_dataset_reads_fields_supports_and_plan_without_rebuilding(config,t
     assert Counter(seen)==Counter(original) and seen!=original
     assert expected==[(r['window_id'],r['occurrence']) for r in plan.occurrences(3)]
     assert expected!=[(r['window_id'],r['occurrence']) for r in plan.occurrences(4)]
+    cached['0']['dp']['chart_conditions']['0:5']['level_text'] = '14.50'
+    dataset[('0',2)]  # Display formatting does not change the numeric D condition.
+    cached['0']['dp']['chart_conditions']['0:5']['level'] = 15.
+    with pytest.raises(ValueError,match='difficulty/level'):
+        dataset[('0',2)]
     bad = deepcopy(plan.manifest)
     bad['config']['chart_history_beats']+=1
     (tmp_path/'plan/plan.json').write_text(json.dumps(bad))
@@ -357,20 +403,17 @@ def test_runner_exact_epoch_resume_dropout_validation_and_failure(config,tmp_pat
             if self.training:
                 random.Random(f'decoder-windows:{c["decoder_train_seed"]}:{e}').shuffle(rows)
             return [dict(row,sequence_index=i) for i,row in enumerate(rows)]
-    def loader(p,c,hashes):
+    def loader(p,c,hashes,cache):
         return DataLoader(EpochDataset(items,c,p),batch_sampler=WindowBatchSampler(p,c),
             collate_fn=partial(collate_audio,config=c,packed=True),generator=torch.Generator().manual_seed(71),
             num_workers=workers,persistent_workers=workers > 0,worker_init_fn=worker_init)
-    frozen = {name:deepcopy(getattr(DecoderTrainer(c),name).state_dict()) for name in ('encoder','draft','planner')}
-    def producer(model,c,binding):
-        for name,state in frozen.items():
-            getattr(model,name).load_state_dict(state)
-        return dict(sha256='fixed-producer')
+    from types import SimpleNamespace
+    monkeypatch.setattr(runner,'FrozenCache',lambda *a:SimpleNamespace(producer={'sha256':'fixed-producer'},binding={'p0':'p','dp':'d'}))
     monkeypatch.setattr(runner,'DecoderPlan',Plan)
     monkeypatch.setattr(runner,'make_loader',loader)
     monkeypatch.setattr(checkpoint,'data_binding',lambda *a:({'fixed':'inputs'},{}))
     monkeypatch.setattr(checkpoint,'source_identity',lambda:{'fixed':'source'})
-    monkeypatch.setattr(checkpoint,'load_producer',producer)
+    monkeypatch.setattr(checkpoint,'cache_producer',lambda identity,*a:identity)
     monkeypatch.setattr(runner,'load_route_distances',lambda p:distances())
     full = dict(c,decoder_train_output=str(tmp_path/'full'))
     runner.run(full)
@@ -421,6 +464,10 @@ def test_runner_exact_epoch_resume_dropout_validation_and_failure(config,tmp_pat
     assert runner.run(interrupted,resume=path)['step']==sum(steps)
     with pytest.raises(ValueError,match='binding changed'):
         runner.run(dict(interrupted,decoder_history_dropout=.2),resume=path)
+    monkeypatch.setattr(runner,'FrozenCache',lambda *a:SimpleNamespace(producer={'sha256':'fixed-producer'},
+        binding={'p0':'p','dp':'changed'}))
+    with pytest.raises(ValueError,match='binding changed'):
+        runner.run(interrupted,resume=path)
 
 
 def test_producer_load_is_paired_strict_and_stage_two_resume_is_separate(config,tmp_path,monkeypatch):
@@ -434,9 +481,15 @@ def test_producer_load_is_paired_strict_and_stage_two_resume_is_separate(config,
     path = tmp_path/'upstream.ckpt'
     torch.save(payload,path)
     c = dict(config,decoder_train_checkpoint=str(path))
-    model = DecoderTrainer(c)
+    model = FrozenProducer(c)
     identity = checkpoint.load_producer(model,c,binding)
     assert identity['sha256']==checkpoint.digest_file(path)
+    with patch('torch.load',side_effect=AssertionError('training must not load producer weights')):
+        assert checkpoint.cache_producer(identity,c,binding)==identity
+    with pytest.raises(ValueError,match='checkpoint differs'):
+        checkpoint.cache_producer(dict(identity,sha256='wrong'),c,binding)
+    with pytest.raises(ValueError,match='architecture'):
+        checkpoint.cache_producer(identity,dict(c,draft_level_scale=8),binding)
     for name in ('encoder','draft','planner'):
         for a,b in zip(getattr(model,name).parameters(),getattr(upstream,name).parameters()):
             torch.testing.assert_close(a,b,atol=0,rtol=0)
@@ -494,15 +547,15 @@ def test_binding_checks_selected_producers_without_opening_old_payloads(config,t
         checkpoint.data_binding(plans,c)
 
 
-def test_gt_targets_do_not_enter_frozen_producer(config,monkeypatch):
+def test_gt_targets_do_not_enter_cached_conditions(config,monkeypatch):
     batch = collate_audio([training_item(0,config,monkeypatch)],config=config)
     model = DecoderTrainer(config).train()
-    first = model.produce(batch)
+    first = model.conditions(batch)
     # Neither current targets nor cropped GT histories are read by E/D/P.
     changed = replace(batch,windows=[])
-    second = model.produce(changed)
+    second = model.conditions(changed)
     torch.testing.assert_close(first.audio.values,second.audio.values,rtol=0,atol=0)
-    torch.testing.assert_close(first.z.values,second.z.values,rtol=0,atol=0)
+    torch.testing.assert_close(first.decoder_z.values,second.decoder_z.values,rtol=0,atol=0)
     torch.testing.assert_close(first.plan,second.plan,rtol=0,atol=0)
     assert not first.plan.requires_grad
 

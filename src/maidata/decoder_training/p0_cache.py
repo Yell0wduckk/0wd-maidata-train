@@ -19,12 +19,10 @@ from maidata.training.data import worker_init
 from maidata.training.transport import pack_batch
 from maidata.training.checkpoint import digest_file
 from .checkpoint import load_producer
-from .network import DecoderTrainer
+from .producer import FrozenProducer
+from .cache_schema import P0_SCHEMA as SCHEMA
 from .recipe import autocast
 from .runner import write_json
-
-
-SCHEMA = 'maidata.frozen-p0-bank.v1'
 
 
 class AudioOnly(Dataset):
@@ -119,7 +117,7 @@ def export(config, output):
     binding = {key:{name:digest_file(Path(config[key.replace('pretrain_','decoder_train_')])/name)
                    for name in ('catalog.json','production-summary.json')}
                for key in ('pretrain_chart_cache','pretrain_audio_cache')}
-    model = DecoderTrainer(config).eval()
+    model = FrozenProducer(config)
     producer = load_producer(model, config, binding)
     # D/P/M are not run or transferred to GPU. Only public Encoder outputs are exported.
     encoder = model.encoder.to(device).eval()

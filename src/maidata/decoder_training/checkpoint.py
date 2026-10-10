@@ -71,6 +71,28 @@ def load_producer(model, config, binding):
     if payload.get('schema') != stage_one.SCHEMA:
         raise ValueError('initialization requires a compatible stage-I complete-epoch checkpoint')
     validate_cursor(payload,payload['steps_by_epoch'])
+    _validate_producer(payload, config, binding)
+    for name in ('encoder','draft','planner'):
+        state = {k[len(name)+1:]:v for k,v in payload['model_state'].items() if k.startswith(name+'.')}
+        _load(getattr(model,name),state)
+    return dict(sha256=digest_file(path),schema=payload['schema'],completed_epochs=payload['completed_epochs'],
+                step=payload['step'],recipe=payload['recipe'],source=payload['source'],binding=payload['binding'])
+
+
+def cache_producer(identity, config, binding):
+    """Verify the original producer without constructing E/D/P or loading weights.
+
+    Export already validated the complete checkpoint; its exact hash binds that
+    accepted identity. Training reads only metadata and this named checkpoint.
+    """
+    if (identity['schema'] != stage_one.SCHEMA or identity['completed_epochs'] < 1
+            or identity['step'] < 1 or identity['sha256'] != digest_file(config['decoder_train_checkpoint'])):
+        raise ValueError('frozen cache producer checkpoint differs')
+    _validate_producer(identity, config, binding)
+    return identity
+
+
+def _validate_producer(payload, config, binding):
     keys = [k for k in config if k in ENCODER_KEYS or k.startswith('draft_') or k in PLANNER_KEYS]
     current = json.loads(json.dumps({k:config[k] for k in keys}))
     if current != {k:payload['recipe'].get(k) for k in keys}:
@@ -86,11 +108,6 @@ def load_producer(model, config, binding):
     for key in ('pretrain_chart_cache','pretrain_audio_cache'):
         if payload['binding'][key] != binding[key]:
             raise ValueError('producer field/audio normalization binding differs')
-    for name in ('encoder','draft','planner'):
-        state = {k[len(name)+1:]:v for k,v in payload['model_state'].items() if k.startswith(name+'.')}
-        _load(getattr(model,name),state)
-    return dict(sha256=digest_file(path),schema=payload['schema'],completed_epochs=payload['completed_epochs'],
-                step=payload['step'],recipe=payload['recipe'],source=payload['source'],binding=payload['binding'])
 
 
 def _load(module, actual):

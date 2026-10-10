@@ -10,14 +10,12 @@ from torch.utils.data import Dataset, DataLoader
 from maidata.chart_cache.cache import load_chart
 from maidata.chart_cache.training import load_supports
 from maidata.decoder.windows import window_from_config, real_onsets
-from maidata.draft.conditions import read_condition, make_draft_inputs
-from maidata.draft.windows import song_coverage, audio_windows
+from maidata.draft.conditions import read_condition
 from maidata.physical import Geometry
-from maidata.preparation.cache import load_grid, song_inputs, window_inputs
-from maidata.time import TimingMap
 from maidata.training.data import map_tensors, worker_init
 from .support_cache import ChartSupports
 from .ordering import history_rng
+from .conditioning import collate_conditions
 
 
 class WindowBatchSampler(torch.utils.data.Sampler):
@@ -42,8 +40,9 @@ class WindowBatchSampler(torch.utils.data.Sampler):
 
 
 class DecoderDataset(Dataset):
-    def __init__(self, plan, config, field_hashes):
+    def __init__(self, plan, config, field_hashes, cache):
         self.plan, self.config, self.field_hashes = plan, config, field_hashes
+        self.cache = cache
         self.geometry = None
 
     def __len__(self):
@@ -56,16 +55,8 @@ class DecoderDataset(Dataset):
             self.geometry = Geometry.from_resources(c['decoder_train_geometry'], c['decoder_train_slide_data'])
         meta = plan.groups[variant]
         rows = plan.rows(variant, epoch, selection[0] if selection else None)
-        grid = load_grid(Path(c['decoder_train_audio_cache']) / 'grids' / f'{variant}.npz',
-                         mel_root=c['decoder_train_mel_root'])
-        if grid['mel_patches'].shape[1:] != (c['samples_per_beat'], c['mel_bins']):
-            raise ValueError('audio grid/config representation differs')
-        coverage = song_coverage(TimingMap.from_audio_timing(meta['timing']), meta['audio_end_seconds'],
-                                first_beat=int(grid['first_beat']), target_beats=c['target_beats'])
-        if (list(coverage.starts(include_tail=False)) != meta['encoder_starts_beats']
-                or coverage.first_beat+coverage.draft_beats != meta['draft_end_beat']):
-            raise ValueError('incomplete audio or Draft coverage')
-        charts, conditions, onsets = {}, {}, {}
+        p0, dp = self.cache.read(variant)
+        charts, onsets = {}, {}
         for key in dict.fromkeys(r['chart_id'] for r in rows):
             path = plan.charts[key]['chart_cache_path']
             record = load_chart(Path(c['decoder_train_chart_cache']) / path)
@@ -76,7 +67,9 @@ class DecoderDataset(Dataset):
             if support['source_sha256'] != self.field_hashes[key]:
                 raise ValueError('Physical supports reference different source fields')
             source['source_path'] = str(Path(c['decoder_train_source_root']) / source['song_id'] / 'maidata.txt')
-            conditions[key] = read_condition(source)
+            saved = dp['chart_conditions'][key]
+            if read_condition(source).key != (saved['audio_variant'], saved['level'], saved['difficulty_id']):
+                raise ValueError('cached Draft difficulty/level condition differs from fields')
             charts[key] = ChartSupports(record, support, self.geometry)
             chart = charts[key]
             onsets[key] = real_onsets(chart.tokens, chart.timing, sequence_start_tick=chart.start_tick)
@@ -99,21 +92,15 @@ class DecoderDataset(Dataset):
                 sequence_index=row['sequence_index'],
                 example=example, stages=(None,)*example.boundary_index+stages, timing=chart.timing,
                 audio_end=meta['audio_end_seconds'], support_audit=audit))
-        return dict(variant=variant, grid=grid, coverage=coverage, conditions=conditions, windows=windows)
+        return dict(variant=variant, p0=p0, dp=dp, windows=windows)
 
 
 @dataclass
 class Batch:
-    songs: object
-    audio_windows: object
-    coverages: list
-    draft_inputs: object
-    groups: torch.Tensor
-    starts: torch.Tensor
-    valid: torch.Tensor
+    conditions: object
     windows: list
     audio_variants: list
-    layouts: dict | None = None
+    audio_lengths: list
     chunks: list | None = None
     token_budget: int | None = None
     budget_cost: dict | None = None
@@ -131,25 +118,15 @@ class Batch:
 
 
 def collate_audio(items, *, config, packed=False):
-    grids, coverages = [i['grid'] for i in items], [i['coverage'] for i in items]
     variants = [i['variant'] for i in items]
     if len(set(variants)) != len(variants):
         raise ValueError('batch audio variants must be deduplicated')
-    starts, mapping = audio_windows(coverages, device='cpu')
-    conditions = {k:v for i in items for k,v in i['conditions'].items()}
-    draft, groups = make_draft_inputs(list(conditions.values()), variants, coverages, device='cpu')
-    ownership = dict(zip(conditions, groups.tolist()))
     windows = [w for i in items for w in i['windows']]
     if any('sequence_index' in w for w in windows):
         windows.sort(key=lambda w: w['sequence_index'])
         if len({w['sequence_index'] for w in windows}) != len(windows):
             raise ValueError('duplicate occurrence sequence index')
-    batch = Batch(song_inputs(grids), window_inputs(grids, starts.numpy(), mapping.numpy(),
-        target_beats=config['target_beats'], before_beats=config['audio_before_beats'],
-        after_beats=config['audio_after_beats']), coverages, draft,
-        torch.tensor([ownership[w['chart_id']] for w in windows], dtype=torch.long),
-        torch.tensor([w['start'] for w in windows], dtype=torch.float32),
-        torch.ones(len(windows), dtype=torch.bool), windows, variants)
+    batch = Batch(collate_conditions(items, windows, config), windows, variants, [len(i['p0']['values']) for i in items])
     from .preparation import prepare_batch
     prepare_batch(batch, config)
     if packed:
@@ -158,10 +135,10 @@ def collate_audio(items, *, config, packed=False):
     return batch
 
 
-def make_loader(plan, config, field_hashes):
+def make_loader(plan, config, field_hashes, cache):
     workers = config['decoder_train_workers']
     generator = torch.Generator().manual_seed(config['decoder_train_seed'])
-    return DataLoader(DecoderDataset(plan, config, field_hashes),
+    return DataLoader(DecoderDataset(plan, config, field_hashes, cache),
         batch_sampler=WindowBatchSampler(plan, config), collate_fn=partial(collate_audio, config=config, packed=True),
         num_workers=workers, persistent_workers=workers > 0, worker_init_fn=worker_init,
         generator=generator, pin_memory=torch.device(config['decoder_train_device']).type == 'cuda')

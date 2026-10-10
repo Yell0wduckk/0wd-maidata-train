@@ -14,6 +14,7 @@ from . import checkpoint, recipe
 from .data import make_loader
 from .network import DecoderTrainer
 from .plan import DecoderPlan
+from .frozen_cache import FrozenCache
 from .supervision import KEYS, loss, objective
 
 
@@ -70,7 +71,7 @@ def update(model, batches, opt, sched, config, geometry, *, audit=False):
         batch = raw.to(device)
         chunks = batch.chunks
         with recipe.autocast(device,config):
-            conditions = model.produce(batch)
+            conditions = model.conditions(batch)
             bank = conditions.audio
             audio_kv = model.decoder.prepare_audio(Memory(bank.values,bank.beats,bank.valid))
         for j,cpu_chunk in enumerate(chunks):
@@ -91,9 +92,8 @@ def update(model, batches, opt, sched, config, geometry, *, audit=False):
     sched.step()
     changed = {name:sum(not torch.equal(a,b) for a,b in zip(before[name],m.parameters()))
                for name,m in model.named_children()} if audit else {}
-    if audit and (any(gradients[n] or changed[n] for n in ('encoder','draft','planner'))
-                  or not gradients['decoder'] or not changed['decoder']):
-        raise ValueError('stage II must update M only, with frozen E/D/P')
+    if audit and (set(changed) != {'decoder'} or not gradients['decoder'] or not changed['decoder']):
+        raise ValueError('offline stage II must construct and update M only')
     return metrics,dict(gradient_norm=float(norm),gradients=gradients,changed_parameter_tensors=changed,
                         chunks=len(costs),padded_token_costs=costs,
                         batch_costs=[b.budget_cost for b in batches])
@@ -110,7 +110,7 @@ def validate(model, loader, config, geometry, *, final, restored_rng=None):
             prepared_chunks(raw,config)
             batch = raw.to(device)
             with recipe.autocast(device,config):
-                conditions = model.produce(batch)
+                conditions = model.conditions(batch)
                 b = conditions.audio
                 audio_kv = model.decoder.prepare_audio(Memory(b.values,b.beats,b.valid))
                 for cpu_chunk in batch.chunks:
@@ -155,13 +155,15 @@ def run(config, *, resume=None, cuda_check=False, check_step=0):
     plans = [DecoderPlan(config['decoder_train_'+key],config,training=i==0)
              for i,key in enumerate(('train_plan','validation_plan'))]
     binding,hashes = checkpoint.data_binding(plans,config)
+    cache = FrozenCache(plans,config,binding)
+    producer = checkpoint.cache_producer(cache.producer,config,binding)
+    binding['frozen_conditions'] = cache.binding
     source = checkpoint.source_identity()
-    loaders = [make_loader(p,config,hashes) for p in plans]
+    loaders = [make_loader(p,config,hashes,cache) for p in plans]
     steps = [len(plans[0].batches(e,config)) for e in range(1,config['decoder_train_scheduler_epochs']+1)]
     if not resume:
         recipe.seed(config)
     model = DecoderTrainer(config)
-    producer = checkpoint.load_producer(model,config,binding)
     model.to(device)
     geometry = load_route_distances(config['decoder_train_route_distances']).to(device)
     opt = recipe.optimizer(model.decoder.parameters(),config)
@@ -179,9 +181,9 @@ def run(config, *, resume=None, cuda_check=False, check_step=0):
         loaders[0].batch_sampler.epoch = 1
         loaders[0].batch_sampler.selected_step = check_step
         batches = list(islice(epoch_iterator(loaders[0]),config['decoder_train_gradient_accumulation_steps']))
-        calls = dict.fromkeys(('encoder','draft','planner'),0)
+        calls = dict.fromkeys(('encoder','draft','planner','decoder'),0)
         handles = []
-        for key in calls:
+        for key in dict(model.named_children()):
             def count(module,args,name=key):
                 calls[name] += 1
             handles.append(getattr(model,key).register_forward_pre_hook(count))
@@ -191,6 +193,7 @@ def run(config, *, resume=None, cuda_check=False, check_step=0):
         metrics,audit = update(model,batches,opt,sched,config,geometry,audit=True)
         torch.cuda.synchronize(device)
         report = dict(metrics=metrics.report(config),**audit,component_forward_calls=calls,
+            conditioning='offline_cache',constructed_components=list(dict(model.named_children())),
             seconds=time.perf_counter()-start,peak_allocated=torch.cuda.max_memory_allocated(device),
             peak_reserved=torch.cuda.max_memory_reserved(device),optimizer_step_in_epoch=check_step+1,
             audio_groups=[b.audio_variants for b in batches],source=source,binding=binding,producer=producer,config=config)
