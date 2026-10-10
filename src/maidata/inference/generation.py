@@ -40,6 +40,7 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
     # Keeping a bounded search frontier does NOT truncate the history fed to M.
     accepted, frames, trace, bypass = [], [], [], []
     backtracks = 0
+    physical_fallback = None
 
     def frame(token):
         snapshot = session.snapshot()
@@ -60,11 +61,11 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
             count += 1
         return (snapshot, len(accepted), len(bypass), sampler.choices(decoder, routed, oracle, timing,
             distributions, end_tick=end_tick, cap_tick=cap_tick,
-            moment_remaining=options.max_tokens_per_moment-count))
+            moment_remaining=options.max_tokens_per_moment-count),token)
 
     frames.append(frame(boundary))
     while frames:
-        snapshot, count, bypass_count, choices = frames[-1]
+        snapshot, count, bypass_count, choices, input_token = frames[-1]
         session.restore(snapshot)
         del accepted[count:]
         del bypass[bypass_count:]
@@ -78,20 +79,30 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
             if options.trace:
                 trace.append(dict(event='backtrack', tokens=count))
             if backtracks > options.max_backtracks_per_window:
+                if sampler.physical_hard_mask:
+                    # Retry this exact causal prefix with only raw Physical
+                    # rejection relaxed. Grammar/audio-domain validity stays.
+                    sampler.physical_hard_mask = False
+                    physical_fallback = dict(reason='backtracking_budget_exhausted',
+                        token_index=count,tick=session.rules.grammar.state.cursor,
+                        phase=session.rules.grammar.state.phase,backtracks=backtracks)
+                    frames[:] = [frame(input_token)]
+                    continue
                 raise GenerationError(f'window {start_tick/96:g}: exhausted backtracking budget ({backtracks})')
             continue
         if isinstance(token, TimeTarget):
             session.rules.close_window(token)
             session.cache = cache
             return tuple(accepted), dict(terminal_tick=token.absolute_tick, censored=token.censored,
-                backtracks=backtracks, physical_bypass=bypass, **({'trace': trace} if options.trace else {}))
+                backtracks=backtracks, physical_bypass=bypass,physical_fallback=physical_fallback,
+                **({'trace': trace} if options.trace else {}))
         decision = session.rules.query(token)
-        if decision.basic_errors or (options.physical_hard_mask and decision.physical):
+        if decision.basic_errors or (sampler.physical_hard_mask and decision.physical):
             # A complete action is authoritative even after a deferred field query.
             continue
         if len(accepted) >= options.max_tokens_per_window:
             raise GenerationError(f'window {start_tick/96:g}: token limit {options.max_tokens_per_window}; no chart exported')
-        if options.physical_hard_mask:
+        if sampler.physical_hard_mask:
             session.rules.accept(token)
         else:
             session.rules.accept_source(token)
@@ -151,9 +162,13 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
         boundary, session.cache, history_count = prefill(decoder, memory, groups, timing, start_tick,
                                                         config['chart_history_beats'], device=device)
         session.rules.inject_boundary(boundary, start_tick=start_tick, history_present=True, window_end=end_tick)
-        tokens, report = decode_window(decoder, memory, session, boundary, sampler, distributions, timing,
-            start_tick=start_tick, end_tick=end_tick, cap_tick=cap_tick, device=device, options=options,
-            progress=progress, window=i+1)
+        try:
+            tokens, report = decode_window(decoder, memory, session, boundary, sampler, distributions, timing,
+                start_tick=start_tick, end_tick=end_tick, cap_tick=cap_tick, device=device, options=options,
+                progress=progress, window=i+1)
+        finally:
+            # The next window starts with the requested hard-mask policy again.
+            sampler.physical_hard_mask = options.physical_hard_mask
         # Parse only real content with a local anchor; the previous boundary delta
         # is input-only. Rebase the first new group against the last REAL onset.
         new = list(real_onsets((Moment(0), *tokens), timing, sequence_start_tick=start_tick))

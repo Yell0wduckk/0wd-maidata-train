@@ -76,7 +76,7 @@ python -m maidata.inference.materialize \
 
 推理读取并准备一次音频输入，坐标、mask及无参数布局供两套Encoder共享。E_D与E_M分别计算自己的G0，各音频覆盖窗各编码一次，分别拼接P0_D与P0_M；可学习K/V和隐藏表示不共享。D仅从P0_D一次生成含额外完整尾窗的Z，P对各目标窗预测plan12；M仅从P0_M准备音频K/V。每窗选择固定Z上下文和plan12，窗口切换、内容重试、Physical回退均不重跑两套Encoder或D/P。旧v1路径只计算E_D并共用其P0。
 
-若显式使用 `--no-physical-hard-mask`，语法和音频范围仍生效，实际接受的Physical违规记录在 `physical_bypass`，报告明确记录关闭状态。默认运行不存在自动关约束或静默接受违规的回退。搜索失败、非有限预测或超过生成上限报错并写 `generation-error.json`，不将截断谱面标为成功。
+默认先使用Physical hard mask；窗口回退预算耗尽后，从当前因果前缀仅放宽Physical拒绝，继续强制补齐和生成。每窗`physical_fallback`记录触发点与原因，实际接受的违规逐条记录在`physical_bypass`；下一窗重新开启请求的hard mask。语法、音频范围和基本时值支持始终生效。显式`--no-physical-hard-mask`则从开始放宽Physical。放宽后仍无合法语法补全、非有限预测或超过生成上限时报错并写`generation-error.json`，不将截断谱面标为成功。
 
 ## Physical 推理查询与复用
 

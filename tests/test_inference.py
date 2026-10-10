@@ -191,6 +191,7 @@ def test_rollback_restores_pending_fields_actions_and_model_cache(config,geometr
     session.rules.inject_boundary(Moment(0),start_tick=0,window_end=288)
     states = []
     class Search:
+        physical_hard_mask = True
         def choices(self,decoder,routed,oracle,clock,specs,**kwargs):
             state = oracle.physical.grammar.state
             states.append((state.phase,len(oracle.physical.actions),routed.previous))
@@ -303,4 +304,42 @@ def test_generation_caps_repeated_notes_at_one_onset(config, geometry):
     groups = real_onsets(result.tokens,timing,sequence_start_tick=result.start_tick)
     assert groups and all(len(g.content) <= 3 for g in groups)
     assert any(len(g.content) == 3 for g in groups)
+
+
+@pytest.mark.parametrize('basic_error',[False,True])
+def test_exhausted_physical_search_bypasses_only_physical_and_resets_next_window(config,geometry,basic_error):
+    from maidata.physical.state import Decision
+    from maidata.physical.inference import InferencePhysicalState
+    model = build_decoder(config).eval()
+    timing = TimingMap([(0,120)])
+    prepared = conditions(config,timing,1.)
+    starts = []
+    query = InferencePhysicalState.query
+    def reject(self,token,**kwargs):
+        if isinstance(token,Note):
+            return Decision(('synthetic_invalid',)) if basic_error else Decision(physical=frozenset({'slide_too_fast'}))
+        return query(self,token,**kwargs)
+    def choices(self,model,routed,oracle,clock,specs,**kwargs):
+        if oracle.grammar.state.phase == 'boundary':
+            starts.append(self.physical_hard_mask)
+            if self.physical_hard_mask:
+                return
+            token,index = Note.make('tap','A1'),GENERATED_TYPES.index('NOTE')
+        else:
+            token = TimeTarget(clock.delta_ms(oracle.grammar.state.cursor,kwargs['end_tick']),
+                               kwargs['end_tick'],False,True)
+            index = GENERATED_TYPES.index('MOMENT')
+        output = model.complete(routed,torch.full_like(routed.valid,index,dtype=torch.long))
+        yield token,output.cache
+    with patch.object(InferencePhysicalState,'query',reject),patch.object(Sampler,'choices',choices):
+        if basic_error:
+            with pytest.raises(GenerationError,match='backtracking budget'):
+                generate(model,prepared,timing,geometry,config,ir_metadata(timing,1.),1.,device='cpu',
+                    options=GenerationOptions(temperature=0,max_backtracks_per_window=0))
+        else:
+            result,windows = generate(model,prepared,timing,geometry,config,ir_metadata(timing,1.),1.,device='cpu',
+                options=GenerationOptions(temperature=0,max_backtracks_per_window=0))
+            assert starts == [True,False]*len(windows)
+            assert all(w['physical_fallback']['reason']=='backtracking_budget_exhausted' for w in windows)
+            assert all(w['physical_bypass'][0]['reasons']==['slide_too_fast'] for w in windows)
 
