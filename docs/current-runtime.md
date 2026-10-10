@@ -29,7 +29,7 @@ Encoder 合成验证见[入口文档](maidata-entry.md#cpu-合成验证)。独�
 
 D只消费公开音频张量和独立条件，R/P各自只消费Z；网络不读文件，窗口组合不持有模型。Decoder的Z/plan12投影及attention未放入Draft。Encoder与D/P仅共享无状态RoPE数学，所有可学习参数独立。完整空尾窗保持有效Z与R/P监督，音频mask不替代Draft mask。
 
-CPU验证覆盖默认/非默认容量、源字段/simai标签、复用与mask、辅助loss及外部消费者经Z/plan12到Encoder的梯度和实际冻结。pilot320的R容量已按343谱、8828个16拍基础窗口统计为207行（含结束标记），D仍一拍一个Z。`maidata.training.pretrain`已提供可配置的五项损失加权、AdamW、warmup＋余弦调度、绝对停止轮及精度/种子辅助函数，默认配方见[Draft接口](draft.md#阶段一训练默认值)。完整训练循环、batch/累积及checkpoint执行尚未落实；未运行CUDA、原训练batch成本测量或训练。
+CPU验证覆盖默认/非默认容量、源字段/simai标签、复用与mask、辅助loss及外部消费者经Z/plan12到Encoder的梯度和实际冻结。pilot320的R容量已按343谱、8828个16拍基础窗口统计为207行（含结束标记），D仍一拍一个Z。`maidata.training.pretrain`已提供可配置的五项损失加权、AdamW、warmup＋余弦调度、绝对停止轮及精度/种子辅助函数；独立batch函数默认每2个完整音频组更新一次、梯度累积1，每轮144次更新。默认配方见[Draft接口](draft.md#阶段一训练默认值)。完整训练/验证循环、DataLoader、Linux输入映射及checkpoint执行尚未落实，见[阶段一执行状态](encoder-draft-training.md)；未运行CUDA、原训练batch成本测量或训练。
 
 ## 已复制的旧模型实现
 

@@ -46,6 +46,7 @@ D始终一拍生成一个Z token。默认16拍目标对应16个Z；R读取含邻
 | 线性warmup | `pretrain_warmup_steps=200` 次optimizer update；不按窗口或累积小批次计数 |
 | 余弦调度／绝对停止 | `pretrain_scheduler_epochs=100`、`pretrain_stop_after_epochs=50` |
 | 精度／初始化／种子 | `pretrain_precision='bf16'`、`pretrain_initialization='scratch'`、`pretrain_seed=20261010` |
+| 实际batch／梯度累积 | `pretrain_audio_groups_per_batch=2`、`pretrain_gradient_accumulation_steps=1`；默认每2个完整音频组更新一次 |
 | 数据 | [既有split](../../artifacts/pilot320-master-20261010/encoder-draft-split.json)：训练288首307谱，验证32首36谱；同曲及相同音频标识不跨侧 |
 | 监督实例 | [阶段一基础计划](../../artifacts/pilot320-encoder-draft-sampling-20261010/README.md)：训练7924窗、验证904窗，每个基础窗监督1次，无复杂节奏过采样 |
 
@@ -53,7 +54,11 @@ D始终一拍生成一个Z token。默认16拍目标对应16个Z；R读取含邻
 
 `make_scheduler` 接收完整100轮每轮的optimizer更新次数，按总和构造线性warmup＋余弦曲线；该次数须来自实际完整音频组batch与梯度累积安排。`epoch_range(completed_epochs, config)` 以已完成轮数生成后续轮：完成40轮则运行41–50，完成50轮则不再运行，不把恢复后的50理解为再跑50轮，也不将调度曲线缩为50轮。完整停止与原仓库 [audio_draft](../src/maimai_baseline/training/audio_draft.py)、[调度及autocast](../src/maimai_baseline/training/chart_encoder_pretrain.py) 一致。checkpoint、验证和诊断时机见[训练计划](../../0wd-v3-refactor-docs/training-plan.md#73-配置与执行约定)。
 
-逻辑batch、梯度累积和显存适配仍待确定；这些配方辅助函数不包含训练循环、数据迭代或checkpoint执行。
+`training.batching.optimizer_batches` 消费两项batch配置，保持计划中的音频组顺序、完整谱面及全部窗口，不切开音频组、不丢弃末尾不足量batch。默认实际batch与逻辑batch均为2个完整audio_variant组，梯度累积1；同variant的不同level/difficulty分别生成Z，共用音频计算图。每项损失按整个逻辑batch的total/count归约，完成所有监督反传后统一裁剪、optimizer.step与scheduler.step。改动累积步数时按实际逻辑batch合并有效计数，不能直接平均不同大小microbatch的均值。
+
+当前288个训练组对应每轮144次更新，100轮调度共14400步，第50轮停止时共7200步，200步warmup约1.39轮；32个验证组按每批2组共16批，验证不更新参数。第1轮的[训练batch边界](../../artifacts/pilot320-encoder-draft-sampling-20261010/train/batches.json)已从既有元数据生成，后续轮按各自计划顺序使用同一batch函数；不将epoch1顺序复用成所有轮。batch与累积配置改变时重新推导更新次数，不硬编码144。
+
+这些函数不包含训练循环、数据迭代或checkpoint执行。正式启动前尚缺的实际接入见[阶段一执行状态](encoder-draft-training.md)，不能把可构建模块或batch边界视为已经可运行完整训练。
 
 ## 全曲计算与复用
 
@@ -111,7 +116,7 @@ python -m maidata.draft.capacity --plan ../artifacts/pilot320-sampling-20261010/
 ```powershell
 $env:TEMP = "$PWD/.test-temp"
 $env:TMP = $env:TEMP
-python -m pytest tests/test_draft_networks.py tests/test_draft_data.py tests/test_draft_integration.py tests/test_draft_capacity.py tests/test_pretrain_recipe.py tests/test_maidata_entry.py tests/test_maidata_attention.py tests/test_maidata_encoder.py --basetemp .test-temp/draft
+python -m pytest tests/test_draft_networks.py tests/test_draft_data.py tests/test_draft_integration.py tests/test_draft_capacity.py tests/test_pretrain_recipe.py tests/test_pretrain_batching.py tests/test_maidata_entry.py tests/test_maidata_attention.py tests/test_maidata_encoder.py --basetemp .test-temp/draft
 ```
 
 覆盖默认/非默认维度、全曲覆盖和负起点、唯一中心拼接、空尾窗/占位窗、NA/有效0、simai统计算法对照、变BPM、K/V复用的数值及梯度等价、D/R/P到E反传、外部消费者经Z和plan12分别回传、实际冻结、CPU bf16 autocast及无旧模块导入。simai源码对照仅在该只读仓库存在时执行，生产代码不依赖它。

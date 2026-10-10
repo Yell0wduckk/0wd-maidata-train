@@ -69,6 +69,8 @@ CONFIG = {
     "pretrain_precision": "bf16",
     "pretrain_initialization": "scratch",
     "pretrain_seed": 20261010,
+    "pretrain_audio_groups_per_batch": 2,
+    "pretrain_gradient_accumulation_steps": 1,
 }
 
 
