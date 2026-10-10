@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import math
 import torch
 from torch.nn import functional as F
+from .checks import require
 
 
 @dataclass(frozen=True)
@@ -35,10 +36,10 @@ class TimeDistribution:
 def interval_log_mass(raw, lower, upper, spec):
     """raw [...,K,3], bounds [...,C]; upper=+inf denotes an actual tail."""
     x, a, b = raw.double(), lower.double(), upper.double()
-    if (x.shape[-1] != 3 or x.shape[:-2] != a.shape[:-1] or a.shape != b.shape
-            or not torch.isfinite(x).all() or not torch.isfinite(a).all()
-            or torch.isnan(b).any() or (a < 0).any() or (b <= a).any()):
+    if x.shape[-1] != 3 or x.shape[:-2] != a.shape[:-1] or a.shape != b.shape:
         raise ValueError('invalid probability parameters or interval bounds')
+    require(torch.isfinite(x).all() & torch.isfinite(a).all() & ~torch.isnan(b).any()
+            & (a >= 0).all() & (b > a).all(), 'invalid probability parameters or interval bounds')
     centers = x[..., 1] * spec.reference
     scale = F.softplus(x[..., 2]) * spec.reference + spec.minimum_scale
     tail = torch.isposinf(b)
@@ -53,8 +54,9 @@ def interval_log_mass(raw, lower, upper, spec):
 
 def interval_log_probabilities(raw, lower, upper, valid, spec):
     """Normalize the joint finite cells + tail over BASIC support, before Physical."""
-    if valid.shape != lower.shape or valid.dtype != torch.bool or not valid.any(-1).all():
+    if valid.shape != lower.shape or valid.dtype != torch.bool:
         raise ValueError('empty/misaligned time support')
+    require(valid.any(-1).all(), 'empty/misaligned time support')
     a = lower.masked_fill(~valid, 0)
     b = upper.masked_fill(~valid, 1)
     mass = interval_log_mass(raw, a, b, spec).masked_fill(~valid, -torch.inf)
@@ -62,8 +64,9 @@ def interval_log_probabilities(raw, lower, upper, valid, spec):
 
 
 def categorical_log_probabilities(logits, allowed):
-    if allowed.shape != logits.shape or allowed.dtype != torch.bool or not allowed.any(-1).all():
+    if allowed.shape != logits.shape or allowed.dtype != torch.bool:
         raise ValueError('empty/misaligned categorical support')
+    require(allowed.any(-1).all(), 'empty/misaligned categorical support')
     return logits.float().masked_fill(~allowed, -torch.inf).log_softmax(-1)
 
 

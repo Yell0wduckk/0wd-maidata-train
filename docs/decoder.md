@@ -54,6 +54,8 @@ output = decoder(tokens, next_types, memory)
 
 所有投影保留计算图，不在模块内detach或冻结。相同参数版本和同次前向可共享`audio_kv`；更新权重、输入、坐标或mask后由调用者重新准备。`prepare_memory`的结果标识当前窗口条件；每个新窗重新prefill全部self-attention层。
 
+整块训练可在 CPU 用 `batching.audio_key_spans/audio_query_layout` 准备歌曲 query 映射，作为 `prepare_memory(..., audio_layout=...)` 传入。此时各层直接保留唯一歌曲 K/V，按歌曲读取当前块的有效 query 后恢复窗口位置，不按窗口复制全曲 bank。layout 只属于该 token batch 的形状、有效位和 ownership；增量调用使用其自身对应的布局或普通窗口 memory。网络不读取 Dataset、采样计划或打包格式。
+
 ## 增量、内容阶段与回退
 
 ```python

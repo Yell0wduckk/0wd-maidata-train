@@ -19,11 +19,13 @@ KEYS = ('main', 'physical', 'judge', 'trajectory')
 class Prepared:
     groups: dict
     counts: dict
+    flags: dict
 
 
 def prepare(windows):
     rows = defaultdict(list)
     counts = dict.fromkeys(KEYS, 0)
+    flag_rows = {}
 
     def add(key, index, allowed, penalty, target, *, physical=1., args=(), bounds=None, main=True):
         if not (allowed & target).any() or (target & ~allowed).any():
@@ -52,6 +54,7 @@ def prepare(windows):
                 k = KINDS.index(target.kind)
                 pads = TOUCH_PADS if target.kind in ('touch','touch_hold') else BUTTON_PADS
                 p = pads.index(target.pad)
+                flag_rows[index] = (k, p)
                 kc = discrete('kind', index, s['kind'], KINDS, k, physical=.5)
                 pc = discrete(('pad',len(pads)), index, s['pad'], pads, p, physical=.5, args=(k,))
                 counts['physical'] += kc or pc
@@ -85,17 +88,27 @@ def prepare(windows):
         packed[key] = dict(indices=torch.tensor(indices), allowed=pad_sequence(allowed,batch_first=True),
             penalty=pad_sequence(penalty,batch_first=True), target=pad_sequence(target,batch_first=True),
             scale=torch.tensor(scale), args=torch.tensor(args,dtype=torch.long), main=torch.tensor(main))
+        packed[key]['has_physical'] = any(scale)
+        if isinstance(key, tuple) and key[0] == 'flag':
+            lookup = {index:i for i,index in enumerate(flag_rows)}
+            packed[key]['flag_rows'] = torch.tensor([lookup[i] for i in indices])
         if bounds[0] is not None:
             packed[key].update(lower=pad_sequence([v[0] for v in bounds],batch_first=True),
                                upper=pad_sequence([v[1] for v in bounds],batch_first=True,padding_value=1))
-    return Prepared(packed, counts)
+    return Prepared(packed, counts, dict(indices=torch.tensor(list(flag_rows),dtype=torch.long).reshape(-1,2),
+        args=torch.tensor(list(flag_rows.values()),dtype=torch.long).reshape(-1,2)))
 
 
 def loss(heads, output, prepared, *, distributions, geometry, diagnostics=None):
     zero = output.hidden.float().sum()*0
     totals = dict(main=zero, physical=zero.expand(4), judge=zero, trajectory=zero)
+    # The shared conditional adapter runs once per NOTE, not once per flag.
+    f = {k:v.to(output.hidden.device, non_blocking=True) for k,v in prepared.flags.items()}
+    flag_logits = None
+    if len(f['indices']):
+        flag_logits = heads.flag_logits(output.hidden[f['indices'][:,0],f['indices'][:,1]],f['args'][:,0],f['args'][:,1])
     for key, cpu in prepared.groups.items():
-        g = {k:v.to(output.hidden.device, non_blocking=True) for k,v in cpu.items()}
+        g = {k:v.to(output.hidden.device, non_blocking=True) if isinstance(v,torch.Tensor) else v for k,v in cpu.items()}
         index = g['indices']
         h, args = output.hidden[index[:,0],index[:,1]], g['args']
         if key == 'type':
@@ -107,14 +120,14 @@ def loss(heads, output, prepared, *, distributions, geometry, diagnostics=None):
         elif isinstance(key,tuple) and key[0] == 'pad':
             logits = heads.pad_logits(h,args[:,0])[:,:key[1]]
         elif isinstance(key,tuple):
-            logits = heads.flag_logits(h,args[:,0],args[:,1])[:,key[1]]
+            logits = flag_logits[g['flag_rows'],key[1]]
         else:
             logits = None
         lp = (categorical_log_probabilities(logits,g['allowed']) if logits is not None else
             interval_log_probabilities(heads.time_parameters(h,key),g['lower'],g['upper'],g['allowed'],distributions[key]))
         nll = -torch.logsumexp(lp.masked_fill(~g['target'],-torch.inf),-1)
         totals['main'] = totals['main'] + (nll*g['main']).sum()
-        if cpu['scale'].any():
+        if g['has_physical']:
             totals['physical'] = totals['physical'] + (physical_categories(lp,g['penalty'])*g['scale'][:,None]).sum(0)
         if key == 'route':
             if geometry is None:
@@ -123,11 +136,11 @@ def loss(heads, output, prepared, *, distributions, geometry, diagnostics=None):
             totals['judge'], totals['trajectory'] = totals['judge']+j.sum(), totals['trajectory']+t.sum()
         if diagnostics is not None:
             name = (f'pad_{key[1]}' if key[0] == 'pad' else FLAGS[key[1]]) if isinstance(key,tuple) else key
-            prediction = lp.detach().argmax(-1).cpu()
-            correct = cpu['target'].gather(1,prediction[:,None])[:,0] & cpu['main']
+            prediction = lp.detach().argmax(-1)
+            correct = g['target'].gather(1,prediction[:,None])[:,0] & g['main']
             row = diagnostics.setdefault(name,dict(correct=0,count=0))
             row['correct'] += int(correct.sum())
-            row['count'] += int(cpu['main'].sum())
+            row['count'] += int(g['main'].sum())
     return DecoderLoss(*(Reduction(totals[k],prepared.counts[k]) for k in KEYS))
 
 

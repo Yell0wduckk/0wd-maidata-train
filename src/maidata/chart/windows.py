@@ -29,10 +29,6 @@ class WindowSequence:
 
 
 def window_sequence(tokens, timing, *, start_tick, end_tick, audio_after_beats, audio_end_seconds, sequence_start_tick=0, history_present=True):
-    if (end_tick <= start_tick or audio_after_beats < 0 or not math.isfinite(audio_after_beats)
-            or not math.isfinite(audio_end_seconds)):
-        raise ValueError('invalid window extent')
-    cap_seconds = timing.second(end_tick+96*audio_after_beats)
     groups, group, g = [], None, Grammar(timing)
     g.inject_boundary(tokens[0], start_tick=sequence_start_tick)
     for token in tokens[1:]:
@@ -46,6 +42,16 @@ def window_sequence(tokens, timing, *, start_tick, end_tick, audio_after_beats, 
                 raise ValueError('content before first NOTE')
             group[1].append(token)
     g.finish()
+    return window_from_groups(groups, timing, start_tick=start_tick, end_tick=end_tick,
+        audio_after_beats=audio_after_beats, audio_end_seconds=audio_end_seconds, history_present=history_present)
+
+
+def window_from_groups(groups, timing, *, start_tick, end_tick, audio_after_beats, audio_end_seconds, history_present):
+    """Window labels from already parsed real onset groups, in source order."""
+    if (end_tick <= start_tick or audio_after_beats < 0 or not math.isfinite(audio_after_beats)
+            or not math.isfinite(audio_end_seconds)):
+        raise ValueError('invalid window extent')
+    cap_seconds = timing.second(end_tick+96*audio_after_beats)
     previous = next((tick for tick, _ in reversed(groups) if tick < start_tick), None)
     delta = timing.delta_ms(previous, start_tick) if history_present and previous is not None else 0.
     result, cursor, next_tick = [Moment(delta)], start_tick, None

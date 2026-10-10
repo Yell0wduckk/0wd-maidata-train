@@ -5,59 +5,55 @@ from pathlib import Path
 import time
 import torch
 
-from maidata.decoder.batching import collate_windows
 from maidata.decoder.resources import load_route_distances
 from maidata.decoder.types import Memory
+from maidata.decoder.checks import require
 from maidata.model import decoder_time_distributions
 from maidata.training.data import epoch_iterator
 from . import checkpoint, recipe
-from .batching import window_chunks
 from .data import make_loader
 from .network import DecoderTrainer
 from .plan import DecoderPlan
-from .supervision import KEYS, prepare, loss, objective
+from .supervision import KEYS, loss, objective
 
 
 class Metrics:
     def __init__(self):
-        self.sums = dict(main=0.,physical=[0.]*4,judge=0.,trajectory=0.)
+        self.totals = None
         self.counts = dict.fromkeys(KEYS,0)
 
     def add(self, terms):
+        values = torch.cat([getattr(terms,k).total.detach().double().reshape(-1) for k in KEYS])
+        self.totals = values if self.totals is None else self.totals+values
         for k in KEYS:
-            value = getattr(terms,k)
-            total = value.total.detach().double().cpu().tolist()
-            self.sums[k] = ([a+b for a,b in zip(self.sums[k],total)] if k == 'physical' else self.sums[k]+total)
-            self.counts[k] += value.count
+            self.counts[k] += getattr(terms,k).count
 
     def merge(self, other):
+        if other.totals is not None:
+            self.totals = other.totals if self.totals is None else self.totals+other.totals
         for k in KEYS:
-            self.sums[k] = ([a+b for a,b in zip(self.sums[k],other.sums[k])] if k == 'physical' else self.sums[k]+other.sums[k])
             self.counts[k] += other.counts[k]
 
     def report(self, config):
-        means = {k: self.sums[k]/max(1,self.counts[k]) for k in KEYS if k != 'physical'}
-        categories = [v/max(1,self.counts['physical']) for v in self.sums['physical']]
+        values = [0.]*7 if self.totals is None else self.totals.cpu().tolist()
+        sums = dict(main=values[0],physical=values[1:5],judge=values[5],trajectory=values[6])
+        means = {k: sums[k]/max(1,self.counts[k]) for k in KEYS if k != 'physical'}
+        categories = [v/max(1,self.counts['physical']) for v in sums['physical']]
         means['physical'] = sum(v*w for v,w in zip(categories,(1,1,4,1)))/4
         total = means['main']+sum(means[k]*config['decoder_train_'+k+'_weight'] for k in KEYS[1:])
-        return dict(loss=total,means=means,physical_categories=categories,counts=self.counts,sums=self.sums)
+        return dict(loss=total,means=means,physical_categories=categories,counts=self.counts,sums=sums)
 
 
 def prepared_chunks(batch, config):
-    return [(indices,prepare([batch.windows[i] for i in indices]))
-            for indices in window_chunks(batch.windows,config['decoder_train_token_budget'])]
+    if batch.token_budget != config['decoder_train_token_budget']:
+        raise ValueError('worker chunk budget differs from runtime configuration')
+    return batch.chunks
 
 
-def chunk_loss(model, batch, conditions, audio_kv, indices, prepared, config, geometry, *, diagnostics=None):
-    device = next(model.decoder.parameters()).device
-    index = torch.tensor(indices,device=device)
-    examples = [batch.windows[i]['example'] for i in indices]
-    # Build labels in one CPU collation; transfer aligned tensors together.
-    from maidata.training.data import map_tensors
-    tokens,types,_ = map_tensors(collate_windows(examples,device='cpu'),lambda t:t.to(device,non_blocking=True))
-    memory = model.memory(conditions,audio_kv,index)
-    output = model.decoder(tokens,types,memory)
-    terms = loss(model.decoder.heads,output,prepared,distributions=decoder_time_distributions(config),
+def chunk_loss(model, conditions, audio_kv, chunk, config, geometry, *, diagnostics=None):
+    memory = model.memory(conditions,audio_kv,chunk.indices,chunk.audio_layout)
+    output = model.decoder(chunk.tokens,chunk.next_types,memory)
+    terms = loss(model.decoder.heads,output,chunk.labels,distributions=decoder_time_distributions(config),
                  geometry=geometry,diagnostics=diagnostics)
     return terms,output
 
@@ -65,27 +61,28 @@ def chunk_loss(model, batch, conditions, audio_kv, indices, prepared, config, ge
 def update(model, batches, opt, sched, config, geometry, *, audit=False):
     model.train()
     prepared = [prepared_chunks(b,config) for b in batches]
-    counts = {k:sum(p.counts[k] for chunks in prepared for _,p in chunks) for k in KEYS}
+    counts = {k:sum(p.labels.counts[k] for chunks in prepared for p in chunks) for k in KEYS}
     before = {name:[p.detach().clone() for p in m.parameters()] for name,m in model.named_children()} if audit else {}
     opt.zero_grad(set_to_none=True)
     metrics, costs = Metrics(), []
     device = next(model.decoder.parameters()).device
-    for raw,chunks in zip(batches,prepared):
+    for raw in batches:
         batch = raw.to(device)
+        chunks = batch.chunks
         with recipe.autocast(device,config):
             conditions = model.produce(batch)
             bank = conditions.audio
             audio_kv = model.decoder.prepare_audio(Memory(bank.values,bank.beats,bank.valid))
-        for j,(indices,labels) in enumerate(chunks):
+        for j,cpu_chunk in enumerate(chunks):
+            chunk = cpu_chunk.to(device)
             with recipe.autocast(device,config):
-                terms,output = chunk_loss(model,batch,conditions,audio_kv,indices,labels,config,geometry)
+                terms,output = chunk_loss(model,conditions,audio_kv,chunk,config,geometry)
                 value = objective(terms,counts,config)
-            if not torch.isfinite(value):
-                raise ValueError('nonfinite Decoder objective')
+            require(torch.isfinite(value), 'nonfinite Decoder objective')
             value.backward(retain_graph=j+1<len(chunks))
             metrics.add(terms)
-            costs.append(len(indices)*max(len(raw.windows[i]['example'].inputs) for i in indices))
-            del terms,output,value
+            costs.append(chunk.cost)
+            del terms,output,value,chunk
         del batch,conditions,audio_kv
     norm = torch.nn.utils.clip_grad_norm_(model.decoder.parameters(),config['decoder_train_gradient_clip'],error_if_nonfinite=True)
     gradients = {name:sum(float(p.grad.float().square().sum()) for p in m.parameters() if p.grad is not None)**.5
@@ -109,19 +106,21 @@ def validate(model, loader, config, geometry, *, final, restored_rng=None):
     metrics,diagnostics = Metrics(),dict(field_accuracy={},windows=0,history_dropped=0)
     try:
         for raw in epoch_iterator(loader,restored_rng):
-            chunks = prepared_chunks(raw,config)
+            prepared_chunks(raw,config)
             batch = raw.to(device)
             with recipe.autocast(device,config):
                 conditions = model.produce(batch)
                 b = conditions.audio
                 audio_kv = model.decoder.prepare_audio(Memory(b.values,b.beats,b.valid))
-                for indices,labels in chunks:
-                    terms,output = chunk_loss(model,batch,conditions,audio_kv,indices,labels,config,geometry,
+                for cpu_chunk in batch.chunks:
+                    chunk = cpu_chunk.to(device)
+                    terms,output = chunk_loss(model,conditions,audio_kv,chunk,config,geometry,
                         diagnostics=diagnostics['field_accuracy'] if final else None)
                     metrics.add(terms)
+                    del terms,output,chunk
             if final:
                 diagnostics['windows'] += len(raw.windows)
-                diagnostics['history_dropped'] += sum(w['example'].history_dropped for w in raw.windows)
+                diagnostics['history_dropped'] += sum(w['history_dropped'] for w in raw.windows)
         result = metrics.report(config)
         if not torch.isfinite(torch.tensor(result['loss'])):
             raise ValueError('nonfinite validation loss')

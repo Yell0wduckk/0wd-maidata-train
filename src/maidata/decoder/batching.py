@@ -49,3 +49,27 @@ def select_condition_windows(z, groups, starts, window_valid, config):
     from maidata.draft.windows import select_windows
     return select_windows(z, groups, starts, window_valid, target_beats=config['target_beats'],
                           before_beats=config['decoder_z_before_beats'], after_beats=config['decoder_z_after_beats'])
+
+
+def audio_key_spans(valid):
+    if valid.device.type != 'cpu' or valid.ndim != 2 or valid.dtype != torch.bool:
+        raise ValueError('audio key spans require a CPU validity matrix')
+    spans = []
+    for row in valid:
+        index = row.nonzero().flatten()
+        # An all-masked key preserves a zero gradient connection for empty audio.
+        spans.append((int(index[0]),int(index[-1])+1) if len(index) else (0,min(1,len(row))))
+    return tuple(spans)
+
+
+def audio_query_layout(valid, mapping, audio_count, *, spans=None):
+    """CPU indices collect a song's queries without repeating its full K/V bank."""
+    if valid.device.type != 'cpu' or mapping.device.type != 'cpu':
+        raise ValueError('audio query layout must be prepared on CPU')
+    if (valid.ndim != 2 or valid.dtype != torch.bool or mapping.shape != (len(valid),)
+            or mapping.dtype != torch.long or ((mapping < 0) | (mapping >= audio_count)).any()):
+        raise ValueError('invalid audio query mapping')
+    if spans is not None and len(spans) != audio_count:
+        raise ValueError('audio key span count differs')
+    return dict(mapping=mapping, shape=tuple(valid.shape), spans=spans, indices=tuple(
+        (valid & (mapping == song)[:, None]).flatten().nonzero().flatten() for song in range(audio_count)))

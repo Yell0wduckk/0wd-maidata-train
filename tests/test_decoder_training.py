@@ -171,10 +171,10 @@ def distances():
 def test_actual_frozen_update_reuses_producers_and_chunk_global_denominators(config,monkeypatch):
     rows = [training_item(0,config,monkeypatch,remaster=True),training_item(1,config,monkeypatch)]
     batches = [collate_audio([r],config=config) for r in rows]
-    together = collate_audio(rows,config=config)
     model = DecoderTrainer(config)
     other = deepcopy(model)
     one = dict(config,decoder_train_token_budget=10000)
+    together = collate_audio(rows,config=one)
     opts = [recipe.optimizer(m.decoder.parameters(),config) for m in (model,other)]
     scheds = [recipe.scheduler(o,[1]*6,config) for o in opts]
     with patch.object(model.encoder,'forward',wraps=model.encoder.forward) as enc, \
@@ -292,12 +292,14 @@ class EpochDataset(torch.utils.data.Dataset):
         return item
 
 
-def test_runner_exact_epoch_resume_dropout_validation_and_failure(config,tmp_path,monkeypatch):
+@pytest.mark.parametrize('workers', [0, 2])
+def test_runner_exact_epoch_resume_dropout_validation_and_failure(config,tmp_path,monkeypatch,workers):
     from functools import partial
     from torch.utils.data import DataLoader
-    from maidata.training.data import AudioBatchSampler
+    from maidata.training.data import AudioBatchSampler,worker_init
     from maidata.decoder_training.recipe import PATH_KEYS
-    c = dict(config,decoder_dropout=.1,decoder_history_dropout=.5,decoder_train_stop_after_epochs=6)
+    c = dict(config,decoder_dropout=.1,decoder_history_dropout=.5,decoder_train_stop_after_epochs=6,
+             decoder_train_workers=workers)
     c.update({k:str(tmp_path/k) for k in PATH_KEYS})
     items = [training_item(i,c,monkeypatch) for i in range(2)]
     class Plan:
@@ -312,7 +314,8 @@ def test_runner_exact_epoch_resume_dropout_validation_and_failure(config,tmp_pat
             return list(range(6 if self.training else 4))
     def loader(p,c,hashes):
         return DataLoader(EpochDataset(items,c,p.training),batch_sampler=AudioBatchSampler(p,c),
-            collate_fn=partial(collate_audio,config=c),generator=torch.Generator().manual_seed(71))
+            collate_fn=partial(collate_audio,config=c,packed=True),generator=torch.Generator().manual_seed(71),
+            num_workers=workers,persistent_workers=workers > 0,worker_init_fn=worker_init)
     frozen = {name:deepcopy(getattr(DecoderTrainer(c),name).state_dict()) for name in ('encoder','draft','planner')}
     def producer(model,c,binding):
         for name,state in frozen.items():
@@ -348,13 +351,26 @@ def test_runner_exact_epoch_resume_dropout_validation_and_failure(config,tmp_pat
     for k in a['model_state']:
         torch.testing.assert_close(a['model_state'][k],b['model_state'][k],rtol=0,atol=0)
     assert a['scheduler_state']==b['scheduler_state']
+    assert a['optimizer_state']['param_groups']==b['optimizer_state']['param_groups']
+    for key,state in a['optimizer_state']['state'].items():
+        for name,value in state.items():
+            other = b['optimizer_state']['state'][key][name]
+            if isinstance(value,torch.Tensor):
+                torch.testing.assert_close(value,other,rtol=0,atol=0)
+            else:
+                assert value==other
     assert a['step']==b['step']==6
     assert torch.equal(a['rng']['torch'],b['rng']['torch'])
+    assert a['rng']['python']==b['rng']['python']
+    import numpy as np
+    np.testing.assert_equal(a['rng']['numpy'],b['rng']['numpy'])
     for x,y in zip(a['loader_rng'],b['loader_rng']):
         assert torch.equal(x,y)
     metrics = [json.loads(s) for s in (tmp_path/'interrupted/metrics.jsonl').read_text().splitlines()]
     assert [m['epoch'] for m in metrics if 'validation' in m]==[5,6]
     assert [m['epoch'] for m in metrics if 'diagnostics' in m.get('validation',{})]==[6]
+    continuous = [json.loads(s) for s in (tmp_path/'full/metrics.jsonl').read_text().splitlines()]
+    assert [m['train'] for m in continuous]==[m['train'] for m in metrics]
     assert metrics[-1]['validation']['diagnostics']['history_dropped']==0
     assert runner.run(interrupted,resume=path)['step']==6
     with pytest.raises(ValueError,match='binding changed'):

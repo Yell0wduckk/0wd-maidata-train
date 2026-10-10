@@ -7,6 +7,7 @@ from .embedding import TokenEmbedding
 from .attention import ConditionAdapter
 from .blocks import DecoderBlock
 from .heads import ContentHeads
+from .checks import require
 
 
 class Decoder(nn.Module):
@@ -44,14 +45,19 @@ class Decoder(nn.Module):
         validate_memory(audio, self.audio_dim)
         return tuple(layer.audio_attn.project(audio) for layer in self.layers)
 
-    def prepare_memory(self, audio_kv, audio_mapping, z, plan, plan_valid):
+    def prepare_memory(self, audio_kv, audio_mapping, z, plan, plan_valid, *, audio_layout=None):
         """One fresh object per target window batch; conditions come from public tensors."""
         if (len(audio_kv) != len(self.layers) or audio_mapping.dtype != torch.long
-                or audio_mapping.shape != (len(z.values),)
-                or ((audio_mapping < 0) | (audio_mapping >= len(audio_kv[0].valid))).any()):
+                or audio_mapping.shape != (len(z.values),)):
             raise ValueError('invalid song-to-window mapping')
+        require(((audio_mapping >= 0) & (audio_mapping < len(audio_kv[0].valid))).all(),
+                'invalid song-to-window mapping')
+        if audio_layout is not None:
+            require((audio_mapping == audio_layout['mapping']).all(), 'audio query layout ownership differs')
         condition = self.condition(z, plan, plan_valid)
         def select(kv):
+            if audio_layout is not None:
+                return KV(kv.key, kv.value, kv.valid, audio_layout)
             return KV(kv.key.index_select(0, audio_mapping), kv.value.index_select(0, audio_mapping),
                       kv.valid.index_select(0, audio_mapping))
         return DecoderMemory(tuple(select(kv) for kv in audio_kv),
@@ -75,9 +81,10 @@ class Decoder(nn.Module):
 
     def complete(self, routed, next_types):
         """Reusing routed with a new type recomputes ALL affected back-layer K/V."""
-        if (next_types.shape != routed.valid.shape or next_types.dtype != torch.long
-                or ((next_types[routed.valid] < 0) | (next_types[routed.valid] >= 5)).any()):
+        if next_types.shape != routed.valid.shape or next_types.dtype != torch.long:
             raise ValueError('next types must be aligned valid five-class IDs')
+        require(((next_types >= 0) & (next_types < 5) | ~routed.valid).all(),
+                'next types must be aligned valid five-class IDs')
         types = next_types.masked_fill(~routed.valid, 0)
         x = (routed.hidden + self.target_type(types)).masked_fill(~routed.valid[..., None], 0)
         memory, old = routed.memory, routed.previous

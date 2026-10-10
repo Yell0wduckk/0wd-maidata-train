@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import math
 from maidata.chart.grammar import Grammar
 from maidata.chart.types import Moment, Note, GENERATED_TYPES
-from maidata.chart.windows import window_sequence
+from maidata.chart.windows import window_from_groups
 
 
 @dataclass(frozen=True)
@@ -66,16 +66,16 @@ def history_prefix(groups, timing, *, start_tick, history_beats, dropped):
 
 def build_window(tokens, timing, *, sequence_start_tick, start_tick, end_tick,
                  audio_after_beats, audio_end_seconds, history_beats, history_dropout,
-                 training, rng):
+                 training, rng, onsets=None):
     if not 0 <= history_dropout <= 1:
         raise ValueError('invalid history_dropout')
     dropped = training and rng.random() < history_dropout
-    groups = real_onsets(tokens, timing, sequence_start_tick=sequence_start_tick)
+    groups = real_onsets(tokens, timing, sequence_start_tick=sequence_start_tick) if onsets is None else onsets
     history, positions, boundary, last = history_prefix(groups, timing, start_tick=start_tick,
                                                       history_beats=history_beats, dropped=dropped)
-    window = window_sequence(tokens, timing, start_tick=start_tick, end_tick=end_tick,
+    window = window_from_groups(tuple((g.tick,g.content) for g in groups), timing, start_tick=start_tick, end_tick=end_tick,
         audio_after_beats=audio_after_beats, audio_end_seconds=audio_end_seconds,
-        sequence_start_tick=sequence_start_tick, history_present=not dropped)
+        history_present=not dropped)
     assert window.tokens[0] == boundary
     cursor = start_tick
     current_beats = [start_tick / 96]
@@ -92,8 +92,8 @@ def build_window(tokens, timing, *, sequence_start_tick, start_tick, end_tick,
 
 
 def window_from_config(tokens, timing, config, *, sequence_start_tick, start_tick,
-                       audio_end_seconds, training, rng):
+                       audio_end_seconds, training, rng, onsets=None):
     return build_window(tokens, timing, sequence_start_tick=sequence_start_tick, start_tick=start_tick,
         end_tick=start_tick + 96 * config['target_beats'], audio_after_beats=config['audio_after_beats'],
         audio_end_seconds=audio_end_seconds, history_beats=config['chart_history_beats'],
-        history_dropout=config['decoder_history_dropout'], training=training, rng=rng)
+        history_dropout=config['decoder_history_dropout'], training=training, rng=rng, onsets=onsets)

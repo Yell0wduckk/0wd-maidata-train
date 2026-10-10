@@ -2,6 +2,7 @@
 from dataclasses import dataclass, fields
 import torch
 from torch import Tensor
+from .checks import require
 
 
 @dataclass(frozen=True)
@@ -17,8 +18,10 @@ def validate_memory(memory, width):
             or v.shape != b.shape or v.dtype != torch.bool
             or b.device != x.device or v.device != x.device):
         raise ValueError('memory requires values [B,L,D], beats/valid [B,L]')
-    if not x.is_floating_point() or not torch.isfinite(x[v]).all() or not torch.isfinite(b[v]).all():
+    if not x.is_floating_point():
         raise ValueError('valid memory values/positions must be finite')
+    require((torch.isfinite(x) | ~v[..., None]).all() & (torch.isfinite(b) | ~v).all(),
+            'valid memory values/positions must be finite')
 
 
 @dataclass(frozen=True)
@@ -45,6 +48,7 @@ class KV:
     key: Tensor
     value: Tensor
     valid: Tensor
+    query_layout: dict | None = None
 
 
 @dataclass(frozen=True)

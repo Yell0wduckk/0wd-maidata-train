@@ -8,6 +8,7 @@
 |---|---|
 | `decoder_training.plan` | 读取既有原谱 Decoder 采样计划、split、逐轮 occurrence 顺序及完整音频组 |
 | `decoder_training.data` | 读取 Mel/aux32、字段与 Physical；构造 GT 历史、边界、目标及整曲输入 |
+| `decoder_training.preparation/transport` | worker 内准备几何、去重映射、token/支持张量和分块；按 dtype 打包 IPC、pin memory 与分块 H2D |
 | `decoder_training.support_cache` | 恢复真实窗前动作与首次归责账本；复用等价前缀支持，重算边界与终端 |
 | `decoder_training.network` | 组合固定 E/D/P 与独立 M；全曲 P0、Z、预测 plan12 的公开张量传递 |
 | `decoder_training.batching` | 按实际 M 输入长度连续分块，不改变 occurrence 顺序或裁剪历史 |
@@ -16,7 +17,7 @@
 
 每个完整音频组只运行一次 E，唯一中心 P0 拼为全曲 bank；同一音频的不同难度/等级条件分别生成 Z。P 只读取目标窗 Z；重复 occurrence 共享对应预测 plan12。M 读取全曲 P0、默认前4＋目标16＋后4拍的 Z，以及无位置编码的预测 plan12；不读取 GT Planner 或直接难度值。
 
-E/D/P 始终 `eval`、`requires_grad=False`，生产表示使用 `no_grad`。M 的投影在其外正常反传。全曲音频 K/V 在一个输入 batch 内共享，直到该 batch 的最后分块完成反传；optimizer 更新之后重新建立，禁止跨更新复用。每个窗口并行 teacher forcing，重新计算包括历史在内的全部 self-attention，不跨窗携带 self K/V。
+E/D/P 始终 `eval`、`requires_grad=False`，生产表示使用 `no_grad`。M 的投影在其外正常反传。全曲音频 K/V 在一个输入 batch 内按歌曲共享，attention 将当前块的有效 query 按歌曲分组，读取同一份 K/V，并裁去歌曲 bank 两端的无效 padding；结果恢复原窗口顺序。K/V 保留计算图直到该 batch 的最后分块完成反传；optimizer 更新之后重新建立，禁止跨更新复用。每个窗口并行 teacher forcing，重新计算包括历史在内的全部 self-attention，不跨窗携带 self K/V。
 
 ## 原谱、历史和 Physical
 
@@ -41,6 +42,23 @@ E/D/P 始终 `eval`、`requires_grad=False`，生产表示使用 `no_grad`。M �
 - 两项几何：分别按有效 ROUTE 总数归约，独立于主监督和 Physical 分母。
 
 批量小头实现与 `decoder.supervision.decoder_loss` 逐行参考比较总和、计数和梯度。分块及梯度累积不采用窗口均值的平均。
+
+## 计算复用与传输
+
+DataLoader worker 在 CPU 准备 Encoder 插值/重采样、S 槽、P0 中心拼接、Draft 有效 query、唯一 Planner/Decoder Z 窗口索引，同时整理 token、基础/Physical 支持及逻辑 batch 分母。每份整曲字段仅解析一次真实起音组，所有窗口与重复 occurrence 复用该结果。支持缓存的窗口适配和模型侧 tensor 运算分离；训练主进程不逐 token 整理标签，也不回传 GPU 坐标来构造这些索引。
+
+IPC 使用现有 `training.transport` 的 dtype 连续缓冲实现，整曲条件与每个 M 分块分别打包；只传轻量 occurrence 元数据，不传规则状态、TimingMap 或整棵 GT/支持对象。整曲条件传入设备一次，token/支持随当前分块传输和释放，避免把全曲所有候选同时放入显存。模型只消费公开张量，打包形式不进入网络接口。
+
+NOTE 输入、MMoE gate、kind→pad/flags 使用固定形状张量运算，避免 CUDA 布尔索引产生动态 `nonzero`；flags 的条件适配每个 NOTE 仅计算一次。模型/概率的数值协议检查在 CUDA 使用异步设备断言，CPU 保留明确异常。常规 loss 统计在设备累积，输出 update/epoch 日志时统一回读；梯度非有限检查保留在 optimizer update 前。
+
+| 对照项 | 原仓库实现 | 当前阶段二 |
+|---|---|---|
+| IPC/H2D | `maimai_baseline.training.inputs._collate_full_input`、`data.batch_transport.PackedBatch` | 条件及 M 分块分别按 dtype 打包，并保持分块显存边界 |
+| 全曲 P0 K/V | `model.rope.mapped_attention`、`data.attention_layout.cross_layout` 按歌曲聚合 query、裁 key padding | 独立 `decoder.batching.audio_query_layout` 与 `Attention.mapped`，共享 K/V 张量并恢复原顺序 |
+| Encoder/Draft CPU 索引 | 新阶段一 `training.data.collate_audio` 已准备完整 layout | 阶段二 worker 接入同一公开 layout API，额外准备唯一 Planner/Decoder 窗口；模型前向不执行 CPU fallback |
+| 采样与归约 | 原训练维护完整音频组、既有计划及逻辑 batch | 沿用已绑定 occurrence 顺序；只分计算块，所有块仍按共同分母反传 |
+
+原仓库对照路径为 `repos/main-new-audio-draft-beat/src/maimai_baseline`，仅作实现参考。当前网络和训练均不导入该包。按歌曲聚合 attention 会改变 dropout 随机数的消费顺序；数值/梯度等价测试使用 dropout=0，分布语义不变；同版本完整轮恢复另用非零 dropout 验证。
 
 ## 配方与执行
 
@@ -74,4 +92,4 @@ python -m maidata.decoder_training --config decoder-stage2.json --cuda-check --c
 
 每5轮及末轮 validation，重合只执行一次；完整诊断仅末轮。`last` 每个完整轮保存，`best` 只在轮末验证改善时更新，编号 checkpoint 每5轮及末轮保存；异常和轮内不保存 checkpoint。验证 loss 用于诊断及 checkpoint 记录，谱面质量仍由实际生成结果评估。
 
-CPU 验证覆盖原谱缓存读写、在线规则对照、拼接和并行轨道、负拍起点、旧长动作、历史 dropout、空尾窗、批量/逐行 loss 与梯度、完整组分块等价、固定 E/D/P、真实 M 更新及中断后逐位一致恢复。正式训练和 CUDA 实测需在确定配方与配套 checkpoint 后执行；本次实现未启动它们。
+CPU 验证覆盖原谱缓存读写、在线规则对照、拼接和并行轨道、负拍起点、旧长动作、历史 dropout、空尾窗、批量/逐行 loss 与梯度、完整组分块等价、固定 E/D/P、真实 M 更新；额外对照共享/复制 K/V 的前向及梯度、空音频和 padding mask、packed worker 实际传输、前向无 CPU layout fallback、小头适配复用。完整轮恢复使用模型及历史 dropout，分别覆盖零 worker 和测试用2个 persistent workers，逐位核对 M、optimizer、scheduler、各 RNG 与每轮指标；正式默认仍为12 workers。当前环境只有 CPU Torch，未进行 CUDA 吞吐/显存实测或正式训练。

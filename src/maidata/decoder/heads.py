@@ -1,6 +1,7 @@
 """Content readouts; no masks, rules, resources or sequence state are owned here."""
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 
 class ConditionalReadout(nn.Module):
@@ -38,18 +39,14 @@ class ContentHeads(nn.Module):
         h, kind = h.reshape(-1, h.shape[-1]), kind.reshape(-1)
         x = self.pad_adapter(h, self.kind_condition(kind))
         touch = (kind == 2) | (kind == 3)
-        logits = x.new_full((*x.shape[:-1], 33), -torch.inf)
-        logits[~touch, :8] = self.button(x[~touch]).to(logits.dtype)
-        logits[touch] = self.touch(x[touch]).to(logits.dtype)
+        logits = torch.where(touch[:, None], self.touch(x), F.pad(self.button(x), (0, 25), value=-torch.inf)).to(x.dtype)
         return logits.reshape(*shape, 33)
 
     def flag_logits(self, h, kind, pad):
         shape = h.shape[:-1]
         h, kind, pad = h.reshape(-1, h.shape[-1]), kind.reshape(-1), pad.reshape(-1)
         touch = (kind == 2) | (kind == 3)
-        c = torch.zeros_like(h)
-        c[~touch] = self.button_condition(pad[~touch])
-        c[touch] = self.touch_condition(pad[touch])
+        c = torch.where(touch[:, None], self.touch_condition(pad), self.button_condition(pad.clamp_max(7)))
         x = self.flags_adapter(h, self.kind_condition(kind) + c)
         return torch.stack([head(x) for head in self.flags], -2).reshape(*shape, 5, 2)
 

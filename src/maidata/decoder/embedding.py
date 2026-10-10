@@ -3,6 +3,7 @@ import torch
 from torch import nn
 from maidata.chart.types import APPLICABLE, FLAGS, KINDS
 from maidata.nn.position import sinusoidal
+from .checks import require
 
 
 class TokenEmbedding(nn.Module):
@@ -32,32 +33,30 @@ class TokenEmbedding(nn.Module):
         for x in (t, tokens.kind, tokens.pad, tokens.route, tokens.track_break):
             if x.shape != t.shape or x.dtype != torch.long or x.device != t.device:
                 raise ValueError('token IDs require aligned int64 tensors')
-        if tokens.flags.dtype != torch.long or ((t[valid] < 0) | (t[valid] > 4)).any():
+        if tokens.flags.dtype != torch.long:
             raise ValueError('invalid token type/flag dtype')
-        if not torch.isfinite(tokens.beats[valid]).all() or not torch.isfinite(tokens.time[valid]).all():
-            raise ValueError('valid token coordinates must be finite')
-        out = self.kind.weight.new_zeros((*t.shape, self.dim))
+        require(((t >= 0) & (t <= 4) | ~valid).all(), 'invalid token type')
+        require(((torch.isfinite(tokens.beats) & torch.isfinite(tokens.time)) | ~valid).all(),
+                'valid token coordinates must be finite')
         note = valid & (t == 1)
-        k, p, f = tokens.kind[note], tokens.pad[note], tokens.flags[note]
-        if ((k < 0) | (k >= 5)).any():
-            raise ValueError('invalid NOTE kind')
+        k, p, f = tokens.kind, tokens.pad, tokens.flags
+        require(((k >= 0) & (k < 5) | ~note).all(), 'invalid NOTE kind')
+        k = k.clamp(0, 4)
         touch = (k == 2) | (k == 3)
-        if ((p < 0) | (p >= torch.where(touch, 33, 8))).any():
-            raise ValueError('invalid NOTE pad')
+        require(((p >= 0) & (p < torch.where(touch, 33, 8)) | ~note).all(), 'invalid NOTE pad')
         applicable = self.applicable[k]
-        if ((f[applicable] < 0) | (f[applicable] > 1)).any() or (f[~applicable] != -1).any():
-            raise ValueError('NOTE flags disagree with kind applicability')
-        pad = self.button.weight.new_zeros((len(k), self.button.embedding_dim))
-        pad[~touch], pad[touch] = self.button(p[~touch]), self.touch(p[touch])
+        require((torch.where(applicable, (f >= 0) & (f <= 1), f == -1) | ~note[..., None]).all(),
+                'NOTE flags disagree with kind applicability')
+        pad = torch.where(touch[..., None], self.touch(p.clamp(0, 32)), self.button(p.clamp(0, 7)))
         parts = [self.kind(k), pad]
         for i, table in enumerate(self.flags):
-            parts.append(table(f[:, i].clamp_min(0)).masked_fill(~applicable[:, i, None], 0))
-        out[note] = torch.cat(parts, -1)
+            parts.append(table(f[..., i].clamp(0, 1)).masked_fill(~applicable[..., i, None], 0))
+        notes = torch.cat(parts, -1)
         route = valid & (t == 2)
-        r, b = tokens.route[route], tokens.track_break[route]
-        if ((r < 0) | (r > 70) | (b < -1) | (b > 1)).any():
-            raise ValueError('invalid ROUTE value')
-        out[route] = torch.cat((self.route(r), self.track_break(b.clamp_min(0)).masked_fill(b[:, None] < 0, 0)), -1)
-        time = valid & ((t == 0) | (t == 3) | (t == 4))
-        out[time] = sinusoidal(tokens.time[time], self.dim, self.base, self.scale).to(out.dtype)
-        return (out + self.input_type(t.masked_fill(~valid, 0))).masked_fill(~valid[..., None], 0)
+        r, b = tokens.route, tokens.track_break
+        require(((r >= 0) & (r <= 70) & (b >= -1) & (b <= 1) | ~route).all(), 'invalid ROUTE value')
+        routes = torch.cat((self.route(r.clamp(0, 70)),
+            self.track_break(b.clamp(0, 1)).masked_fill(b[..., None] < 0, 0)), -1)
+        times = sinusoidal(tokens.time.masked_fill(~valid, 0), self.dim, self.base, self.scale).to(notes.dtype)
+        out = torch.where(note[..., None], notes, torch.where(route[..., None], routes, times))
+        return (out + self.input_type(t.clamp(0, 4))).masked_fill(~valid[..., None], 0)

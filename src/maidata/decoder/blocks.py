@@ -16,10 +16,9 @@ class MMoE(nn.Module):
 
     def forward(self, x, types):
         # Dispatch gates only; all experts participate, and are independent per layer.
-        logits = x.new_zeros((*x.shape[:-1], len(self.experts)))
-        for kind, gate in enumerate(self.gates):
-            selected = types == kind
-            logits[selected] = gate(x[selected]).to(logits.dtype)
+        gates = torch.stack([gate(x) for gate in self.gates], -2)
+        index = types[..., None, None].expand(*types.shape, 1, len(self.experts))
+        logits = gates.gather(-2, index).squeeze(-2)
         values = torch.stack([expert(x) for expert in self.experts], -2)
         return (logits.float().softmax(-1).to(values.dtype)[..., None] * values).sum(-2)
 
