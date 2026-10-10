@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.maimai-ai-charting/schemas/chart_ir.v1.schema.json",
+  "title": "maimai.chart_ir.v1",
+  "type": "object",
+  "required": ["schema", "tick_rate", "first_seconds", "default_meter", "controls", "moments", "eligibility"],
+  "properties": {
+    "schema": { "const": "maimai.chart_ir.v1" },
+    "source_signature": { "type": "string" },
+    "tick_rate": { "const": 180 },
+    "difficulty": { "type": ["string", "integer"] },
+    "first_seconds": { "type": "number" },
+    "default_meter": { "$ref": "#/$defs/meter" },
+    "controls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "position_beats", "tick"],
+        "properties": {
+          "kind": { "enum": ["bpm", "meter", "hs"] },
+          "position_beats": { "$ref": "#/$defs/rational" },
+          "tick": { "type": "integer" }
+        }
+      }
+    },
+    "moments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["position_beats", "tick", "bpm", "meter", "groups"],
+        "properties": {
+          "position_beats": { "$ref": "#/$defs/rational" },
+          "tick": { "type": "integer" },
+          "bpm": { "type": "number", "exclusiveMinimum": 0 },
+          "meter": { "$ref": "#/$defs/meter" },
+          "groups": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["each", "notes"],
+              "properties": {
+                "each": { "type": "boolean" },
+                "notes": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "$ref": "#/$defs/note" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "eligibility": {
+      "type": "object",
+      "required": ["training_eligible", "isolation_reasons"],
+      "properties": {
+        "training_eligible": { "type": "boolean" },
+        "isolation_reasons": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  },
+  "$defs": {
+    "rational": {
+      "type": "object",
+      "required": ["num", "den"],
+      "properties": {
+        "num": { "type": "integer" },
+        "den": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "meter": {
+      "type": "object",
+      "required": ["numerator", "denominator"],
+      "properties": {
+        "numerator": { "type": "integer", "minimum": 1 },
+        "denominator": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "duration": {
+      "type": "object",
+      "required": ["basis", "resolved_ticks"],
+      "properties": {
+        "basis": { "enum": ["beat", "tick"] },
+        "beat_num": { "type": "integer", "minimum": 0 },
+        "beat_den": { "type": "integer", "minimum": 1 },
+        "resolved_ticks": { "type": "integer", "minimum": 0 },
+        "seconds": { "type": "number", "minimum": 0 },
+        "derived": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "basis": { "const": "beat" } } },
+          "then": { "required": ["beat_num", "beat_den"] }
+        }
+      ]
+    },
+    "head": {
+      "type": "object",
+      "required": ["kind", "flags"],
+      "properties": {
+        "kind": { "enum": ["star", "tap", "none_fade", "none_immediate"] },
+        "flags": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      }
+    },
+    "segment": {
+      "type": "object",
+      "required": ["path", "end_pad", "duration"],
+      "properties": {
+        "path": { "type": "string", "minLength": 3 },
+        "end_pad": { "type": "string", "minLength": 1 },
+        "duration": { "$ref": "#/$defs/duration" }
+      }
+    },
+    "branch": {
+      "type": "object",
+      "required": ["timing_mode", "duration", "flags", "segments"],
+      "properties": {
+        "timing_mode": { "enum": ["total", "per_segment"] },
+        "duration": { "$ref": "#/$defs/duration" },
+        "flags": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "segments": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/segment" }
+        }
+      }
+    },
+    "note": {
+      "type": "object",
+      "required": ["kind", "start_tick"],
+      "properties": {
+        "kind": { "enum": ["tap", "hold", "touch", "touch_hold", "slide", "wifi"] },
+        "pad": { "type": "string" },
+        "start_pad": { "type": "string" },
+        "start_tick": { "type": "integer" },
+        "body_start_tick": { "type": "integer" },
+        "end_tick": { "type": "integer" },
+        "duration": { "$ref": "#/$defs/duration" },
+        "wait": { "$ref": "#/$defs/duration" },
+        "flags": { "type": "array", "items": { "type": "string" } },
+        "head": { "$ref": "#/$defs/head" },
+        "branches": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/branch" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "enum": ["tap", "touch"] } } },
+          "then": { "required": ["pad", "flags"] }
+        },
+        {
+          "if": { "properties": { "kind": { "enum": ["hold", "touch_hold"] } } },
+          "then": { "required": ["pad", "end_tick", "duration", "flags"] }
+        },
+        {
+          "if": { "properties": { "kind": { "enum": ["slide", "wifi"] } } },
+          "then": {
+            "required": [
+              "start_pad", "body_start_tick", "end_tick", "head", "wait", "branches"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

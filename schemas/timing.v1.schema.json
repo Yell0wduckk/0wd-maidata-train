@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "maimai.timing.v1",
+  "title": "maimai.timing.v1",
+  "type": "object",
+  "required": ["schema", "first_seconds", "meter", "bpm_points", "meter_points", "hs_points", "end_beat"],
+  "properties": {
+    "schema": {"const": "maimai.timing.v1"},
+    "first_seconds": {"type": "number"},
+    "meter": {"$ref": "#/$defs/meter"},
+    "bpm_points": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["position_beats", "bpm", "second"],
+        "properties": {
+          "position_beats": {"$ref": "#/$defs/rational"},
+          "bpm": {"type": "number", "exclusiveMinimum": 0},
+          "second": {"type": "number"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "meter_points": {"type": "array", "items": {"type": "object"}},
+    "hs_points": {"type": "array", "items": {"type": "object"}},
+    "end_beat": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/rational"}]}
+  },
+  "$defs": {
+    "rational": {
+      "type": "object",
+      "required": ["num", "den"],
+      "properties": {"num": {"type": "integer"}, "den": {"type": "integer", "minimum": 1}},
+      "additionalProperties": false
+    },
+    "meter": {
+      "type": "object",
+      "required": ["numerator", "denominator"],
+      "properties": {
+        "numerator": {"type": "integer", "minimum": 1},
+        "denominator": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

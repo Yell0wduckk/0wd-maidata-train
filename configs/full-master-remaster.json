@@ -1,0 +1,54 @@
+{
+  "schema": "maimai.master_remaster_experiment.v2",
+  "seed": 20260811,
+  "difficulties": [
+    5,
+    6
+  ],
+  "selection": "full",
+  "occurrences_per_chart": 1,
+  "view_weights": {
+    "identity": 2,
+    "mirror-lr": 1
+  },
+  "validation": "disabled",
+  "token_budget": 4096,
+  "workers": 12,
+  "plan_epochs": 155,
+  "stages": {
+    "A": {
+      "epochs": 20,
+      "scheduler_epochs": 40,
+      "offset": 0,
+      "learning_rate": 0.000565685424949238,
+      "warmup_steps": 79,
+      "physical_warmup_steps": 988
+    },
+    "B": {
+      "epochs": 10,
+      "scheduler_epochs": 20,
+      "offset": 20,
+      "learning_rate": 0.0001
+    },
+    "readout": {
+      "epochs": 35,
+      "scheduler_epochs": 35,
+      "offset": 30,
+      "learning_rate": 0.001
+    },
+    "S1": {
+      "epochs": 35,
+      "scheduler_epochs": 155,
+      "offset": 30,
+      "learning_rate": 0.0001
+    }
+  },
+  "warmup_reference": {
+    "plan_manifest_sha256": "8db503cb272fa7cc8713ec949da4219a7bc664a8d5a04118b51af6ebeadb6201",
+    "method": "first-update-boundary-crossing-200-of-500-row-progress;first-five-complete-epochs"
+  },
+  "excluded_record_ids": [
+    "11330:3",
+    "543:5"
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "schema": "maimai.style_evaluation.v1",
+  "common": {
+    "checkpoint": "../artifacts/style-diffusion/stage-b/diffusion.ckpt",
+    "baseline_checkpoint": "../artifacts/style-diffusion/control/last.ckpt",
+    "route_artifact": "../../maidata-baseline/training-dataset/route-artifact",
+    "compact_profile": "../../maidata-baseline/training-dataset/profile",
+    "bpm_audio_manifest": "../../maidata-baseline/training-dataset/audio/bpm-audio-manifest.json",
+    "device": "cuda"
+  },
+  "decoder_seed": 20260811,
+  "style_seeds": [0, 1, 2, 3, 4, 5, 6, 7],
+  "cases": [{
+    "id": "replace-with-evaluation-case",
+    "song_id": "REPLACE_TARGET_SONG",
+    "timing": "REPLACE_TARGET_TIMING.json",
+    "difficulty": 5,
+    "level": 14,
+    "cabinet": "DX",
+    "posterior_reference": "REPLACE_TARGET_POSTERIOR.json",
+    "references": ["REPLACE_OTHER_SONG_REFERENCE.json"],
+    "focus": [{
+      "start_beat": 0,
+      "end_beat": 32,
+      "reason": "Replace with actual four-beat/window boundaries and ABAC/repeated phrases",
+      "earlier_phrase_accessible": null
+    }]
+  }]
+}

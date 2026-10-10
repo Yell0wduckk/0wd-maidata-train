@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>11739 · 注意力大于30%</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font:15px/1.55 system-ui,"Microsoft YaHei",sans-serif;color:#182a38;background:#f5f7fa}main{max-width:1460px;margin:auto;padding:24px}h1{font-size:25px;margin:12px 0}a{color:#145db1}audio{width:100%;height:40px}.bar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:15px 0}label{display:flex;align-items:center;gap:5px}button,select,input{font:inherit;border:1px solid #bfcbd5;border-radius:5px;background:white;padding:6px 9px;color:inherit}button{cursor:pointer}button:disabled{opacity:.4;cursor:default}input{width:85px}.note{font-size:13px;color:#506475}.table-wrap{overflow:auto;background:white;border:1px solid #dce2e8;border-radius:6px}table{width:100%;border-collapse:collapse;white-space:nowrap}th,td{padding:9px 10px;border-bottom:1px solid #e6ebef;text-align:left;font-size:13px}th{background:#eaf0f5;position:sticky;top:0}td.num{font-variant-numeric:tabular-nums;text-align:right}td button{font-size:12px;padding:3px 6px}tr:hover{background:#f3f7fb}.counts{display:flex;gap:20px;flex-wrap:wrap;color:#385369}.hint{color:#6c7c88;font-size:12px}.pill{font-size:12px;padding:2px 4px;background:#eef1f4}#detail{white-space:pre-wrap;background:#fff;padding:12px;border-radius:5px;overflow-wrap:anywhere}summary{cursor:pointer}
+</style></head><body><main>
+<a href="index.html">← 音频时间轴热力图</a>
+<p><a href="distant-examples.html">只看五个远距离关注实例 →</a></p>
+<h1>11739 · 单条注意力概率 &gt; 30%</h1>
+<p>每条记录对应一个层、一个头、一个 query→key。这里使用原始逐 token 概率，不使用热力图的 0.5 秒聚合值，也不取层／头均值。</p>
+<audio id="audio" controls src="audio.mp3" preload="metadata"></audio>
+<p class="note">默认显示最终接受的预测 query 与音频中央 query；切换“全部有效记录”可包含音频 halo、控制行和被回滚／替换的尝试。按已保存的 FP16 概率严格筛选 &gt; 0.30，阈值附近存在量化误差。所有命中均保留，没有只取 Top-k。</p>
+<div id="counts" class="counts">正在载入…</div>
+<div class="bar">
+<label>范围 <select id="scope" aria-label="记录范围"><option value="default">最终路径＋音频中央 query</option><option value="all">全部有效记录</option><option value="discarded_attempt">仅回滚／替换尝试</option><option value="audio_halo">仅音频 halo query</option><option value="retained_control">仅保留控制行</option></select></label>
+<label>类型 <select id="kind" aria-label="注意力类型"><option value="all">全部类型</option><option value="audio_global">全曲音频自注意力</option><option value="audio_local">局部音频自注意力</option><option value="decoder_cross">Decoder 音频交叉注意力</option><option value="decoder_self">Decoder 自注意力</option></select></label>
+<label>层 <select id="layer" aria-label="层"><option value="all">全部层</option></select></label>
+<label>头 <select id="head" aria-label="头"><option value="all">全部头</option></select></label>
+<label>Query 起点(s) <input id="from" aria-label="Query起点秒" type="number" min="0" step="0.5" placeholder="不限"></label>
+<label>终点(s) <input id="to" aria-label="Query终点秒" type="number" min="0" step="0.5" placeholder="不限"></label>
+<label>排序 <select id="sort" aria-label="排序"><option value="prob">概率从高到低</option><option value="time">Query 时间从早到晚</option></select></label>
+</div>
+<div class="bar"><button id="prev">上一页</button><span id="pageLabel"></span><button id="next">下一页</button><label>跳到页 <input id="goto" aria-label="跳到页" type="number" min="1" value="1"></label><button id="export">导出当前筛选 CSV</button><a href="attention-over-30-final.csv" download>默认范围完整 CSV</a><a href="attention-over-30-all.csv" download>全部记录 CSV</a></div>
+<div class="table-wrap"><table><thead><tr><th>序号</th><th>注意力层</th><th>头</th><th>概率</th><th>Query 秒</th><th>Key 秒</th><th>间隔 Key−Q</th><th>输入→预测／Key</th><th>范围</th><th>定位／证据</th></tr></thead><tbody id="rows"></tbody></table></div>
+<details><summary>选中记录的原始索引</summary><pre id="detail">点击表格中的“证据”。</pre></details>
+</main><script src="threshold-data.js"></script><script>
+'use strict';
+const M=window.THRESHOLD_META,R=window.THRESHOLD_ROWS,$=id=>document.getElementById(id),size=100;
+const kinds={audio_global:'全曲音频 self',audio_local:'局部音频 self',decoder_cross:'Decoder cross',decoder_self:'Decoder self'};
+const scopes={audio_global:'全曲音频',audio_target:'音频中央',audio_halo:'音频 halo',final_prediction:'最终预测',retained_control:'保留控制',discarded_attempt:'回滚／替换'};
+const defaults=new Set(['audio_global','audio_target','final_prediction']);
+function kind(label){return label.startsWith('decoder_self')?'decoder_self':label.startsWith('decoder_cross')?'decoder_cross':label.startsWith('song_audio')?'audio_global':'audio_local';}
+function name(label){if(label.startsWith('decoder_'))return label.replace('decoder_cross_L','Decoder cross · L').replace('decoder_self_L','Decoder self · L');if(label.startsWith('song_audio'))return '全曲音频 · L'+(Number(label.match(/blocks\.(\d+)/)[1])+1);return label.replace('audio_encoder.stages.','E').replace(/\.blocks\.(\d+)\.attention/,(_,x)=>' · Block '+(Number(x)+1));}
+for(let i=0;i<M.layers.length;i++)$('layer').add(new Option(name(M.layers[i]),String(i)));for(let h=1;h<=8;h++)$('head').add(new Option('头 '+h,String(h)));
+const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+$('counts').textContent='全部有效命中 '+M.total.toLocaleString()+' 条；默认范围 '+M.default_total.toLocaleString()+' 条。 '+Object.entries(kinds).map(([k,v])=>v+' '+(M.default_counts[k]||0).toLocaleString()).join(' · ');
+let filtered=[],page=0;
+function refilter(){const scope=$('scope').value,ty=$('kind').value,ly=$('layer').value,h=$('head').value,lo=$('from').value,hi=$('to').value;
+filtered=R.filter(r=>{const s=M.scopes[r[5]];return (scope==='all'||(scope==='default'?defaults.has(s):s===scope))&&(ty==='all'||kind(M.layers[r[0]])===ty)&&(ly==='all'||r[0]===Number(ly))&&(h==='all'||r[1]===Number(h))&&(lo===''||r[3]>=Number(lo))&&(hi===''||r[3]<=Number(hi));});
+if($('sort').value==='time')filtered.sort((a,b)=>a[3]-b[3]||b[2]-a[2]);page=0;draw();}
+function draw(){const pages=Math.max(1,Math.ceil(filtered.length/size));page=Math.max(0,Math.min(page,pages-1));const start=page*size,items=filtered.slice(start,start+size);
+$('pageLabel').textContent=`${filtered.length.toLocaleString()} 条 · 第 ${page+1}/${pages} 页 · ${filtered.length?start+1:0}–${Math.min(start+size,filtered.length)}`;$('goto').value=page+1;$('goto').max=pages;$('prev').disabled=page===0;$('next').disabled=page>=pages-1;
+$('rows').innerHTML=items.map((r,i)=>`<tr><td class="num">${start+i+1}</td><td>${esc(name(M.layers[r[0]]))}</td><td>${r[1]}</td><td class="num"><strong>${(r[2]*100).toFixed(4)}%</strong></td><td class="num">${r[3].toFixed(4)}</td><td class="num">${r[4].toFixed(4)}</td><td class="num">${(r[4]-r[3]).toFixed(4)}</td><td>${esc(r[8]||'audio')} → ${esc(r[9]||'—')}<br><span class="hint">key: ${esc(r[10]||'audio')}</span></td><td><span class="pill">${scopes[M.scopes[r[5]]]}</span></td><td><button data-i="${i}" data-action="q">Q</button> <button data-i="${i}" data-action="k">K</button> <button data-i="${i}" data-action="detail">证据</button></td></tr>`).join('')||'<tr><td colspan="10">没有满足此筛选的记录。</td></tr>';
+$('rows').querySelectorAll('button').forEach(button=>button.onclick=()=>{const r=items[Number(button.dataset.i)];if(button.dataset.action==='detail'){const detail={layer:M.layers[r[0]],head:r[1],probability:r[2],query_seconds:r[3],key_seconds:r[4],scope:M.scopes[r[5]],query_node_id:r[6],key_node_id:r[7],input_event:r[8],predicted_event:r[9],key_event:r[10],npz:r[11],batch:r[12],query:r[13],key:r[14]};$('detail').textContent=JSON.stringify(detail,null,2);$('detail').parentElement.open=true;}else{$('audio').currentTime=Math.max(0,r[button.dataset.action==='q'?3:4]);}});
+}
+for(const id of ['scope','kind','layer','head','sort'])$(id).onchange=refilter;for(const id of ['from','to'])$(id).oninput=refilter;$('prev').onclick=()=>{page--;draw();};$('next').onclick=()=>{page++;draw();};$('goto').onchange=()=>{page=Number($('goto').value)-1;draw();};
+$('export').onclick=()=>{const rows=[['layer','head','probability','query_seconds','key_seconds','scope','query_node_id','key_node_id','input_event','predicted_event','key_event','record_path','batch','query','key'],...filtered.map(r=>[M.layers[r[0]],...r.slice(1,5),M.scopes[r[5]],...r.slice(6)])];const csv='\ufeff'+rows.map(row=>row.map(x=>'"'+String(x??'').replace(/"/g,'""')+'"').join(',')).join('\r\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download='attention-over-30-filtered.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);};
+refilter();
+</script></body></html>

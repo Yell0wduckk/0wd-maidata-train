@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "maidata-baseline"
+version = "0.1.0"
+description = "Canonical Route-71 BPM96 linear-time maimai chart-generation baseline"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "maimai-ai-charting contributors" }]
+dependencies = []
+
+[project.scripts]
+maimai-dataset = "maimai_dataset.cli:main"
+maimai-baseline = "maimai_baseline.cli:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+audio = [
+  "av>=18.1.0",
+  "pyloudnorm==0.2.0",
+  "soundfile>=0.14.0",
+]
+train = [
+  "numpy>=2.0",
+  "torch>=2.9",
+  "torchcodec>=0.8",
+  "ninja>=1.11",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false
+
+[tool.setuptools.package-data]
+maimai_baseline = ["assets/*.json", "runtime-versions.toml"]
+"maimai_baseline.physical" = ["csrc/*.cpp", "csrc/*.cu"]
+
+[tool.pytest.ini_options]
+addopts = "-q -p no:cacheprovider -m 'not tooling and not integration'"
+testpaths = ["tests"]
+tmp_path_retention_policy = "failed"
+pythonpath = ["src"]
+norecursedirs = [".history", ".experiment", "_archive", "dist", ".venv"]
+markers = [
+  "tooling: offline audio, dataset and artifact preparation commands",
+  "integration: external pilot data, audio decoding or MiaCode end-to-end checks",
+  "cuda: numerical or kernel checks requiring CUDA",
+]

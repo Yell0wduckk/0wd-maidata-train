@@ -1,0 +1,191 @@
+# Single maintenance point for release numbers and compatibility.
+# Store decimal strings; compare integer hundredths, never floats.
+# major: next integer; minor: next tenth; patch: next hundredth; carry normally.
+# Every change updates this file and reviews all three inclusive ranges.
+# Source/checkpoint hashes are provenance, never runtime admission criteria.
+current = "43.02"
+
+[bump]
+major = 100
+minor = 10
+patch = 1
+
+[supported.training]
+min = "39.00"
+max = "43.02"
+[supported.inference]
+min = "39.00"
+max = "43.02"
+[supported.materialize]
+min = "15.00"
+max = "43.02"
+
+[[changes]]
+version = "43.02"
+description = "Support full-data song holdout for draft only, preserving all songs in A; parameterize validation song count and record actual fine-tuned native teacher checkpoint provenance. Model, losses and optimizer recipes unchanged."
+
+[[changes]]
+version = "43.01"
+description = "Compare parsed validation vocabulary semantics; accept retained base-dataset provenance metadata while rejecting actual vocabulary differences. No model, loss, data, plan or recipe changes."
+
+[[changes]]
+version = "43.00"
+description = "One-beat 128D audio drafts, three-window latent conditions, per-beat MOMENT count reconstruction and independent 32-song draft validation. Complete draft60 then stop for explicit checkpoint selection; retain legacy four-beat inference."
+
+[[changes]]
+version = "42.01"
+description = "Formal cached draft A work accounting consumes audio_context without requiring raw audio; no model, recipe or cache changes."
+
+[[changes]]
+version = "42.00"
+description = "Bidirectional audio draft supervised only by latent-only reconstruction, canonical clean token caches, standard-deviation-scaled A perturbations and view conditioning. Frozen external native full audio, fresh A90, no chart encoder or GMM prior in the new route. Retain older inference and materialization."
+
+[[changes]]
+version = "41.00"
+description = "External native full-A90 audio caches, LayerNorm deterministic chart mu, absolute auxiliary MOMENT reconstruction, audio-only NLL and variance regularization, shared condition perturbation, fresh frozen-audio encoder60/A90/B20 contracts. Retain older inference."
+
+[[changes]]
+version = "40.22"
+description = "Rebuild encoder60 mu and train-only statistics for the new full-profile windows, including empty blocks. Bind fresh targets to the original frozen A90 without rewriting its metadata, and reindex existing P0 while preserving prior span semantics."
+
+[[changes]]
+version = "40.21"
+description = "Read reused real mu by full-chart block validity instead of a derived profile object end. Derived P0 conditions retain the imported corpus boundary; window ownership, padding, condition masks and original-cache checks remain enforced."
+
+[[changes]]
+version = "40.20"
+description = "Frozen A90 supervises GMM4 prior with NLL plus differentiable Decoder L3. Separate real-mu targets from complete-tail conditions, derive fixed empty-tail data/plans, reuse P0 and cached candidate keys, and retain old B inference and A import."
+
+[[changes]]
+version = "40.10"
+description = "New profile producers cover complete Hold/Slide/Wi-Fi endings, retain interior empty sixteen-beat windows, and append one full empty tail. Existing fixed profiles, plans, caches, and model contracts remain unchanged."
+
+[[changes]]
+version = "40.02"
+description = "Normalize B formal-training output paths from the public CLI, accepting strings and Path objects. Preserve model, recipe, complete-epoch recovery, and existing A/mu/plan/P0 compatibility."
+
+[[changes]]
+version = "40.01"
+description = "Remove retired time modal accuracy NaN placeholder from L3 diagnostics so original-batch CUDA reports remain strict JSON; objective, finite loss/gradient checks, and accepted cache formats are unchanged."
+
+[[changes]]
+version = "40.00"
+description = "Frozen encoder60 deterministic four-beat mu conditioning; independent L3+Physical A and 128-dimensional GMM4 B, with mu-only normalization and continuous unique-song P0 caches. Retain encoder pretraining import and parent artifact materialization."
+
+[[changes]]
+version = "39.10"
+description = "Add independent deterministic four-beat chart encoder pretraining and latent-only reconstruction head, with its own complete-epoch checkpoints and encoder export. Retain compatible MajRadar A model behavior."
+
+[[changes]]
+version = "39.00"
+description = "Per-sixteen-beat MajRadar Scores6 plus fitted constant replace latent conditioning. Frozen skipped chart encoder; GT radar conditions A decoder, jointly trained seven-dimensional GMM4 prior learns radar NLL from shared continuous P0 and conditions inference. Fresh A initialization."
+
+[[changes]]
+version = "38.00"
+description = "End-to-end dense A: predict MOMENT, delta and note configuration without public GT scaffold; retain continuous whole-song P0, local router, skipped frozen latent and reviewed Physical rules. Fresh initialization; scaffold checkpoints cannot train or infer."
+
+[[changes]]
+version = "36.10"
+description = "Physical active Touch pool, equivalent short Holds, directed Wi-Fi coverage and per-track release handoffs; unchanged model tensors. Old Physical support tables require a later rule rebuild."
+
+[[changes]]
+version = "36.00"
+description = "Continuous absolute-phase whole-song audio; batched local SDPA and unique decoder audio banks. Retain GT scaffold, full causal chart history, bounded local router and configuration-only loss."
+
+[[changes]]
+version = "35.07"
+description = "Port single-stage entrypoints and minimal data/cache/resume contracts onto the execution-reuse branch; preserve model and A hot paths."
+
+[[changes]]
+version = "35.06"
+description = "Legacy-runtime branch: reuse audio, immutable timing, scaffold geometry and provenance; bind A/B numerical execution settings. Unchanged model and cache layouts."
+
+[[changes]]
+version = "35.02"
+description = "Accept existing GT multi-branch prefixes in training for the parent soft Physical objective; retain the generation one-branch hard limit and exact public rhythm quotas."
+
+[[changes]]
+version = "35.01"
+description = "Scatter scaffold tokens using the final normalization dtype under BF16 mixed precision; unchanged parameters, objective and training recipe."
+
+[[changes]]
+version = "35.00"
+description = "Public GT rhythm scaffold encoder and accepted-prefix controller; configuration-only A objective and fixed-scaffold inference."
+
+[[changes]]
+version = "34.00"
+description = "Parent full-song dense decoder with retained initialization and frozen, skipped latent modules; fresh A-only training and disabled inference."
+
+[components]
+materializer = 2
+stream_protocol = 1
+
+[[changes]]
+version = "21.10"
+description = "Song-first A4096 packing; same model and B16384, explicit reference/boundary resume contract."
+
+# Only these pre-version dynamic Query6 producers are admitted. These are
+# metadata patterns, not file paths, Git commits, or hash allowlists.
+[[legacy]]
+version = "15.00"
+architecture = "maimai-row-fields-interval-physical-dynamic-query6-v1"
+schema = "maimai.baseline_checkpoint.dynamic_query6.v1"
+manifest_schema = "maimai.baseline_contract.dynamic_query6.v1"
+ar_architecture = "maimai-dynamic-query6-a90-song-latent-ar-gmm4-v1"
+ar_schema = "maimai.song_ar_gmm4_checkpoint.dynamic_query6.v1"
+base_loss_scheme = "dual-decoder-field-budget-v3"
+loss_scheme = "group-budget-physical-row-stages-v9"
+
+[[legacy]]
+version = "15.00"
+architecture = "maimai-row-fields-interval-physical-dynamic-query6-v1"
+schema = "maimai.baseline_checkpoint.dynamic_query6.v1"
+manifest_schema = "maimai.baseline_contract.dynamic_query6.v1"
+ar_architecture = "maimai-dynamic-query6-a90-song-latent-ar-gmm4-v1"
+ar_schema = "maimai.song_ar_gmm4_checkpoint.dynamic_query6.v1"
+base_loss_scheme = "dual-decoder-field-budget-v5"
+loss_scheme = "group-budget-physical-row-stages-v11"
+
+[[changes]]
+version = "15.10"
+description = "Double only supervised router coefficient to 0.4; conditional event stays 0.2. Same architecture and explicit-current-objective training compatibility."
+
+[[changes]]
+version = "15.00"
+description = "Unified version compatibility, incremental AR inference, four-beat layout and live preview."
+
+[[changes]]
+version = "16.00"
+description = "Three dynamic frequency queries with 64-channel convolution. Tensor architecture checks remain required; objective and data layout unchanged."
+
+[[changes]]
+version = "16.10"
+description = "Three dynamic frequency queries with original 32-channel convolution and nonlinear shared 32-to-64 lift. Distinct tensor layout from conv64 experiment."
+
+[[changes]]
+version = "17.00"
+description = "Lift64 dynamic query4 and all-audio width256 heads8 FFN1024; new P0 and song context layouts. Fresh A90 and GMM4 B50, unchanged supervised and Physical objectives."
+
+[[changes]]
+version = "18.00"
+description = "Four shared-attention decoder layers, each with four width512 FFN experts and independent Time/Note dense softmax gates. Fresh A90 and GMM4 B50."
+
+[[changes]]
+version = "21.00"
+description = "Decoder-only MoE: preserve dense audio/chart encoders and Time/Note MMoE chart decoder; eight AR prior FFNs use four half-width token-gated experts."
+
+[[changes]]
+version = "21.01"
+description = "Add isolated full-data A90/cache/B50 entry alongside pilot with the same decoder-only MoE architecture; retain compatible pilot checkpoints."
+
+[[changes]]
+version = "24.00"
+description = "Native SongAR prior and six chart MMoE decoder layers; one complete A/B model_state, old train/infer formats retired."
+
+[[changes]]
+version = "25.00"
+description = "Eight chart Time/Note MMoE decoder layers with preserved six-layer initialization; unchanged dense encoders, latent128, native SongAR, losses and data recipe. Fresh A90/cache/B50; no six-layer weight migration."
+
+[[changes]]
+version = "27.00"
+description = "Independent eight-layer whole-song dense decoder self/audio attention; unchanged local router, window latent, parameters and supervision."

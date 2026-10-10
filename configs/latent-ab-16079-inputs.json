@@ -1,0 +1,18 @@
+{
+  "inputs": {
+    "dataset": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/profile",
+    "chart_cache": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/chart-cache",
+    "spatial_view_cache": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/spatial-views",
+    "route_artifact": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/slide-geometry/route-artifact",
+    "interpolation_geometry": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/geometry",
+    "bpm_audio_manifest": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/audio/bpm-audio-manifest.json",
+    "note_view_manifest": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/note-view/manifest.json",
+    "physical_path_catalog": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/physical/path-catalog",
+    "physical_source_rows": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/physical/source-rows",
+    "physical_interval_cache": "/root/autodl-tmp/maidata-physical-36.10-pilot-20261007/interval-cache",
+    "song_chart_cache": "/root/autodl-tmp/maidata-shared1-full-train-20260924/run-input-v2/inputs/song-chart",
+    "song_audio_cache": "/root/autodl-tmp/maidata-shared1-full-train-20260924/run/inputs/song-audio",
+    "epoch_plan_cache": "/root/autodl-tmp/maidata-decoder8-20261003/a-plan",
+    "chart_encoder_checkpoint": "/root/autodl-tmp/main-new-encoder-pretrain-20261008/pretrain/checkpoints/epoch-060.ckpt"
+  }
+}

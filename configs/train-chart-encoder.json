@@ -1,0 +1,14 @@
+{
+  "seed": 20260811,
+  "workers": 12,
+  "token_budget": 4096,
+  "precision": "bf16",
+  "epochs": 60,
+  "scheduler_epochs": 155,
+  "offset": 0,
+  "learning_rate": 0.000565685424949238,
+  "weight_decay": 0.01,
+  "gradient_clip": 1.0,
+  "warmup_steps": 79,
+  "validation": "disabled"
+}

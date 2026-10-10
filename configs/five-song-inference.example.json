@@ -1,0 +1,36 @@
+{
+  "checkpoint": "/absolute/path/to/new-level-b45.ckpt",
+  "route_artifact": "/absolute/path/to/route-artifact",
+  "profile_root": "/absolute/path/to/profile",
+  "physical_path_catalog": "/absolute/path/to/path-catalog",
+  "miacode_chart_ir_exe": "/absolute/path/to/miacode_chart_ir",
+  "output": "/absolute/path/to/new-five-song-output",
+  "songs": {
+    "412": {
+      "audio": "/root/autodl-tmp/maidata-flat-history-rope-20260910-runs/inference-inputs-five-songs-16079/audio/412.mp3",
+      "level": 13.3,
+      "timing": "/absolute/path/to/412-timing.json"
+    },
+    "11525": {
+      "audio": "/root/autodl-tmp/maidata-flat-history-rope-20260910-runs/inference-inputs-five-songs-16079/audio/11525.mp3",
+      "level": 13.8,
+      "timing": "/absolute/path/to/11525-timing.json"
+    },
+    "11388": {
+      "audio": "/root/autodl-tmp/maidata-flat-history-rope-20260910-runs/inference-inputs-five-songs-16079/audio/11388.mp3",
+      "level": 14.5,
+      "timing": "/root/autodl-tmp/maidata-flat-history-rope-20260910-runs/inference-inputs-five-songs-16079/timing/11388.json"
+    },
+    "awake-now": {
+      "audio": "/root/autodl-tmp/maidata-flat-history-rope-20260910-runs/inference-inputs-five-songs-16079/audio/awake-now.mp3",
+      "level": 13.3,
+      "timing": "/root/autodl-tmp/maidata-flat-history-rope-20260910-runs/inference-inputs-five-songs-16079/timing/awake-now.json"
+    },
+    "Nosferatu": {
+      "audio": "/root/autodl-tmp/maidata-flat-history-rope-20260910-runs/inference-inputs-five-songs-16079/audio/90001-gain5db.mp3",
+      "level": 14.4,
+      "timing": "/root/autodl-tmp/maidata-flat-history-rope-20260910-runs/inference-inputs-five-songs-16079/timing/90001.json"
+    }
+  },
+  "device": "cuda"
+}

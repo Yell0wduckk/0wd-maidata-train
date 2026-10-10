@@ -1,0 +1,19 @@
+{
+  "schema": "maimai.ar_consumer_config.v1",
+  "experiment_config": "pilot261-dynamic-query3x64-lift64-whole-song-50.json",
+  "stages": ["B"],
+  "prior": "maimai.song_latent_ar_gmm4.v1",
+  "objective": "joint-gmm4-nll-valid-coordinate-mean",
+  "audio_cfg": false,
+  "epochs": 50,
+  "scheduler_epochs": 50,
+  "warmup_steps": 50,
+  "learning_rate": 0.0001,
+  "weight_decay": 0.01,
+  "gradient_clip": 1.0,
+  "precision": "fp32",
+  "workers": 12,
+  "budget": 16384,
+  "budget_unit": "source-target-rows",
+  "seed": 20260811
+}

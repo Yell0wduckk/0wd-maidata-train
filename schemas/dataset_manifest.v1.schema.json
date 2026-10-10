@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "maimai.dataset_manifest.v1",
+  "title": "One maimai dataset manifest JSONL record",
+  "type": "object",
+  "required": ["schema", "record_id", "song_id", "status", "cabinet", "split", "isolation_reasons"],
+  "properties": {
+    "schema": {"const": "maimai.dataset_manifest.v1"},
+    "record_id": {"type": "string", "minLength": 1},
+    "song_id": {"type": "string", "pattern": "^(?![0-9]{6}$).+"},
+    "status": {"enum": ["eligible", "isolated", "no_chart"]},
+    "difficulty_id": {"type": ["integer", "null"]},
+    "difficulty": {"type": ["string", "null"]},
+    "level": {"type": "string"},
+    "level_value": {"type": ["number", "null"]},
+    "cabinet": {"enum": ["SD", "DX", "UNKNOWN"]},
+    "split": {"enum": ["train", "validation", "test", "none"]},
+    "audio": {"type": ["object", "null"]},
+    "audio_path": {"type": "string"},
+    "feature_path": {"type": ["string", "null"]},
+    "ir_path": {"type": ["string", "null"]},
+    "ir_sha256": {"type": ["string", "null"]},
+    "timing_path": {"type": ["string", "null"]},
+    "isolation_reasons": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+  },
+  "additionalProperties": true
+}
