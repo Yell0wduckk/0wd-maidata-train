@@ -7,7 +7,7 @@ from maidata.chart.types import (GENERATED_TYPES, KINDS, FLAGS, APPLICABLE,
     BUTTON_PADS, TOUCH_PADS, Moment, Note, Route, HoldDuration, SlideDuration)
 from maidata.chart.windows import TimeTarget
 from maidata.decoder.probability import interval_log_mass
-from maidata.decoder.supports import time_candidates
+from .time_support import TimeCandidateCache
 
 
 class Sampler:
@@ -17,6 +17,7 @@ class Sampler:
         self.temperature = temperature
         self.generator = torch.Generator(device='cpu').manual_seed(seed)
         self.physical_hard_mask = physical_hard_mask
+        self.time_candidates = TimeCandidateCache()
 
     def order(self, scores, allowed=None):
         """Lazy weighted sampling without replacement; retries never repeat a choice."""
@@ -32,7 +33,7 @@ class Sampler:
             yield index
 
     def allowed(self, evaluation):
-        d = evaluation.raw.decision()
+        d = evaluation.raw.decision() if hasattr(evaluation, 'raw') else evaluation
         return not d.basic_errors and (not self.physical_hard_mask or not d.physical)
 
     def contents(self, decoder, h, kind, oracle, timing, distributions, *, end_tick, cap_tick):
@@ -68,7 +69,8 @@ class Sampler:
             if kind != 'MOMENT' and support['domain'][1] < support['domain'][0]:
                 return
             stage = dict(cursor_tick=cursor, **{'moment' if kind == 'MOMENT' else 'duration': support})
-            candidates = time_candidates(stage, timing, kind=kind, window_end=end_tick, cap_tick=cap_tick, device=device)
+            candidates = self.time_candidates.candidates(stage, timing, kind=kind,
+                window_end=end_tick, cap_tick=cap_tick, device=device)
             valid = candidates.valid & (~candidates.raw.any(-1) if self.physical_hard_mask else True)
             mass = interval_log_mass(heads.time_parameters(h, kind), candidates.lower, candidates.upper,
                                      distributions[kind], validate=False)

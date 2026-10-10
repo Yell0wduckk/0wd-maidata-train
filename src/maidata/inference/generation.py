@@ -10,10 +10,10 @@ from maidata.decoder.session import DecodeSession
 from maidata.decoder.windows import history_prefix, real_onsets
 from maidata.draft.windows import select_windows
 from maidata.model import decoder_time_distributions
-from maidata.physical import PhysicalState
-from maidata.physical.attribution import AttributionState
+from maidata.physical.inference import InferencePhysicalState
 from .sampling import Sampler
 from .options import GenerationOptions
+from .progress import emit, stage
 
 
 class GenerationError(RuntimeError):
@@ -35,7 +35,7 @@ def prefill(decoder, memory, groups, timing, start_tick, history_beats, *, devic
 
 
 def decode_window(decoder, memory, session, boundary, sampler, distributions, timing, *,
-                  start_tick, end_tick, cap_tick, device, options):
+                  start_tick, end_tick, cap_tick, device, options, progress=None, window=1):
     # Every frame binds the complete rule state to the exact causal model prefix.
     # Keeping a bounded search frontier does NOT truncate the history fed to M.
     accepted, frames, trace, bypass = [], [], [], []
@@ -45,7 +45,14 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
         snapshot = session.snapshot()
         batch = pack_tokens([[token]], [[session.rules.grammar.state.cursor / 96]], device=device)
         routed = decoder.begin(batch, memory, cache=session.cache)
-        oracle = AttributionState(session.rules)
+        oracle = session.rules
+        if not isinstance(oracle, InferencePhysicalState):
+            # Standalone callers may still supply a plain PhysicalState. Its
+            # complete-action commit remains authoritative; sampling uses the
+            # same optimized raw queries as full-song generation.
+            oracle = InferencePhysicalState(timing, session.rules.geometry,
+                audio_end_seconds=session.rules.audio_end_seconds)
+            oracle.restore(session.rules.snapshot())
         return (snapshot, len(accepted), len(bypass), sampler.choices(decoder, routed, oracle, timing,
             distributions, end_tick=end_tick, cap_tick=cap_tick))
 
@@ -60,6 +67,8 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
         except StopIteration:
             frames.pop()
             backtracks += 1
+            emit(progress, 'window_progress', window=window, tokens=count, backtracks=backtracks,
+                 cursor_beat=session.rules.grammar.state.cursor / 96)
             if options.trace:
                 trace.append(dict(event='backtrack', tokens=count))
             if backtracks > options.max_backtracks_per_window:
@@ -84,6 +93,8 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
                 bypass.append(dict(token_index=len(accepted), token=token_to_dict(token), reasons=sorted(decision.physical)))
         session.cache = cache
         accepted.append(token)
+        emit(progress, 'window_progress', window=window, tokens=len(accepted), backtracks=backtracks,
+             cursor_beat=session.rules.grammar.state.cursor / 96)
         if options.trace:
             trace.append(dict(event='accept', token=token_to_dict(token), tick=session.rules.grammar.state.cursor))
         frames.append(frame(token))
@@ -105,7 +116,7 @@ def chart_from_groups(groups, timing, metadata):
 
 
 @torch.inference_mode()
-def generate(decoder, conditions, timing, geometry, config, metadata, duration, *, device, options=None):
+def generate(decoder, conditions, timing, geometry, config, metadata, duration, *, device, options=None, progress=None):
     options = options or GenerationOptions()
     if options.max_tokens_per_window < 1 or options.rollback_tokens < 1 or options.max_backtracks_per_window < 0:
         raise ValueError('invalid generation limits')
@@ -114,11 +125,14 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
     decoder.eval()
     sampler = Sampler(temperature=options.temperature, seed=options.seed, physical_hard_mask=options.physical_hard_mask)
     distributions = decoder_time_distributions(config)
-    session = DecodeSession(PhysicalState(timing, geometry, audio_end_seconds=duration))
-    audio_kv = decoder.prepare_audio(conditions.audio)
+    session = DecodeSession(InferencePhysicalState(timing, geometry, audio_end_seconds=duration))
+    with stage(progress, 'decoder_audio'):
+        audio_kv = decoder.prepare_audio(conditions.audio)
     groups, windows = [], []
     for i, start in enumerate(conditions.starts):
         start_tick, end_tick = int(start*96), int((start+config['target_beats'])*96)
+        emit(progress, 'window_start', window=i+1, windows=len(conditions.starts),
+             start_beat=start, end_beat=end_tick/96)
         cap_tick = end_tick + config['audio_after_beats']*96
         selected = select_windows(conditions.z, torch.tensor([0], device=device),
             torch.tensor([start], device=device, dtype=torch.float32), torch.tensor([True], device=device),
@@ -131,7 +145,8 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
                                                         config['chart_history_beats'], device=device)
         session.rules.inject_boundary(boundary, start_tick=start_tick, history_present=True, window_end=end_tick)
         tokens, report = decode_window(decoder, memory, session, boundary, sampler, distributions, timing,
-            start_tick=start_tick, end_tick=end_tick, cap_tick=cap_tick, device=device, options=options)
+            start_tick=start_tick, end_tick=end_tick, cap_tick=cap_tick, device=device, options=options,
+            progress=progress, window=i+1)
         # Parse only real content with a local anchor; the previous boundary delta
         # is input-only. Rebase the first new group against the last REAL onset.
         new = list(real_onsets((Moment(0), *tokens), timing, sequence_start_tick=start_tick))
@@ -142,4 +157,7 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
         windows.append(dict(start_beat=start, end_beat=end_tick/96, history_tokens=history_count,
             boundary_delta_ms=boundary.delta_ms, generated_tokens=len(tokens), onsets=len(new),
             plan12=conditions.plans[i].float().cpu().tolist(), **report))
+        emit(progress, 'window_done', window=i+1, windows=len(conditions.starts), tokens=len(tokens),
+             backtracks=report['backtracks'], cursor_beat=session.rules.grammar.state.cursor/96,
+             onsets=len(new))
     return chart_from_groups(groups, timing, metadata), windows

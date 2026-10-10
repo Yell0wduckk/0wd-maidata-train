@@ -9,6 +9,7 @@ from pathlib import Path
 
 def parser():
     from .options import GenerationOptions
+    from .progress import DEFAULT_INTERVAL
     defaults = GenerationOptions()
     p = argparse.ArgumentParser(description='Current E/D/P + Decoder M full-song inference (new five-token fields).')
     p.add_argument('--encoder-draft-checkpoint', required=True)
@@ -37,6 +38,8 @@ def parser():
     p.add_argument('--rollback-tokens', type=int, default=defaults.rollback_tokens, help='Search frontier, never a history token limit')
     p.add_argument('--physical-hard-mask', action=argparse.BooleanOptionalAction, default=defaults.physical_hard_mask)
     p.add_argument('--trace', action='store_true', default=defaults.trace, help='Explicit opt-in detailed generation trace')
+    p.add_argument('--progress', action=argparse.BooleanOptionalAction, default=True, help='Stage/window progress on stderr; stdout remains final JSON')
+    p.add_argument('--progress-interval', type=float, default=DEFAULT_INTERVAL, help='Minimum seconds between encoder/token progress updates')
     p.add_argument('--force', action='store_true')
     return p
 
@@ -53,16 +56,19 @@ def ir_metadata(timing, duration):
 
 def main(argv=None):
     args = parser().parse_args(argv)
-    import torch
-    import soundfile as sf
-    from maidata.chart import decode_chart, token_to_dict
-    from maidata.physical import Geometry
-    from maidata.preparation.cache import load_grid
-    from maidata.time import TimingMap
-    from .checkpoint import load_models
-    from .conditioning import audio_grid, prepare_conditions
-    from .generation import generate, GenerationOptions
-    from .materialize import read_json, write_json
+    from .progress import StderrProgress, stage
+    progress = StderrProgress(interval=args.progress_interval) if args.progress else None
+    with stage(progress, 'runtime'):
+        import torch
+        import soundfile as sf
+        from maidata.chart import decode_chart, token_to_dict
+        from maidata.physical import Geometry
+        from maidata.preparation.cache import load_grid
+        from maidata.time import TimingMap
+        from .checkpoint import load_models
+        from .conditioning import audio_grid, prepare_conditions
+        from .generation import generate, GenerationOptions
+        from .materialize import read_json, write_json
 
     output = Path(args.output)
     names = ('generation.json', 'model.tokens.json', 'model.ir.json', 'generation-error.json')
@@ -73,15 +79,18 @@ def main(argv=None):
     device = torch.device(args.device)
     timing_data = read_json(args.timing) if args.timing else dict(first_seconds=args.first_seconds, bpm=[[0, 1, args.bpm]])
     timing = TimingMap.from_audio_timing(timing_data)
-    models = load_models(args.encoder_draft_checkpoint, args.decoder_checkpoint, device=device)
-    if args.grid:
-        grid = load_grid(args.grid, mel_root=args.mel_root, validate_input=False)
-        info = sf.info(args.audio)
-        duration = info.frames/info.samplerate
-    else:
-        grid, duration = audio_grid(args.audio, timing_data, read_json(args.mel_stats),
-                                   samples_per_beat=models.config['samples_per_beat'])
-    geometry = Geometry.from_resources(args.geometry, args.slide_data)
+    with stage(progress, 'models'):
+        models = load_models(args.encoder_draft_checkpoint, args.decoder_checkpoint, device=device)
+    with stage(progress, 'audio'):
+        if args.grid:
+            grid = load_grid(args.grid, mel_root=args.mel_root, validate_input=False)
+            info = sf.info(args.audio)
+            duration = info.frames/info.samplerate
+        else:
+            grid, duration = audio_grid(args.audio, timing_data, read_json(args.mel_stats),
+                                       samples_per_beat=models.config['samples_per_beat'])
+    with stage(progress, 'geometry'):
+        geometry = Geometry.from_resources(args.geometry, args.slide_data)
     options = GenerationOptions(temperature=args.temperature, seed=args.seed,
         max_tokens_per_window=args.max_tokens_per_window, max_backtracks_per_window=args.max_backtracks_per_window,
         rollback_tokens=args.rollback_tokens, physical_hard_mask=args.physical_hard_mask, trace=args.trace)
@@ -98,27 +107,30 @@ def main(argv=None):
         with torch.inference_mode(), torch.autocast(device.type, dtype=torch.bfloat16, enabled=args.precision == 'bf16'):
             conditions = prepare_conditions(models.encoder, models.draft, models.planner, models.config, grid,
                 timing, duration, difficulty=args.difficulty, level=args.level, device=device,
-                encoder_window_batch=args.encoder_window_batch)
-            encoded, windows = generate(models.decoder, conditions, timing, geometry, models.config, metadata,
-                                         duration, device=device, options=options)
-        ir = decode_chart(encoded, geometry)
+                encoder_window_batch=args.encoder_window_batch, progress=progress)
+            with stage(progress, 'generation'):
+                encoded, windows = generate(models.decoder, conditions, timing, geometry, models.config, metadata,
+                                             duration, device=device, options=options, progress=progress)
+        with stage(progress, 'chart_ir'):
+            ir = decode_chart(encoded, geometry)
     except Exception as exc:
         write_json(output/'generation-error.json', dict(error=str(exc), options=asdict(options),
                                                        checkpoints=models.provenance))
         raise
-    write_json(output/'model.tokens.json', dict(schema='maidata.generated-tokens.v1', start_tick=encoded.start_tick,
-        metadata=encoded.metadata, tokens=[token_to_dict(t) for t in encoded.tokens]))
-    write_json(output/'model.ir.json', ir)
     bypass = sum(len(w['physical_bypass']) for w in windows)
     report = dict(schema='maidata.generation.v1', checkpoints=models.provenance,
         audio=str(Path(args.audio).resolve()), timing=timing_data, duration_seconds=duration,
         difficulty=args.difficulty, level=args.level, device=str(device), precision=args.precision,
         options=asdict(options), config=models.config, windows=windows, moments=len(ir['moments']),
         physical_bypass_count=bypass, complete=True)
-    write_json(output/'generation.json', report)
-    error_file = output/'generation-error.json'
-    if error_file.exists():
-        error_file.unlink()
+    with stage(progress, 'write_outputs'):
+        write_json(output/'model.tokens.json', dict(schema='maidata.generated-tokens.v1', start_tick=encoded.start_tick,
+            metadata=encoded.metadata, tokens=[token_to_dict(t) for t in encoded.tokens]))
+        write_json(output/'model.ir.json', ir)
+        write_json(output/'generation.json', report)
+        error_file = output/'generation-error.json'
+        if error_file.exists():
+            error_file.unlink()
     print(json.dumps(dict(output=str(output.resolve()), windows=len(windows), moments=len(ir['moments']),
                           physical_hard_mask=args.physical_hard_mask, physical_bypass_count=bypass), ensure_ascii=False))
 

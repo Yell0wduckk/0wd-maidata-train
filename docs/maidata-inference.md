@@ -66,6 +66,8 @@ python -m maidata.inference.materialize \
 | `--rollback-tokens` | 16；保留的搜索回退深度，不限制音符链表示或模型输入历史长度 |
 | `--physical-hard-mask` | 开启；使用原始 Physical 拒绝位，完整动作提交时再次判定 |
 | `--trace` | 默认关闭；显式开启才记录逐token选择/回退 |
+| `--progress / --no-progress` | 默认开启；向stderr打印阶段、窗口与节流后的token进度；不启用详细trace |
+| `--progress-interval` | 2秒；Encoder分块与窗内token进度的最短输出间隔，阶段和窗口起止立即输出 |
 | `--force` | 默认关闭；显式覆盖同名产物，不删除输出目录中的其他文件 |
 
 网络容量、RoPE、time mixture、音频余量、Z范围、谱面历史和目标窗口使用 checkpoint 保存的模型配方；没有第二套推理架构。目标 stride 必须等于目标长度，保证目标中心连续、无重复。旧配方没有 stride 字段时使用目标长度。换容量须使用相应训练权重，不能用 CLI 强行宽松加载。
@@ -73,6 +75,23 @@ python -m maidata.inference.materialize \
 推理仅计算一次全曲 G0；每个音频覆盖窗编码一次，提取中心 P0拼接成全曲bank；D一次生成含额外完整尾窗的Z，P对各目标窗预测plan12。M的音频投影按曲复用，每窗选择Z上下文和plan12。窗口切换、内容重试、Physical回退均不重跑E/D/P。
 
 若显式使用 `--no-physical-hard-mask`，语法和音频范围仍生效，实际接受的Physical违规记录在 `physical_bypass`，报告明确记录关闭状态。默认运行不存在自动关约束或静默接受违规的回退。搜索失败、非有限预测或超过生成上限报错并写 `generation-error.json`，不将截断谱面标为成功。
+
+## Physical 推理查询与复用
+
+整曲生成使用独立的 `physical.inference.InferencePhysicalState`，迁移旧仓库的局部字段查询、存在性短路和前缀内缓存。训练的 `AttributionState` 继续维护首次归责与惩罚支持；正常整曲推理只读取原始规则决定，不计算训练归责、继承冲突或冲突覆盖。
+
+- 类型阶段只需确认存在一个可用 NOTE，不枚举全部 kind×pad；kind阶段找到可用位置即停止；pad阶段只查询已选kind。候选结果在同一前缀内复用，外观flags和track break共享查询，short标记仍独立检查音频边界。
+- 查询、最终候选确认与接受复用同一前缀的规则结果。语法、动作、窗口边界或快照改变后刷新缓存，跨窗活动动作与回退语义保持；不按裁剪后的谱面历史重建Physical状态。
+- 同一活动动作集合共用占手区间panel、handoff、几何与容量查询；尚未完成的NOTE→ROUTE→duration仍可复用这些区间。容量直接做资源匹配和过载判定，不枚举训练归因需要的最小冲突见证集合；branch逐条计占手，启动抵消按共同owner共享一次。
+- Touch重复在位置与完整动作处检查，不在type/kind阶段提前禁用整个Touch类别。普通ROUTE保持未完成状态，允许继续拼接；分支、WiFi和完整动作仍受规则约束。
+- 时值保留精确且可能不连续的合法区间，类型与内容共享已计算支持；最短候选合法时可立即确认存在，最短候选非法时仍求完整区间，不据此剪掉后面的合法值，不改回旧版单一 `safe_upper`。MOMENT终端及空窗仍可合法关闭，不要求窗内存在可放置NOTE。
+- `inference.time_support` 按曲缓存半tick时间坐标，向量化构建时间候选及其区间mask；只缓存不随前缀变化的时间坐标，不缓存旧Physical mask。96tick、4tick bucket代表点、CDF端点及U尾部概率保持原定义。缓存随当前推理对象释放，不写入checkpoint或输入资产。
+
+## 进度输出
+
+CLI默认在stderr显示权重加载、音频输入、几何资源、Encoder全曲准备/局部窗口、Draft、Planner、自回归生成与产物写入的开始和完成。自回归逐窗显示窗口序号、拍范围，窗内每隔约2秒显示已接受token数、回退次数和当前拍；即使未达到输出间隔，窗口完成也立即显示。stdout仍只保留原有最终JSON，重定向结果或脚本解析时无需滤除进度。使用`--no-progress`静默，或用`--progress-interval 5`降低刷新频率；这些设置不改变采样、约束、模型条件或详细trace。
+
+Python接口`prepare_conditions(..., progress=None)`与`generate(..., progress=None)`默认静默；可传入接收事件字典的callback。事件包括`stage_start/stage_done/stage_error`、`encoder_progress`、`window_start/window_progress/window_done`。CLI reporter只读取已有的Python计数和单调时钟，不为进度读取GPU标量或调用`torch.cuda.synchronize()`。输出的时间用于观察壁钟进度，不是逐阶段精确CUDA基准。
 
 ## 新字段跨窗历史
 
@@ -91,6 +110,8 @@ python -m maidata.inference.materialize \
 | `checkpoint` | 显式权重与模型配方加载 |
 | `conditioning` | 特征适配、一次性全曲E/D/P；不调用M或谱面标签 |
 | `sampling` | Router/内容分层采样、时间cell积分、候选规则支持 |
+| `time_support` | 推理时间坐标缓存及向量化候选适配；不改变训练支持 |
+| `physical.inference` | 推理专用raw规则查询、局部字段支撑及前缀缓存 |
 | `generation` | 全曲窗口、真实历史、prefill与增量K/V、同步规则快照回退 |
 | `materialize / simai` | 原生MiaCode调用、simai排版、语义回读、音频配套 |
 

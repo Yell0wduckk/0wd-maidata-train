@@ -19,7 +19,7 @@ from maidata.preparation.features import MEL_RECIPE
 
 
 @pytest.mark.parametrize('precision',['fp32','bf16'])
-def test_cli_end_to_end_cpu(config,tmp_path,native_miacode,precision):
+def test_cli_end_to_end_cpu(config,tmp_path,native_miacode,precision,capsys):
     root=Path(__file__).resolve().parents[3]
     geometry=root/'repos/maidata-baseline/training-dataset/full-dataset/runtime-lr-repaired/physical/path-catalog'
     slides=root/'tools/MiaCode/assets/reference/slide_data.json'
@@ -49,6 +49,10 @@ def test_cli_end_to_end_cpu(config,tmp_path,native_miacode,precision):
         '--geometry',str(geometry),'--slide-data',str(slides),'--difficulty','5','--level','14.5',
         '--device','cpu','--precision',precision,'--temperature','0','--output',str(tmp_path/'result')]
     main(arguments)
+    captured=capsys.readouterr()
+    assert json.loads(captured.out)['windows']==2
+    assert 'Model loading: started' in captured.err and 'Writing outputs: done' in captured.err
+    assert 'Window 1/2' in captured.err and 'Window 2/2' in captured.err
     report=json.loads((tmp_path/'result/generation.json').read_text(encoding='utf-8'))
     assert report['complete'] and report['physical_bypass_count']==0 and len(report['windows'])==2
     assert report['moments']>0
@@ -58,9 +62,12 @@ def test_cli_end_to_end_cpu(config,tmp_path,native_miacode,precision):
     assert (tmp_path/'playable/track.wav').is_file()
     with pytest.raises(FileExistsError):
         main(arguments)
+    capsys.readouterr()
     with patch('maidata.inference.generation.generate',side_effect=RuntimeError('generation failed')), \
          pytest.raises(RuntimeError,match='generation failed'):
-        main([*arguments,'--force'])
+        main([*arguments,'--force','--no-progress'])
+    captured=capsys.readouterr()
+    assert captured.out==captured.err==''
     assert (tmp_path/'result/generation-error.json').is_file()
     assert not (tmp_path/'result/generation.json').exists()
     assert not (tmp_path/'result/model.ir.json').exists()
