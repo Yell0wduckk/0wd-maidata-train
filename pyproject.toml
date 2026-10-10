@@ -25,6 +25,12 @@ audio = [
   "pyloudnorm==0.2.0",
   "soundfile>=0.14.0",
 ]
+audio-inputs = [
+  "numpy>=2.0",
+  "torch>=2.9",
+  "soundfile>=0.14.0",
+  "librosa==0.11.0",
+]
 train = [
   "numpy>=2.0",
   "torch>=2.9",

@@ -1,6 +1,6 @@
 # Maidata Encoder 入口与接口
 
-`src/maidata` 已实现独立音频 Encoder：frontend、geometry、attention、blocks、pyramid、encoder 和 types。它消费准备好的 Mel、aux32、绝对拍坐标与有效位，输出 P0/P1/P2 三路局部表示。完整输入生产、Decoder、草稿、数据集/DataLoader、训练循环、loss 和 checkpoint 尚未实现；旧 `maimai_baseline` 保留作历史实现参考。
+`src/maidata` 已实现独立音频 Encoder：frontend、geometry、attention、blocks、pyramid、encoder 和 types。它消费准备好的 Mel、aux32、绝对拍坐标与有效位，输出 P0/P1/P2 三路局部表示。独立输入生产及真实音频适配见[全官谱音频输入缓存](encoder-audio-cache.md)。Decoder、草稿、数据集/DataLoader、训练循环、loss 和 checkpoint 尚未实现；旧 `maimai_baseline` 保留作历史实现参考。
 
 从独立仓库根目录运行：
 

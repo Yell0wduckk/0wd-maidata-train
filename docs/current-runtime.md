@@ -15,7 +15,7 @@
 
 默认24拍输入的内部 C 长度为576/288/144，公开 P 长度为192/96/48；其他合法容量、深度和窗口由同一配置推导。没有 C0/C1/C2 高分辨率直出、最终 S 或 Decoder 可绕过本结构读取的全曲输出。
 
-本轮新增小型 CPU 合成测试并已通过，不读取旧资产或权重；验证范围及命令见[入口文档](maidata-entry.md#cpu-合成验证)，最终结果以本轮交接为准。BPM/相位检查只覆盖已准备输入的逐位置消费，未执行真实时间映射与特征提取、CUDA 或训练。协作约定保留在 Markdown 中，不新增政策门禁；旧模型及其 `runtime-versions.toml` 保持旧路径专属。
+Encoder 合成验证见[入口文档](maidata-entry.md#cpu-合成验证)。独立输入模块 `src/maidata/preparation/{timing,features,produce,cache}.py` 已实现全曲输入生产、既有 full Mel 引用和 SongInputs/WindowInputs 构造，见[缓存说明](encoder-audio-cache.md)。真实样本验证包含变 BPM、历史 WAV、默认 Encoder 前向及旧直接 FFT 数值对照；未执行 CUDA 或训练。协作约定保留在 Markdown 中，不新增政策门禁；旧模型及其 `runtime-versions.toml` 保持旧路径专属。
 
 ## 已复制的旧模型实现
 
@@ -30,17 +30,17 @@
 
 | 项目 | 旧模型当前代码 |
 |---|---|
-| Mel | 128 频带；基础音频参数 24 kHz、FFT 1024、hop 240（10 ms） |
-| 局部输入 | BPM 对齐，每拍 24 个采样位置 |
+| Mel | 128 频带；24 kHz PCM，每个拍网格中心独立 FFT1024、periodic Hann、log1p 与固定统计 |
+| 局部输入 | 绝对拍网格 `k/24`，完整 BPM 映射后以 half-up 量化 PCM 中心；反射波形边界 |
 | 目标窗与音频上下文 | 目标 16 拍；前 4＋目标 16＋后 2＝22 拍 |
 | 保留的局部 encoder 类 | 四块 Conformer，深度分配 (1,1,2)，24→12→6→6 token/拍 |
 | 保留的全曲 encoder 类 | 一拍一个 [24,128] patch＋24 个有效位，经 3096→256 投影，再经两块全曲注意力 |
 | native 缓存 | P0 [176,256]、C0 [528,256]、C1 [264,256]，另含 mask、拍坐标和插值几何 |
 | native Decoder 音频 | 各原生窗口 P0[32:160] 中心 16 拍拼接的全曲 bank |
 
-上表的 10 ms 是基础 Mel hop；实际局部 encoder 输入沿拍网格重采样，间隔随 BPM 变化。旧元数据里的 192 是旧全曲表示宽度，不能解释为 192 个 Mel 频带。
+当前 full 与本次新增 Mel 均直接在拍网格中心提取，不从 hop240 的旧均匀 Mel 插值。间隔随 BPM 变化，但每个位置固定使用1024样本分析窗。旧元数据里的 192 是旧全曲表示宽度，不能解释为 192 个 Mel 频带。
 
-当前源码定位：`src/maimai_dataset/audio.py`、`src/maimai_dataset/window.py`、`src/maimai_baseline/model/{audio,song_audio,baseline,song_dense,audio_draft}.py`、`src/maimai_baseline/data/teacher_audio.py`。
+旧直接提取源码定位：`src/maimai_baseline/data/audio.py:extract_at_centers` 与 `src/maimai_baseline/time/grid.py`。新输入模块独立移植所需算法，不运行时导入旧包。其余旧窗口/模型定位：`src/maimai_dataset/window.py`、`src/maimai_baseline/model/{audio,song_audio,baseline,song_dense,audio_draft}.py`、`src/maimai_baseline/data/teacher_audio.py`。
 
 ## 草稿验证的两种现有模式
 
@@ -50,9 +50,9 @@
 
 ## 新 Encoder 尚未衔接的部分
 
-新 Encoder 的全曲 G₀、每窗动态 S、局部 L、块内共享处理和三路局部输出已进入代码。完整 Mel/aux32 提取与离线缓存生产、真实数据适配、Decoder、Router、MMoE、草稿、训练循环、loss 和 checkpoint 不属于本次实现，不能把可构建 Encoder 称为可训练完整模型的入口。
+新 Encoder 的全曲 G₀、每窗动态 S、局部 L、块内共享处理和三路局部输出已进入代码。Mel/aux32 离线缓存生产及 Encoder 输入适配已实现；Decoder、Router、MMoE、草稿、训练循环、loss 和 checkpoint 尚未接入，不能把可构建 Encoder 称为可训练完整模型的入口。
 
-aux32 采用全曲统一的18维声学量、4维节奏统计和10维时间上下文，L网格与G0拍中心按位置取值；当前模块只消费已经准备好的张量。新隐藏表示不自动兼容现有 native cache；内容未变的原始音频/Mel 不因新源码失效。
+aux32 采用全曲统一的18维声学量、4维节奏统计和10维时间上下文，L 的 `k/R` 网格与 G0 的 `j+0.5` 拍中心按位置取值。网络模块只消费准备好的张量，输入模块独立计算全曲声学源及派生网格。新隐藏表示不自动兼容现有 native cache；内容未变的原始音频/Mel 不因新源码失效。
 
 两个训练衔接问题仍待决定：
 

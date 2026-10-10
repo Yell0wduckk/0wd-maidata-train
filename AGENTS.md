@@ -6,12 +6,12 @@
 
 进入任务先读 README、docs/current-runtime.md；encoder 重构再读同级设计目录中的 `../0wd-v3-refactor-docs/new-audio-encoder.md`。
 
-当前 `src/maidata` 已实现独立音频 Encoder，入口为 `python -m maidata`。包含 frontend、geometry、attention、blocks、pyramid、encoder 和 types；18 项架构配置集中在 `entry.py` 顶部唯一的普通 `CONFIG`。本任务仅覆盖 Encoder、接口文档及小型 CPU 合成测试，不迁移 Decoder、完整输入生产、训练循环或 checkpoint，不启动训练、上传或替换运行任务。入口说明见 `docs/maidata-entry.md`。
+当前 `src/maidata` 已实现独立音频 Encoder，入口为 `python -m maidata`。包含 frontend、geometry、attention、blocks、pyramid、encoder 和 types；18 项架构配置集中在 `entry.py` 顶部唯一的普通 `CONFIG`。独立的 `maidata.preparation` 负责直接拍网格 FFT、全曲 aux32 与输入缓存，说明见 `docs/encoder-audio-cache.md`。Encoder 与输入生产均不迁移 Decoder、训练循环或 checkpoint，不启动训练、上传或替换运行任务。入口说明见 `docs/maidata-entry.md`。
 
 ## 新 Encoder 与保留的旧模型
 
 - `maidata` 不导入旧模型或参考仓库。帮助和配置展示仅需标准库，实际构建时延迟导入 Torch；默认命令成功构建 `AudioEncoder` 并提示 Decoder 与训练未实现。
-- 新 Encoder 通过 `prepare_song`、`encode_windows`、`forward` 消费准备好的 Mel、aux32、绝对拍坐标和有效位，仅公开 P0/P1/P2 三路局部输出。aux32 完整离线生产、Decoder、草稿、训练与恢复系统仍待单独实现。
+- 新 Encoder 通过 `prepare_song`、`encode_windows`、`forward` 消费准备好的 Mel、aux32、绝对拍坐标和有效位，仅公开 P0/P1/P2 三路局部输出。独立输入生产已实现；Decoder、草稿、训练与恢复系统仍待单独实现。
 - 复制来源是 `main-new-audio-draft-beat` 的一拍草稿/native 音频路线。当前 native 路径冻结保留的音频模块，训练步读取外部原生 22 拍 P0/C0/C1 缓存。
 - 旧 Decoder 仍读取全曲 P0 bank，旧草稿仍读取整曲 P0。新 Encoder 的可配置 24 拍默认窗口、S 工作槽和局部三尺度输出已实现，但尚未接入旧 Decoder 或草稿。
 - 新 Encoder 的 G₀ 可复用不等于冻结：tokenizer/encoder 可训练，同次前向按曲共享计算图，不能 detach 或跨参数更新缓存旧表示。
@@ -41,6 +41,6 @@
 
 README 导航，current-runtime 描述实际代码，设计正本维护 Encoder 架构，历史规格放 docs/history。历史文档中的 Git 提交和命令属于源仓库；本仓库没有导入其 Git 历史。
 
-旧测试和 fixture 按用户要求没有复制，旧测试结果不能当作新仓库验证。新 Encoder 测试位于 `tests/`，使用小型 CPU 合成输入；临时文件、TEMP/TMP 和 pytest basetemp 放本仓库 D 盘 `.test-temp`，不放 C 盘；只清理当前会话产生的临时文件。
+旧测试和 fixture 按用户要求没有复制，旧测试结果不能当作新仓库验证。新 Encoder 测试位于 `tests/`，使用小型 CPU 合成输入；独立输入生产测试另覆盖直接 FFT 数值参考和显式选择的少量真实音频。临时文件、TEMP/TMP 和 pytest basetemp 放本仓库 D 盘 `.test-temp`，不放 C 盘；只清理当前会话产生的临时文件。
 
 实现任务汇报提交、受影响验证和未完成项。实验进度只在用户直接查看的实验会话报告；主任务交接后不主动轮询或转述。SSH 上传授权按用户既有目标主机与当前任务范围执行，不据此推断新训练授权。
