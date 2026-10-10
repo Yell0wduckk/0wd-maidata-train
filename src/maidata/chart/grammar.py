@@ -71,7 +71,8 @@ class Grammar:
             tick = self.timing.tick_after(s.cursor, token.delta_ms)
             if token.delta_ms <= 0 or tick <= s.cursor:
                 raise ChartError('generated MOMENT must advance by at least one tick')
-            if s.window_end is not None and tick >= s.window_end:
+            end = s.window_end if window_end is None else window_end
+            if end is not None and tick >= end:
                 updates.update(phase='closed', note=None, routes=())
             else:
                 updates.update(phase='note', cursor=tick, note=None)
