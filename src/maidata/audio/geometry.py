@@ -88,8 +88,6 @@ def local_neighbors(
 def _resample(source: ScaleMemory, targets: Tensor, *, valid_only: bool, layout=None) -> ScaleMemory:
     """Apply prepared endpoint geometry in one batched gather; keep feature gradients."""
     from .layout import prepare_resample, to_device
-    if targets.ndim != 2 or targets.shape[0] != source.values.shape[0]:
-        raise ValueError("interpolation targets must align with source batch")
     if not len(targets):
         return ScaleMemory(source.values.new_zeros((*targets.shape, source.values.shape[-1])),
                            targets.float(), torch.zeros_like(targets, dtype=torch.bool))

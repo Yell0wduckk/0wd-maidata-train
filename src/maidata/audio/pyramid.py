@@ -23,11 +23,9 @@ class LocalPyramid(nn.Module):
         self.projections = nn.ModuleList(nn.Linear(d_model, d_model) for _ in range(2))
 
     def forward(self, stages: list[ScaleMemory], target_start_beats: Tensor, layout=None) -> EncoderOutput:
-        if len(stages) != 3:
-            raise ValueError("the local pyramid requires three fine-to-coarse stages")
         start = target_start_beats.float().unsqueeze(1) - self.audio_before_beats
         memories = []
-        for index, (stage, rate, length) in enumerate(zip(stages, self.fpn_rates, self.lengths, strict=True)):
+        for index, (stage, rate, length) in enumerate(zip(stages, self.fpn_rates, self.lengths)):
             grid = start + (
                 torch.arange(length, device=start.device, dtype=torch.float32) + 0.5
             ) / rate

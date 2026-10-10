@@ -65,10 +65,11 @@ def validate(record):
     return encoded
 
 
-def load_chart(path):
+def load_chart(path, *, validate_input=True):
     with gzip.open(path, 'rt', encoding='utf-8') as stream:
         record = json.load(stream)
-    validate(record)
+    if validate_input:
+        validate(record)
     return record
 
 

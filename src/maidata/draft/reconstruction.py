@@ -5,7 +5,7 @@ from torch import nn
 from maidata.nn.position import sinusoidal
 from .attention import Attention, positive_ints, numerical_config
 from .schema import FIELD_SIZES, TIME_FIELDS, COUNT_CLASSES
-from .types import ReconstructionOutput, validate_memory
+from .types import ReconstructionOutput
 
 
 class ReconstructionLayer(nn.Module):
@@ -45,9 +45,6 @@ class ReconstructionHead(nn.Module):
 
     def forward(self, windows):
         m = windows.memory
-        validate_memory(m, self.latent_dim)
-        if windows.target_beats != self.target_beats:
-            raise ValueError('R target length differs from its count query capacity')
         active = windows.window_valid & m.valid.any(-1)
         valid = m.valid & active[:, None]
         relative = (m.beats - windows.target_start[:, None]).masked_fill(~valid, 0)

@@ -147,8 +147,6 @@ class SharedConformerBlock(nn.Module):
         if not update_slots:
             # The final L still read slot_first through K/V, but no S update has a consumer.
             return local_output, slots
-        if song_kv is None or song_valid is None:
-            raise ValueError("updating slots requires prepared song K/V and validity")
         q_slots = self._rotated(self.q(slot_normalized), slots)
         slot_attended = global_joint_attention(
             q_slots, *song_kv, k_local, v_local,

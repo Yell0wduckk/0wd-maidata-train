@@ -37,8 +37,6 @@ def test_budget_and_group_limit_jointly_preserve_order_and_accumulation():
     assert optimizer_batches(range(5), c, token_costs=[60,60,40,80,20]) == (((0,), (1,2)), ((3,4),))
     with pytest.raises(ValueError, match='above token budget'):
         optimizer_batches(['oversize'], c, token_costs=[101])
-    with pytest.raises(ValueError, match='requires one cost'):
-        optimizer_batches([0], c)
 
 
 def test_cost_counts_overlap_and_empty_tail_queries_not_gt_rows():

@@ -1,4 +1,4 @@
-"""Complete-epoch state, atomic writes and strict recipe/input binding; source is provenance only."""
+"""Complete-epoch state and recipe recovery; source and inputs are provenance only."""
 import hashlib
 import json
 from pathlib import Path
@@ -43,8 +43,14 @@ def source_identity():
 
 
 
+def data_provenance(config):
+    """Record configured inputs without opening, hashing or validating assets."""
+    return dict(paths={k: str(Path(config[k]).resolve()) for k in PATH_KEYS
+                       if k != 'pretrain_output' and config[k] is not None})
+
+
 def data_binding(plans, config):
-    """Hash small contract metadata only, never walk/cache-hash old payloads."""
+    """Legacy shared metadata binding for Decoder; stage one does not call this."""
     result = {'plans': [], 'paths': {k: str(Path(config[k]).resolve()) for k in PATH_KEYS
                                     if k != 'pretrain_output' and config[k] is not None}}
     for plan in plans:
@@ -127,10 +133,10 @@ def restore(payload, model, optimizer, scheduler, *, config, binding, source, st
     current, saved = recipe(config), payload['recipe']
     stop = 'pretrain_stop_after_epochs'
     if (payload.get('schema') != SCHEMA
-            or payload['binding'] != binding or payload['steps_by_epoch'] != steps
+            or payload['steps_by_epoch'] != steps
             or {k:v for k,v in current.items() if k != stop} != {k:v for k,v in saved.items() if k != stop}
             or current[stop] < saved[stop]):
-        raise ValueError('resume architecture, recipe, input or plan binding changed')
+        raise ValueError('resume architecture, recipe or scheduler steps changed')
     validate_cursor(payload, steps)
     if payload['completed_epochs'] > saved[stop]:
         raise ValueError('saved epoch exceeds the original absolute stop')

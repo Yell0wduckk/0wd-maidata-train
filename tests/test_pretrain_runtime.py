@@ -144,12 +144,10 @@ def test_saved_plan_order_and_epoch_batch_boundaries(config,tmp_path):
     sampler.epoch=2
     assert [k for b in sampler for k,e in b]==plan.order(2)
     assert all(e==2 for b in sampler for k,e in b)
-    path=tmp_path/'occurrences.jsonl'
-    rows=[json.loads(l) for l in path.read_text().splitlines()]
-    rows[0]['occurrence']=1
-    path.write_text('\n'.join(map(json.dumps,rows)))
-    with pytest.raises(ValueError,match='occurrences'):
-        AudioPlan(tmp_path,config)
+    # Training derives this ordering directly; it must not reopen a separate
+    # occurrence inventory merely to revalidate the accepted plan.
+    (tmp_path/'occurrences.jsonl').unlink()
+    assert AudioPlan(tmp_path,config).order(2) == plan.order(2)
 
 
 class SyntheticDataset(Dataset):
@@ -176,7 +174,8 @@ def test_complete_epoch_resume_is_exact_and_never_saves_failed_epoch(config,tmp_
             collate_fn=partial(collate_audio,config=c),generator=torch.Generator().manual_seed(731))
     monkeypatch.setattr(runner,'AudioPlan',Plan)
     monkeypatch.setattr(runner,'make_loader',loader)
-    monkeypatch.setattr(checkpoint,'data_binding',lambda *a: {'fixed':'inputs'})
+    monkeypatch.setattr(checkpoint,'data_provenance',lambda *a: {'fixed':'inputs'})
+    monkeypatch.setattr(checkpoint,'data_binding',lambda *a: pytest.fail('input binding validation'))
     monkeypatch.setattr(checkpoint,'source_identity',lambda: {'fixed':'source'})
     full=dict(config,pretrain_output=str(tmp_path/'full'))
     runner.run(full)
@@ -195,6 +194,7 @@ def test_complete_epoch_resume_is_exact_and_never_saves_failed_epoch(config,tmp_
     assert sorted(p.name for p in ckpt.parent.iterdir())==['last.ckpt']
     monkeypatch.setattr(runner,'update',real_update)
     monkeypatch.setattr(checkpoint,'source_identity',lambda: {'commit':'different-source-is-allowed'})
+    monkeypatch.setattr(checkpoint,'data_provenance',lambda *a: {'paths':'relocated-inputs'})
     runner.run(interrupted,resume=ckpt)
     a=torch.load(Path(full['pretrain_output'])/'checkpoints/last.ckpt',weights_only=False)
     b=torch.load(ckpt,weights_only=False)
@@ -208,7 +208,7 @@ def test_complete_epoch_resume_is_exact_and_never_saves_failed_epoch(config,tmp_
     assert [m['epoch'] for m in metrics if 'diagnostics' in m.get('validation',{})]==[6]
     assert sorted(p.name for p in ckpt.parent.iterdir())==['best.ckpt','epoch-005.ckpt','epoch-006.ckpt','last.ckpt']
     assert runner.run(interrupted,resume=ckpt)['step']==6
-    with pytest.raises(ValueError,match='binding changed'):
+    with pytest.raises(ValueError,match='recipe or scheduler steps changed'):
         runner.run(dict(interrupted,pretrain_audio_groups_per_batch=1),resume=ckpt)
 
 

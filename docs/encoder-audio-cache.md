@@ -45,7 +45,7 @@ aux32按18+4+10顺序（准确字段名见catalog.aux_keys）生产：
 | 引用旧Mel变体 | mel_new_flat_indices, mel_new_values | [Q] int64、[Q,128] float32；仅实际缺口，Q可为0 |
 | base/grid旁的JSON | fields、sha256、input_key、mel_reference等 | 本次产物说明、来源及必要缓存身份 |
 
-旧Mel引用的path/SHA/producer variant存在grid旁的JSON，旧payload保持只读。`load_grid` 按引用和少量补丁恢复逻辑 `mel_patches`，不重新提取或重哈希旧音频。新文件写入时重读校验shape/dtype/有限值与round-trip并计算本次产物SHA；日常读取仅执行正常张量检查。
+旧Mel引用的path/SHA/producer variant存在grid旁的JSON，旧payload保持只读。`load_grid` 按引用和少量补丁恢复逻辑 `mel_patches`，不重新提取或重哈希旧音频。新文件写入时重读校验shape/dtype/有限值与round-trip并计算本次产物SHA；共享读取器默认保留离线检查，Encoder＋Draft训练显式使用`validate_input=False`，读取和batch组装均不校验输入。
 
 ```python
 from maidata.preparation.cache import load_grid, song_inputs, window_inputs

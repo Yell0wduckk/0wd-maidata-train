@@ -40,4 +40,4 @@ export PYTHONPATH=src
 /usr/local/bin/python -u -m maidata.training --config configs/encoder-draft-pilot320-linux.json --resume /root/autodl-tmp/pilot320-encoder-draft-training-20261010/checkpoints/last.ckpt
 ```
 
-保持绑定源码和计划，恢复所有状态，不宽松加载。仅完整轮保存last；best只在轮末验证改善，编号每5轮及末轮；验证每5轮及末轮，完整诊断仅末轮。中断最多回退一轮，不保存轮内checkpoint。完成绝对50轮停止，不自动执行Decoder、推理、Physical重启或其他实验。validation loss仅为诊断，谱面质量由用户实际评谱。
+沿用指定源码和计划，完整恢复模型、optimizer、scheduler、轮游标及全部RNG，不宽松加载模型。训练输入直接消费，不做源码/输入哈希绑定、计划一致性复核或逐batch输入校验；保留loss/梯度非有限值与恢复状态检查。仅完整轮保存last；best只在轮末验证改善，编号每5轮及末轮；验证每5轮及末轮，完整诊断仅末轮。中断最多回退一轮，不保存轮内checkpoint。完成绝对50轮停止，不自动执行Decoder、推理、Physical重启或其他实验。validation loss仅为诊断，谱面质量由用户实际评谱。

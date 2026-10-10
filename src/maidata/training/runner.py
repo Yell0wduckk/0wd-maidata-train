@@ -55,9 +55,6 @@ def update(model, batches, optimizer, scheduler, config, *, audit=False):
             loss = sum(terms[k].total / max(1, total_counts[k]) * config[w] for k,w in LOSS_WEIGHT_KEYS.items())
         if not torch.isfinite(loss):
             raise ValueError('nonfinite pretraining loss')
-        # Check per-term supports against the label-only denominator before backprop.
-        if {k: int(v.count) for k,v in terms.items()} != supports(raw):
-            raise ValueError('loss support differs from logical-batch denominator')
         loss.backward()
         metrics.add(terms)
     norm = clip_gradients(model.parameters(), config)
@@ -127,7 +124,7 @@ def run(config, *, resume=None, cuda_check=False):
     if not cuda_check and not resume and output.exists() and any(output.iterdir()):
         raise FileExistsError('fresh training output must be empty')
     plans = [AudioPlan(config[k], config) for k in ('pretrain_train_plan', 'pretrain_validation_plan')]
-    binding, source = checkpoint.data_binding(plans, config), checkpoint.source_identity()
+    binding, source = checkpoint.data_provenance(config), checkpoint.source_identity()
     loaders = [make_loader(p, config) for p in plans]
     steps = [len(plans[0].batches(e, config)) for e in range(1, config['pretrain_scheduler_epochs'] + 1)]
     if not resume:

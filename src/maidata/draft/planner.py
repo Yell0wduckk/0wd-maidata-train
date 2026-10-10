@@ -3,7 +3,7 @@ import torch
 from torch import nn
 
 from .attention import Attention, positive_ints, numerical_config
-from .types import PlannerOutput, validate_memory
+from .types import PlannerOutput
 
 
 class PlannerHead(nn.Module):
@@ -23,7 +23,6 @@ class PlannerHead(nn.Module):
 
     def forward(self, windows):
         memory = windows.memory
-        validate_memory(memory, self.latent_dim)
         starts = windows.target_start
         # Enforce target-only pooling even if the caller supplies a larger context.
         valid = (memory.valid & (memory.beats >= starts[:, None])

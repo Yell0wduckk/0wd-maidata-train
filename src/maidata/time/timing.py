@@ -7,10 +7,11 @@ TICKS_PER_BEAT = 96
 
 
 class TimingMap:
-    def __init__(self, points, first_seconds=0.):
+    def __init__(self, points, first_seconds=0., *, validate_input=True):
         self.points = tuple((Fraction(b), float(v)) for b, v in points)
         self.first_seconds = float(first_seconds)
-        if (not self.points or self.points[0][0] != 0 or not math.isfinite(self.first_seconds)
+        self.validate_input = validate_input
+        if validate_input and (not self.points or self.points[0][0] != 0 or not math.isfinite(self.first_seconds)
                 or any(not math.isfinite(v) or v <= 0 for _, v in self.points)
                 or any(a[0] >= b[0] for a, b in zip(self.points, self.points[1:]))):
             raise ValueError('invalid timing controls')
@@ -21,17 +22,17 @@ class TimingMap:
         self.seconds = tuple(seconds)
 
     @classmethod
-    def from_audio_timing(cls, metadata):
-        return cls([(Fraction(n, d), v) for n, d, v in metadata['bpm']], metadata['first_seconds'])
+    def from_audio_timing(cls, metadata, *, validate_input=True):
+        return cls([(Fraction(n, d), v) for n, d, v in metadata['bpm']], metadata['first_seconds'], validate_input=validate_input)
 
     @classmethod
-    def from_ir(cls, ir):
+    def from_ir(cls, ir, *, validate_input=True):
         points = {}
         for c in ir['controls']:
             if c['kind'] == 'bpm':
                 b = c['position_beats']
                 points[Fraction(b['num'], b['den'])] = c['bpm']
-        return cls(sorted(points.items()), ir['first_seconds'])
+        return cls(sorted(points.items()), ir['first_seconds'], validate_input=validate_input)
 
     def bpm_at_beat(self, beat):
         return self.points[max(0, bisect_right(self.beats, beat)-1)][1]
@@ -41,7 +42,7 @@ class TimingMap:
         return self.seconds[i] + float(beat-self.beats[i])*60/self.points[i][1]
 
     def second_to_beat(self, second):
-        if not math.isfinite(second):
+        if self.validate_input and not math.isfinite(second):
             raise ValueError('non-finite second')
         i = max(0, bisect_right(self.seconds, second)-1)
         return float(self.beats[i]) + (second-self.seconds[i])*self.points[i][1]/60

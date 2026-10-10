@@ -70,11 +70,6 @@ class AudioEncoder(nn.Module):
     def prepare_song(self, inputs: SongInputs) -> SongMemory:
         """Create one G0 graph and one K/V pair per non-final block, per song."""
         mel = inputs.mel_patches
-        if (mel.ndim != 4 or mel.shape[-2:] != (self.samples_per_beat, self.mel_bins)
-                or inputs.sample_valid.shape != mel.shape[:-1]
-                or inputs.beat_centers.shape != mel.shape[:2]
-                or inputs.aux32_centers.shape != (*mel.shape[:2], 32)):
-            raise ValueError("song tensors must align as [songs,beats,R,M], [songs,beats,R] and aux32")
         valid = inputs.sample_valid.any(-1)
         g0 = ScaleMemory(
             self.song_tokenizer(mel, inputs.sample_valid, inputs.aux32_centers),
@@ -87,12 +82,6 @@ class AudioEncoder(nn.Module):
     def encode_windows(self, memory: SongMemory, inputs: WindowInputs) -> EncoderOutput:
         """Read a prepared song graph; slots and all local states remain window-specific."""
         mel = inputs.mel
-        if (mel.ndim != 3 or mel.shape[1:] != (self.context_beats * self.samples_per_beat, self.mel_bins)
-                or inputs.valid.shape != mel.shape[:2] or inputs.beats.shape != mel.shape[:2]
-                or inputs.aux32.shape != (*mel.shape[:2], 32)
-                or inputs.target_start_beats.shape != mel.shape[:1]
-                or inputs.window_to_song.shape != mel.shape[:1]):
-            raise ValueError("window tensors must align with C*R Mel positions, beats, valid and aux32")
         from .layout import prepare_encoder_layout, to_device, with_local_mask
         layout = inputs.layout
         if layout is None:

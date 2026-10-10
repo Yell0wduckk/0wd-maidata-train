@@ -6,7 +6,9 @@
 
 固定pilot320：训练288首307谱、7924基础窗；验证32首36谱、904基础窗。同曲及同音频标识不跨侧。R/P全部基础窗、有效空窗和追加完整尾窗各监督一次，无镜像、无复杂窗口过采样。
 
-`training.data`使用原仓库同类PyTorch Dataset/Collator/DataLoader：默认12个persistent workers，每worker计算线程数为1。每个Dataset项是一整个audio_variant组；采样器保持既有seed/epoch组间和组内排列，不能跨组找小曲回填。原缓存只在正常取样时读取和校验，不在启动前扫描载荷。
+`training.data`使用原仓库同类PyTorch Dataset/Collator/DataLoader：默认12个persistent workers，每worker计算线程数为1。每个Dataset项是一整个audio_variant组；采样器保持既有seed/epoch组间和组内排列，不能跨组找小曲回填。训练与验证直接消费已验收的计划和缓存，不执行输入校验或启动扫描。
+
+Dataset/Collator关闭共享读取器和标签适配器的`validate_input`，不重复扫描Mel/aux32、重放谱面语法、验证token/拍时间表或核对窗口覆盖。Encoder/D/R/P前向和loss适配不再检查输入shape/dtype、有限值、坐标、条件范围、mask一致性或监督计数。正常mask、索引、归约和token预算仍参与计算；固定R容量不截断标签，越界由原生张量操作报错。离线缓存生产和显式验收保留独立校验；不新增训练校验配置开关。
 
 `training.network.Pretrainer`负责组合，E/D/R/P不持有彼此。E每组计算一次全曲G0，每个音频覆盖窗编码一次，中心P0拼成全曲bank；同音频不同等级/难度各生成完整逐拍Z，共享音频计算。R/P读取所有基础窗，R固定每窗207个query，P预测plan12。无detach或跨参数更新缓存。
 
@@ -35,7 +37,7 @@ cost = pretrain_audio_token_weight × A + pretrain_row_token_weight × R
 
 验证每5轮及显式末轮，重合一次；全字段准确率与预测示例仅末轮收集。`last.ckpt`每完整轮保存，`best.ckpt`只在轮末验证改善时保存，`epoch-NNN.ckpt`每5轮及末轮保存。best只是损失诊断，不是谱面质量判定。中途异常不保存、不伪造完整轮。
 
-checkpoint保存成套E/D/R/P、optimizer、scheduler、完整轮游标、全部Python/NumPy/Torch/CUDA RNG、两个DataLoader RNG及启用状态、各轮步数、训练配方、缓存生产元数据及计划绑定。源码版本仅作为来源记录，不计算或校验源码文件哈希；修改实现后可直接从旧checkpoint续训，无需身份迁移。模型张量/形状、配方、输入与计划保持严格恢复检查，允许延长绝对停止轮但不改变调度合同；完成40轮从41轮继续，完成50轮不再更新。替换persistent workers后补偿额外base-seed消耗；CPU测试覆盖连续运行与中断恢复权重/RNG逐位一致。
+checkpoint保存成套E/D/R/P、optimizer、scheduler、完整轮游标、全部Python/NumPy/Torch/CUDA RNG、两个DataLoader RNG及启用状态、各轮步数和训练配方。源码版本与输入路径仅作为来源记录，不计算或比较源码、缓存、目录元数据或计划的哈希；旧checkpoint中的输入绑定不参与恢复判断，无需身份迁移。模型张量/形状、配方、各轮调度步数和完整恢复状态仍检查，训练保留loss/梯度非有限值报错。允许延长绝对停止轮但不改变调度合同；完成40轮从41轮继续，完成50轮不再更新。替换persistent workers后补偿额外base-seed消耗；CPU测试覆盖连续运行与中断恢复权重/RNG逐位一致。
 
 ## Linux 输入
 
@@ -51,7 +53,7 @@ checkpoint保存成套E/D/R/P、optimizer、scheduler、完整轮游标、全部
 
 ## 训练会话执行
 
-新会话上传固定源码和新增输入包，只验证本次传输；已有缓存使用维护元数据与普通读取检查。`--cuda-check`从第1轮既定batch中选择加权cost最大的实际batch，以相同12 workers、bf16和完整组进行一次前向/反向/更新，记录峰值显存、耗时、各模块梯度和更新、调用次数。检查模型独立丢弃，正式训练仍scratch。
+新会话上传固定源码和新增输入包，只验证本次传输；已有输入直接读取，不重验。`--cuda-check`从第1轮既定batch中选择加权cost最大的实际batch，以相同12 workers、bf16和完整组进行一次前向/反向/更新，记录峰值显存、耗时、各模块梯度和更新、调用次数。检查模型独立丢弃，正式训练仍scratch。
 
 CUDA验证交给训练会话；CPU通过不代表CUDA通过。若OOM，不自行缩小预算、组数或改累积，先报告实测。在正式训练准备启动时按确切命令和父子树停止当前远端Physical，保留产物和进度；不提前停止，不宽泛终止python。阶段一不等待Physical全部完成。实验进度只在训练会话报告，主会话交接后不主动轮询。
 

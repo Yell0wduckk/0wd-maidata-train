@@ -5,7 +5,7 @@ from torch.nn import functional as F
 
 from maidata.nn.position import sinusoidal
 from .attention import Attention, positive_ints, numerical_config
-from .types import BeatMemory, DraftInputs, ProjectedAudio, validate_memory
+from .types import BeatMemory, DraftInputs, ProjectedAudio
 
 
 class DenseMoE(nn.Module):
@@ -76,7 +76,6 @@ class DraftGenerator(nn.Module):
 
     def project_audio(self, audio) -> ProjectedAudio:
         """One projection per layer and unique audio, reusable within this graph only."""
-        validate_memory(audio, self.audio_dim)
         return ProjectedAudio(tuple(block.cross_attention.project_memory(
             audio.values, audio.beats, audio.valid) for block in self.blocks), audio.valid)
 
@@ -85,24 +84,8 @@ class DraftGenerator(nn.Module):
 
     def from_projected(self, audio: ProjectedAudio, inputs: DraftInputs) -> BeatMemory:
         beats, valid, mapping = inputs.query_beats, inputs.draft_valid, inputs.audio_mapping
-        if (valid.ndim != 2 or valid.shape[1] < 1 or valid.dtype != torch.bool
-                or beats.shape != valid.shape or not torch.isfinite(beats[valid]).all()):
-            raise ValueError('Draft requires finite query beats and boolean [N,L] validity')
-        n = len(valid)
-        if (mapping.shape != (n,) or mapping.dtype != torch.long
-                or ((mapping < 0) | (mapping >= len(audio.valid))).any()
-                or len(audio.key_values) != len(self.blocks)):
-            raise ValueError('Draft condition/audio projection mapping mismatch')
         difficulty, level, span = inputs.difficulty_id, inputs.level, inputs.span_beats
-        if (difficulty.shape != (n,) or difficulty.dtype != torch.long
-                or ((difficulty < 1) | (difficulty >= self.difficulty.num_embeddings)).any()
-                or level.shape != (n,) or span.shape != (n,)
-                or not torch.isfinite(level).all() or not torch.isfinite(span).all()
-                or (span <= 0).any()):
-            raise ValueError('Draft requires source difficulty, numeric level and positive audio span')
         av = audio.valid.index_select(0, mapping)
-        if (valid.any(-1) & ~av.any(-1)).any():
-            raise ValueError('active Draft requires some valid full-song audio')
         positions = beats.masked_fill(~valid, 0)
         condition = (self.difficulty(difficulty)
                      + self.level((level[:, None].to(self.query) - self.level_center) / self.level_scale)

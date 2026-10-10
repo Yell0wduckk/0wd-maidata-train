@@ -194,14 +194,20 @@ def token_to_dict(token):
     return {'type': token.type, **values}
 
 
-def token_from_dict(record):
+def token_from_dict(record, *, validate_input=True):
     values = dict(record)
     kind = values.pop('type', None)
     classes = {c.type: c for c in (Moment, Note, Route, HoldDuration, SlideDuration)}
-    if kind not in classes:
+    if validate_input and kind not in classes:
         raise ChartError(f'unknown token type: {kind}')
     if 'break' in values:
         values['break_'] = values.pop('break')
+    if not validate_input:
+        # Accepted cache records already contain canonical token fields.
+        # Deserialize without running dataclass __post_init__ validation.
+        token = object.__new__(classes[kind])
+        token.__dict__.update(values)
+        return token
     try:
         return classes[kind](**values)
     except TypeError as e:

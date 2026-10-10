@@ -17,8 +17,8 @@ class WindowTarget:
     moment_counts: tuple[int, ...]
 
 
-def reconstruction_target(chart, *, start_tick, target_beats):
-    if type(start_tick) is not int or type(target_beats) is not int or target_beats < 1:
+def reconstruction_target(chart, *, start_tick, target_beats, validate_input=True):
+    if validate_input and (type(start_tick) is not int or type(target_beats) is not int or target_beats < 1):
         raise ValueError('R targets require an integer start tick and positive beat length')
     rows, counts = [], [0] * target_beats
     for group in chart.groups:
@@ -46,7 +46,7 @@ def reconstruction_target(chart, *, start_tick, target_beats):
             elif isinstance(token, SlideDuration):
                 times['slide_duration_tick'] = token.ticks
             rows.append(TargetRow(fields, times))
-    if any(n > 96 for n in counts):
+    if validate_input and (any(n > 96 for n in counts)):
         raise ValueError('more than 96 distinct MOMENTs in a beat')
     rows.append(TargetRow({'type': ROW_TYPES.index('SEGMENT_END')}, {}))
     return WindowTarget(tuple(rows), tuple(counts))
@@ -60,10 +60,10 @@ def required_query_rows(target_lengths):
     return max(lengths)
 
 
-def collate_reconstruction(targets, *, query_rows, target_beats, device):
+def collate_reconstruction(targets, *, query_rows, target_beats, device, validate_input=True):
     import torch
     from .types import ReconstructionTargets
-    if type(query_rows) is not int or query_rows < 1 or not targets:
+    if validate_input and (type(query_rows) is not int or query_rows < 1 or not targets):
         raise ValueError('positive fixed query_rows and a nonempty batch are required')
     shape = (len(targets), query_rows)
     fields = {name: torch.full(shape, -100, dtype=torch.long, device=device) for name in FIELD_SIZES}
@@ -74,9 +74,9 @@ def collate_reconstruction(targets, *, query_rows, target_beats, device):
     for w, target in enumerate(targets):
         if target is None:
             continue
-        if len(target.rows) > query_rows:
+        if validate_input and (len(target.rows) > query_rows):
             raise ValueError(f'R query_rows={query_rows} cannot hold {len(target.rows)} rows including SEGMENT_END')
-        if len(target.moment_counts) != target_beats:
+        if validate_input and (len(target.moment_counts) != target_beats):
             raise ValueError('R count length does not match target_beats')
         counts[w] = torch.tensor(target.moment_counts, device=device)
         for i, row in enumerate(target.rows):
@@ -88,10 +88,10 @@ def collate_reconstruction(targets, *, query_rows, target_beats, device):
     return ReconstructionTargets(fields, times, time_valid, counts, valid)
 
 
-def collate_planner(targets, *, device):
+def collate_planner(targets, *, device, validate_input=True):
     import torch
     from .types import PlannerTargets
-    if not targets:
+    if validate_input and (not targets):
         raise ValueError('empty Planner target batch')
     return PlannerTargets(
         torch.tensor([t.continuous if t is not None else (0.,) * 8 for t in targets], device=device, dtype=torch.float32),

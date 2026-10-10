@@ -19,10 +19,6 @@ def to_device(value, device):
 
 def prepare_local(beats, valid, radius, query_width=32):
     """Group neighboring queries into rectangles; never build a full L x L mask."""
-    if beats.device.type != 'cpu' or valid.device.type != 'cpu':
-        raise ValueError('attention layout must be prepared on CPU')
-    if radius < 0 or beats.shape != valid.shape or beats.ndim != 2:
-        raise ValueError('invalid local attention geometry')
     length = beats.shape[1]
     width = min(query_width, length)
     queries, keys, query_valid, owners = [], [], [], []
@@ -71,8 +67,6 @@ def with_local_mask(layout, beats, radius):
 
 
 def prepare_resample(beats, valid, targets, *, valid_only):
-    if any(t.device.type != 'cpu' for t in (beats, valid, targets)):
-        raise ValueError('interpolation layout must be prepared on CPU')
     lefts, rights, lw, rw, masks = [], [], [], [], []
     for b, target in enumerate(targets.float()):
         indices = valid[b].nonzero().flatten() if valid_only else torch.arange(beats.shape[1])
@@ -122,8 +116,6 @@ def prepare_encoder_layout(song_beats, song_valid, windows, *, radii, rates, bef
     from .geometry import pool_stride
     beats, valid = windows.beats.detach().cpu(), windows.valid.cpu()
     starts = windows.target_start_beats.detach().cpu()
-    if not torch.equal(starts, starts.round()):
-        raise ValueError('target window starts must be integer beats')
     local, resampling, grids, masks = [], [], [], []
     for i, (radius, rate) in enumerate(zip(radii, rates, strict=True)):
         local.append(prepare_local(beats, valid, radius, (32, 32, 16)[i]))

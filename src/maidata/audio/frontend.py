@@ -120,10 +120,6 @@ class SpectralTokenizer(nn.Module):
         )
 
     def forward(self, mel: Tensor, valid: Tensor) -> Tensor:
-        if mel.ndim != 3 or mel.shape[-1] != self.mel_bins:
-            raise ValueError(f"mel must have shape [W,N,{self.mel_bins}].")
-        if valid.shape != mel.shape[:2] or valid.dtype != torch.bool:
-            raise ValueError("valid must be boolean with shape [W,N].")
         mel = mel.masked_fill(~valid.unsqueeze(-1), 0.0)
         values = F.gelu(self.stem(mel.unsqueeze(1)))
         values = values.masked_fill(~valid[:, None, :, None], 0.0)
@@ -145,12 +141,6 @@ class AudioFeatureFusion(nn.Module):
         self.project = nn.Linear(d_model + 32, d_model)
 
     def forward(self, spectral: Tensor, aux32: Tensor, valid: Tensor) -> Tensor:
-        if spectral.ndim != 3 or spectral.shape[-1] != self.d_model:
-            raise ValueError(f"spectral must have shape [W,N,{self.d_model}].")
-        if aux32.shape != (*spectral.shape[:2], 32):
-            raise ValueError("aux32 must have shape [W,N,32].")
-        if valid.shape != spectral.shape[:2] or valid.dtype != torch.bool:
-            raise ValueError("valid must be boolean with shape [W,N].")
         features = torch.cat((spectral, aux32), dim=-1)
         features = features.masked_fill(~valid.unsqueeze(-1), 0.0)
         return self.project(features).masked_fill(~valid.unsqueeze(-1), 0.0)
@@ -169,14 +159,6 @@ class BeatPatchTokenizer(nn.Module):
         self.norm = nn.LayerNorm(d_model)
 
     def forward(self, mel: Tensor, sample_valid: Tensor, aux32_centers: Tensor) -> Tensor:
-        if mel.ndim != 4 or mel.shape[-2:] != (self.samples_per_beat, self.mel_bins):
-            raise ValueError(
-                f"mel must have shape [B,J,{self.samples_per_beat},{self.mel_bins}]."
-            )
-        if sample_valid.shape != mel.shape[:3] or sample_valid.dtype != torch.bool:
-            raise ValueError("sample_valid must be boolean with shape [B,J,R].")
-        if aux32_centers.shape != (*mel.shape[:2], 32):
-            raise ValueError("aux32_centers must have shape [B,J,32].")
         valid = sample_valid.any(-1)
         mel = mel.masked_fill(~sample_valid.unsqueeze(-1), 0.0)
         # The producer clears centers outside the audio range; the tokenizer

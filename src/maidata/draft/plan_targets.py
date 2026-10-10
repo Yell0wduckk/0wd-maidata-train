@@ -36,11 +36,12 @@ def statistics(notes, duration, span_ticks, start_tick):
 
 
 class MusicPlanTargets:
-    def __init__(self, chart):
+    def __init__(self, chart, *, validate_input=True):
+        self.validate_input = validate_input
         end = chart.source_end_beat
         if end is None:
-            end = read_source_end_beat(chart.source_path, chart.difficulty)
-        if end <= 0:
+            end = read_source_end_beat(chart.source_path, chart.difficulty, validate_input=validate_input)
+        if validate_input and (end <= 0):
             raise ValueError('source end beat must be positive')
         self.chart = chart
         self.source_end_beat = end
@@ -50,7 +51,7 @@ class MusicPlanTargets:
         _, self.reference = statistics(self.notes, duration, float(end * 96), 0)
 
     def window(self, start_tick, end_tick):
-        if end_tick <= start_tick:
+        if self.validate_input and end_tick <= start_tick:
             raise ValueError('Planner target interval must have positive duration')
         notes = self.notes[bisect_left(self.ticks, start_tick):bisect_left(self.ticks, end_tick)]
         duration = self.chart.timing.second(end_tick) - self.chart.timing.second(start_tick)

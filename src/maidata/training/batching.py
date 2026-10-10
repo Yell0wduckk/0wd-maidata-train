@@ -36,11 +36,7 @@ def optimizer_batches(audio_groups, config, *, token_costs=None):
     budget = config['pretrain_token_budget']
     if budget is not None and (isinstance(budget, bool) or not math.isfinite(budget) or budget <= 0):
         raise ValueError('token budget must be finite and positive, or null to disable')
-    if budget is not None and token_costs is None:
-        raise ValueError('enabled token budget requires one cost per audio group')
-    costs = tuple(token_costs) if token_costs is not None else (0,) * len(groups)
-    if len(costs) != len(groups) or any(not math.isfinite(c) or c < 0 for c in costs):
-        raise ValueError('audio group token costs must align and be finite/nonnegative')
+    costs = tuple(token_costs) if budget is not None or token_costs is not None else (0,) * len(groups)
     batches, current, total = [], [], 0.
     for group, cost in zip(groups, costs):
         if budget is not None and cost > budget:
