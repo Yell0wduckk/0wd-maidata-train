@@ -41,8 +41,22 @@ def seed(config):
 
 
 def optimizer(parameters, config):
+    parameters = list(parameters)
     return torch.optim.AdamW(parameters, lr=config['decoder_train_learning_rate'],
-                             weight_decay=config['decoder_train_weight_decay'])
+                             weight_decay=config['decoder_train_weight_decay'],
+                             fused=config['decoder_train_fused_optimizer'] and parameters[0].device.type == 'cuda')
+
+
+def restore_optimizer(opt, state):
+    # The current implementation selects the kernel, while the checkpoint owns
+    # learning rates, moments and steps. Set flags BEFORE load_state_dict so
+    # PyTorch places fused step tensors on the parameter device correctly.
+    groups = [dict(saved) for saved in state['param_groups']]
+    for group, current in zip(groups, opt.param_groups):
+        group['fused'] = current['fused']
+        if current['fused']:
+            group['foreach'] = False
+    opt.load_state_dict(dict(state, param_groups=groups))
 
 
 def scheduler(opt, steps, config):

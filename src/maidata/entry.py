@@ -109,6 +109,7 @@ CONFIG = {
     "decoder_train_p0_cache": None,  # Existing complete frozen P0 bank export.
     "decoder_train_dp_cache": None,  # Matching frozen Z and predicted plan12 export.
     "decoder_train_optimizer": "adamw",
+    "decoder_train_fused_optimizer": True,  # CUDA backend; optimizer moments are preserved on resume.
     "decoder_train_learning_rate": None,
     "decoder_train_weight_decay": None,
     "decoder_train_gradient_clip": None,

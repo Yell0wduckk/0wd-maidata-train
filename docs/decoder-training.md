@@ -20,7 +20,7 @@
 
 每个输入 batch 内，相同 audio_variant 共享一份离线全曲 P0 bank；D/P 缓存保留按原难度/等级生产的全曲 Z，以及每个基础窗和空尾窗的预测 plan12。通过 chart_to_group、window_id、起点和音频标识对应选择，同 batch 的重复 occurrence 共享同一份条件。M 读取全曲 P0、默认前4＋目标16＋后4拍的 Z，以及无位置编码的预测 plan12；不读取 GT Planner 或直接难度值。窗口随机采样改变监督的组批方式，全曲音频和 Draft 条件范围保持原定义。
 
-离线导出时 E/D/P 使用 `eval/no_grad`，缓存张量不带梯度。训练时 M 的投影正常反传，不能缓存其投影结果跨参数更新使用。全曲音频 K/V 在一个输入 batch 内按歌曲共享，attention 将当前块的有效 query 按歌曲分组，读取同一份 K/V，并裁去歌曲 bank 两端的无效 padding；结果恢复原窗口顺序。K/V 保留计算图直到该 batch 的最后分块完成反传；optimizer 更新之后重新建立。每个窗口并行 teacher forcing，重新计算包括历史在内的全部 self-attention，不跨窗携带 self K/V。
+离线导出时 E/D/P 使用 `eval/no_grad`，缓存张量不带梯度。训练时 M 的投影正常反传，不能缓存其投影结果跨参数更新使用。全曲音频 K/V 在一个输入 batch 内按歌曲共享，只投影有效音频位置，再恢复公开bank形状。音频attention按歌曲聚合有效query，并按query数量和key跨度的二次幂档组成小批SDPA；所有query及歌曲K/V各收集一次后split，输出统一回填原窗口位置。反向一次收集各小批梯度，避免逐曲切片反复产生整批bank梯度。内部无效key、空歌曲和不同歌曲之间仍严格隔离。K/V 保留计算图直到该 batch 的最后分块完成反传；optimizer 更新之后重新建立。每个窗口并行 teacher forcing，重新计算包括历史在内的全部 self-attention，不跨窗携带 self K/V。
 
 缓存路径由 `decoder_train_p0_cache`、`decoder_train_dp_cache` 显式提供，沿用 [P0 导出](frozen-p0-cache.md)和 [D/P 导出](frozen-dp-cache.md)格式。启动读取 manifest 索引和原生产者元数据，不重新校验身份、架构、归一化或计划，不读取或哈希生产者 checkpoint。配套输入由用户和训练会话选定。训练读取 bank 时不重复检查 shape、dtype、有限值、拍坐标、mask 或归属，也不扫描和重哈希载荷。P0/Z 保持原始绝对位置，完整空尾 Z/plan 有效；不同歌曲的 batch padding 与 Z 上下文范围外的槽无效。
 
@@ -80,14 +80,16 @@ IPC 使用现有 `training.transport` 的 dtype 连续缓冲实现，整曲条�
 
 NOTE 输入、MMoE gate、kind→pad/flags 使用固定形状张量运算，避免 CUDA 布尔索引产生动态 `nonzero`；flags 的条件适配每个 NOTE 仅计算一次。常规 loss 统计在设备累积，输出 update/epoch 日志时统一回读；不逐步执行额外有限值断言。
 
+有效音频与谱面行索引、小批SDPA布局均在worker整理现有张量时生成，并随dtype缓冲传输，不读取字段或Physical、不改离线缓存。FFN的LayerNorm、所有专家与gate只计算有效谱面行；attention所需的因果布局保持完整。self-attn通过拼接现有Q/K/V权重执行一次线性投影，不改变参数名称或optimizer槽位。Z/plan通过互不重叠的两半Q/K特征实现单次SDPA：Z使用旋转后分量，plan使用未旋转分量，显式保留原head维度的缩放；仍为同一个联合softmax，plan没有位置编码。
+
 | 对照项 | 原仓库实现 | 当前阶段二 |
 |---|---|---|
 | IPC/H2D | `maimai_baseline.training.inputs._collate_full_input`、`data.batch_transport.PackedBatch` | 条件及 M 分块分别按 dtype 打包，并保持分块显存边界 |
-| 全曲 P0 K/V | `model.rope.mapped_attention`、`data.attention_layout.cross_layout` 按歌曲聚合 query、裁 key padding | 独立 `decoder.batching.audio_query_layout` 与 `Attention.mapped`，共享 K/V 张量并恢复原顺序 |
+| 全曲 P0 K/V | `model.rope.mapped_attention` 逐曲SDPA，切片反向回传整批bank | 独立 `decoder.batching.audio_query_layout` 与 `Attention.mapped`，有效位置投影、小批SDPA及一次梯度收集 |
 | 条件准备 | 原路径读取冻结音频特征并按歌曲映射 | worker 选择缓存 Z/plan 和共享 P0；训练前向不构造 E/D/P 或执行 CPU layout fallback |
 | 采样与归约 | 原训练维护完整音频组、既有计划及逻辑 batch | 保留 occurrence 集合，全局随机窗口组批；内部计算块仍按共同分母反传 |
 
-原仓库对照路径为 `repos/main-new-audio-draft-beat/src/maimai_baseline`，仅作实现参考。当前网络和训练均不导入该包。按歌曲聚合 attention 会改变 dropout 随机数的消费顺序；数值/梯度等价测试使用 dropout=0，分布语义不变；同版本完整轮状态恢复另用非零 dropout 验证。
+原仓库对照路径为 `repos/main-new-audio-draft-beat/src/maimai_baseline`，仅作实现参考。当前网络和训练均不导入该包。小批attention和跳过padding会改变dropout随机数的消费顺序，保持相同分布语义；数值/梯度对照使用dropout=0，并覆盖FP32及BF16。原完整轮checkpoint可恢复成套状态；优化前后的后续轨迹不要求逐位一致，同版本完整轮恢复另用非零dropout验证。
 
 ## 配方与执行
 
@@ -97,7 +99,7 @@ NOTE 输入、MMoE gate、kind→pad/flags 使用固定形状张量运算，避�
 - 精度 `fp32` 或 CUDA `bf16`。
 - Physical、judge、trajectory 三个辅助系数；已有 Route-71 距离矩阵路径及独立输出目录。
 
-默认 AdamW、warmup **200次 optimizer update**、row budget **8192**、梯度累积 **1**、workers **12**，均保持可配置。seed 与现有计划一致；scheduler 按各轮随机组批产生的实际更新数计算 horizon，不沿用整曲组批的步数。所有路径可通过 JSON 显式改为目标主机路径；本地默认路径只定位既有资产，并不表示所有远端载荷已下载。本次 pilot320 Physical 本地目录只有生产摘要等元数据；实际训练必须指向含 `catalog.json` 和 `charts/...` 的既有完整产物目录，不能用摘要冒充载荷。
+默认 AdamW、warmup **200次 optimizer update**、row budget **8192**、梯度累积 **1**、workers **12**，均保持可配置。`decoder_train_fused_optimizer=True`在CUDA选用fused AdamW，CPU使用普通实现；恢复时按当前配置选择执行内核，并完整加载原lr、moments和step，不重置优化器。seed 与现有计划一致；scheduler 按各轮随机组批产生的实际更新数计算 horizon，不沿用整曲组批的步数。所有路径可通过 JSON 显式改为目标主机路径；本地默认路径只定位既有资产，并不表示所有远端载荷已下载。本次 pilot320 Physical 本地目录只有生产摘要等元数据；实际训练必须指向含 `catalog.json` 和 `charts/...` 的既有完整产物目录，不能用摘要冒充载荷。
 
 ```powershell
 python -m maidata.decoder_training --show-config

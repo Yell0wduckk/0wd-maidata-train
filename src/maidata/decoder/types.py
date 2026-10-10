@@ -56,6 +56,7 @@ class DecoderMemory:
     audio: tuple[KV, ...]
     condition: tuple[KV, ...]
     plan_index: int
+    row_indices: Tensor | None = None
 
 
 @dataclass(frozen=True)

@@ -41,11 +41,11 @@ class Decoder(nn.Module):
             condition_gate_init=condition_gate_init) for i in range(layers))
         self.heads = ContentHeads(dim, readout_ffn_dim, norm_eps, time_components)
 
-    def prepare_audio(self, audio):
+    def prepare_audio(self, audio, *, indices=None):
         """Project unique song banks once per forward/parameter version; retain gradients."""
         if self.validate_inputs:
             validate_memory(audio, self.audio_dim)
-        return tuple(layer.audio_attn.project(audio) for layer in self.layers)
+        return tuple(layer.audio_attn.project(audio, indices=indices) for layer in self.layers)
 
     def prepare_memory(self, audio_kv, audio_mapping, z, plan, plan_valid, *, audio_layout=None):
         """One fresh object per target window batch; conditions come from public tensors."""
@@ -66,7 +66,7 @@ class Decoder(nn.Module):
                       kv.valid.index_select(0, audio_mapping))
         return DecoderMemory(tuple(select(kv) for kv in audio_kv),
             tuple(layer.condition_attn.project(condition, plan_index=z.values.shape[1]) for layer in self.layers),
-            z.values.shape[1])
+            z.values.shape[1], None if audio_layout is None else audio_layout['valid_indices'])
 
     def begin(self, tokens, memory, *, cache=None):
         """Run ONLY the shared front. No next type or content label is accepted."""
@@ -78,7 +78,7 @@ class Decoder(nn.Module):
         front = []
         for i in range(self.router_layer):
             x, kv = self.layers[i](x, tokens.beats, tokens.valid, memory.audio[i], memory.condition[i],
-                memory.plan_index, None, None if cache is None else cache.layers[i])
+                memory.plan_index, None, None if cache is None else cache.layers[i], memory.row_indices)
             front.append(kv)
         return RouterOutput(x, self.type_head(self.router_norm(x)), tokens.beats, tokens.valid,
                             tuple(front), memory, cache)
@@ -96,7 +96,7 @@ class Decoder(nn.Module):
         layers = list(routed.front_kv)
         for i in range(self.router_layer, len(self.layers)):
             x, kv = self.layers[i](x, routed.beats, routed.valid, memory.audio[i], memory.condition[i],
-                memory.plan_index, types, None if old is None else old.layers[i])
+                memory.plan_index, types, None if old is None else old.layers[i], memory.row_indices)
             layers.append(kv)
         hidden = self.final_norm(x).masked_fill(~routed.valid[..., None], 0)
         return DecoderOutput(routed.logits, hidden, DecoderCache(tuple(layers), memory))

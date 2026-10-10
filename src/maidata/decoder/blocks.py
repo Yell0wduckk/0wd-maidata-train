@@ -37,12 +37,21 @@ class DecoderBlock(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.typed = experts is not None
 
-    def forward(self, x, beats, valid, audio, condition, plan_index, types, previous):
+    def forward(self, x, beats, valid, audio, condition, plan_index, types, previous, row_indices=None):
         y, kv = self.self_attn.self_attention(self.norms[0](x), beats, valid, previous)
         x = x + self.dropout(y)
         x = x + self.dropout(self.audio_attn(self.norms[1](x), beats, valid, audio))
         x = x + self.condition_gate * self.condition_attn(self.norms[2](x), beats, valid, condition,
                                                          plan_index=plan_index)
-        normalized = self.norms[3](x)
-        y = self.ffn(normalized, types) if self.typed else self.ffn(normalized)
-        return (x + self.dropout(y)).masked_fill(~valid[..., None], 0), kv
+        if row_indices is None:
+            normalized = self.norms[3](x)
+            y = self.ffn(normalized, types) if self.typed else self.ffn(normalized)
+            y = self.dropout(y)
+        else:
+            flat = x.flatten(0, 1)
+            normalized = self.norms[3](flat.index_select(0, row_indices))
+            y = (self.ffn(normalized, types.flatten().index_select(0, row_indices))
+                 if self.typed else self.ffn(normalized))
+            y = self.dropout(y)
+            y = y.new_zeros(flat.shape).index_copy(0, row_indices, y).reshape_as(x)
+        return (x + y).masked_fill(~valid[..., None], 0), kv

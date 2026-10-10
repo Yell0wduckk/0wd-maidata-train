@@ -9,7 +9,7 @@ from maidata.model import ENCODER_KEYS
 from maidata.training import checkpoint as stage_one
 from maidata.training.checkpoint import digest_file, rng_state, atomic_save, validate_cursor
 from .plan import read_json
-from .recipe import PATH_KEYS
+from .recipe import PATH_KEYS, restore_optimizer
 
 
 SCHEMA = 'maidata.decoder-training.v1'
@@ -121,7 +121,7 @@ def restore(payload, model, opt, sched, *, config, binding, source, producer, st
     # The user/training operator selects the checkpoint. Source, budget, recipe,
     # plan and cache provenance are recorded, not used as resume vetoes.
     _load(model.decoder,payload['model_state'])
-    opt.load_state_dict(payload['optimizer_state'])
+    restore_optimizer(opt, payload['optimizer_state'])
     sched.load_state_dict(payload['scheduler_state'])
     for loader,state in zip(loaders,payload['loader_rng']):
         loader.generator.set_state(state.cpu())

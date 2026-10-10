@@ -71,5 +71,33 @@ def audio_query_layout(valid, mapping, audio_count, *, spans=None, validate=True
         raise ValueError('invalid audio query mapping')
     if validate and spans is not None and len(spans) != audio_count:
         raise ValueError('audio key span count differs')
-    return dict(mapping=mapping, shape=tuple(valid.shape), spans=spans, indices=tuple(
-        (valid & (mapping == song)[:, None]).flatten().nonzero().flatten() for song in range(audio_count)))
+    indices = tuple((valid & (mapping == song)[:, None]).flatten().nonzero().flatten()
+                    for song in range(audio_count))
+    # Bucketing changes execution layout only, never window order or attention
+    # membership. Bound query padding and group similarly sized key spans.
+    buckets = {}
+    for song, selected in enumerate(indices):
+        if not len(selected):
+            continue
+        extent = 1 if spans is None else max(1, spans[song][1]-spans[song][0])
+        key = ((len(selected)-1).bit_length(), (extent-1).bit_length())
+        buckets.setdefault(key, []).append(song)
+    songs, gather, take, put, groups = [], [], [], [], []
+    offset = 0
+    for _, members in sorted(buckets.items()):
+        width = max(len(indices[s]) for s in members)
+        lo = 0 if spans is None else min(spans[s][0] for s in members)
+        hi = None if spans is None else max(spans[s][1] for s in members)
+        groups.append((len(members), width, lo, hi))
+        for song in members:
+            selected = indices[song]
+            gather.append(torch.nn.functional.pad(selected, (0, width-len(selected))))
+            take.append(torch.arange(len(selected))+offset)
+            put.append(selected)
+            songs.append(song)
+            offset += width
+    cat = lambda rows: torch.cat(rows) if rows else torch.empty(0, dtype=torch.long)
+    return dict(mapping=mapping, shape=tuple(valid.shape), spans=spans, indices=indices,
+                songs=torch.tensor(songs, dtype=torch.long), groups=tuple(groups),
+                gather=cat(gather), take=cat(take), put=cat(put),
+                valid_indices=valid.flatten().nonzero().flatten())

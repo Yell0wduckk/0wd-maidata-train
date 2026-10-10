@@ -15,6 +15,7 @@ class Conditions:
     plan_valid: torch.Tensor
     occurrence_mapping: torch.Tensor
     audio_mapping: torch.Tensor
+    audio_indices: torch.Tensor | None = None
 
 
 def collate_conditions(items, windows, config):
@@ -54,4 +55,5 @@ def collate_conditions(items, windows, config):
     selected = Memory(z.values[mapping[:, None], safe].masked_fill(~selected_valid[..., None], 0),
                       desired, selected_valid)
     return Conditions(audio, Memory(selected.values, selected.beats, selected.valid), torch.stack(plans),
-        torch.stack(plan_valid), torch.tensor(indices, dtype=torch.long), torch.tensor(audio_mapping, dtype=torch.long))
+        torch.stack(plan_valid), torch.tensor(indices, dtype=torch.long), torch.tensor(audio_mapping, dtype=torch.long),
+        audio.valid.flatten().nonzero().flatten())

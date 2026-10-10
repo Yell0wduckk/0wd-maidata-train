@@ -70,7 +70,7 @@ def update(model, batches, opt, sched, config, geometry, *, audit=False):
         with recipe.autocast(device,config):
             conditions = model.conditions(batch)
             bank = conditions.audio
-            audio_kv = model.decoder.prepare_audio(Memory(bank.values,bank.beats,bank.valid))
+            audio_kv = model.decoder.prepare_audio(Memory(bank.values,bank.beats,bank.valid), indices=conditions.audio_indices)
         for j,cpu_chunk in enumerate(chunks):
             chunk = cpu_chunk.to(device)
             with recipe.autocast(device,config):
@@ -108,7 +108,7 @@ def validate(model, loader, config, geometry, *, final, restored_rng=None):
             with recipe.autocast(device,config):
                 conditions = model.conditions(batch)
                 b = conditions.audio
-                audio_kv = model.decoder.prepare_audio(Memory(b.values,b.beats,b.valid))
+                audio_kv = model.decoder.prepare_audio(Memory(b.values,b.beats,b.valid), indices=conditions.audio_indices)
                 for cpu_chunk in batch.chunks:
                     chunk = cpu_chunk.to(device)
                     terms,output = chunk_loss(model,conditions,audio_kv,chunk,config,geometry,
