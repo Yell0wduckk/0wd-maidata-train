@@ -1,19 +1,25 @@
 # 当前源码状态与重构边界
 
-本文件描述独立副本实际保留的代码。新 encoder 设计位于 [设计正本](../../0wd-v3-refactor-docs/new-audio-encoder.md)，尚未实现。来源与复制排除项见 [import-and-layout](import-and-layout.md)。
+本文件区分新 `maidata` 空入口和独立副本保留的旧模型。新 encoder 的既有讨论位于 [设计正本](../../0wd-v3-refactor-docs/new-audio-encoder.md)，尚未实现；具体新架构后续再确定。来源与复制排除项见 [import-and-layout](import-and-layout.md)。
 
-## 已复制的实现
+## 新 maidata 入口：仅空骨架
+
+入口为 `python -m maidata`，说明见 [maidata-entry](maidata-entry.md)。`entry.py` 顶部的 `CONFIG = {}` 是唯一配置位置；`--help` 与 `--show-config` 可独立执行。默认执行到 `build_model` 占位时以 `NotImplementedError` 非零退出。
+
+本轮没有迁移 Decoder、设定网络层数或引入模型、数据、训练循环、checkpoint 实现；新入口不导入旧 `maimai_baseline` 或 Torch。协作约定保留在 Markdown 中，不增加政策门禁。旧模型及其 `runtime-versions.toml` 保持旧路径专属。
+
+## 已复制的旧模型实现
 
 当前来源路线为：外部冻结 native 音频 → 一拍音频草稿 → 用户选定兼容草稿 checkpoint → 干净 token 缓存 → A。源实验采用 draft60/A90；该旧配方不是新 encoder 的训练安排。
 
-- `BaselineTransformer`、CLI 和三个 Python 包保留。版本及兼容范围只由 `src/maimai_baseline/runtime-versions.toml` 维护。
+- `BaselineTransformer`、旧 CLI 和三个原有 Python 包保留。旧模型版本及兼容范围只由 `src/maimai_baseline/runtime-versions.toml` 维护，不约束新空入口。
 - native 路径读取外部 P0/C0/C1，冻结保留的 `audio_encoder`/`song_audio_encoder`；训练步不执行这两个音频网络。
 - 一拍草稿为整曲双向音频条件网络，每拍输出 128 维 token；重建头与 A 读取前/中/后三个 16 拍窗口共 48 槽。草稿输入、内部交互和谱面因果历史仍是全曲范围。
 - 主 A 保留结构化事件/字段、自回归生成历史、L3 与 Physical；当前一拍路线没有额外 B 训练步骤。
 
 ## 音频与窗口的实际形状
 
-| 项目 | 当前代码 |
+| 项目 | 旧模型当前代码 |
 |---|---|
 | Mel | 128 频带；基础音频参数 24 kHz、FFT 1024、hop 240（10 ms） |
 | 局部输入 | BPM 对齐，每拍 24 个采样位置 |
@@ -46,6 +52,6 @@
 
 ## 独立副本的执行边界
 
-复制了源码、配置、schemas、必要 JSON/C++/CUDA 资源及文档；没有复制数据、权重、缓存、环境、测试或原 Git 历史。本次未运行 CLI、CUDA、训练或推理。
+复制了旧源码、配置、schemas、必要 JSON/C++/CUDA 资源及文档；没有复制数据、权重、缓存、环境、测试或原 Git 历史。本轮未运行旧模型 CLI、CUDA、训练或推理；新空入口的使用与验证范围见 [maidata-entry](maidata-entry.md)。
 
 旧 launcher 仍有源实验的远端路径；数据准备工具还保留 `--main-worktree` 默认定位，MiaCode/MajRadar 等是外部依赖。实际运行前使用明确输入和输出，不能把旧 launcher 当成新实验命令。详情见 [复制与布局](import-and-layout.md)。

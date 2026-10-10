@@ -6,10 +6,12 @@
 
 进入任务先读 README、docs/current-runtime.md；encoder 重构再读同级设计目录中的 `../0wd-v3-refactor-docs/new-audio-encoder.md`。
 
-本次授权为设计落文档、源码/文档复制和旧文档清理。新 encoder 尚未实现；没有据此启动训练、上传或替换运行任务。后续按用户明确任务继续。
+本轮授权为新增 `src/maidata` 最小空骨架及对应文档，入口为 `python -m maidata`。只提供帮助、显示入口顶部唯一的空配置 `CONFIG = {}` 和模型构建占位；不迁移旧模型/Decoder，不加入网络层数配置、数据、训练循环或 checkpoint 实现。新架构后续再讨论；没有据此启动训练、上传或替换运行任务的授权。入口说明见 `docs/maidata-entry.md`。
 
 ## 当前源码与未来设计
 
+- `maidata` 是独立空入口，不导入 `maimai_baseline` 或 Torch。默认执行到模型构建占位时以 `NotImplementedError` 非零退出；这不是已具备训练能力的入口。
+- 下列内容描述保留的旧模型及既有讨论方向；新架构尚待后续确定，不构成本轮骨架实现要求。
 - 复制来源是 `main-new-audio-draft-beat` 的一拍草稿/native 音频路线。当前 native 路径冻结保留的音频模块，训练步读取外部原生 22 拍 P0/C0/C1 缓存。
 - 当前 Decoder 仍读取全曲 P0 bank，草稿仍读取整曲 P0。不能把设计中的 24 拍、24 槽 S 或局部 Decoder 音频描述为已实现。
 - 新设计的 G₀ 可复用不等于冻结：后续要端到端训练 tokenizer/encoder，同一步按曲共享计算图，不能 detach 或跨参数更新缓存旧表示。
@@ -18,9 +20,11 @@
 
 ## 版本和配置
 
-版本及兼容范围仅维护在 `src/maimai_baseline/runtime-versions.toml`，其他文档不复制当前版本白名单。`0wd-v3` 是工作区名称，不是既有 baseline/checkpoint 版本。
+旧 `maimai_baseline` 的版本及兼容范围仅维护在 `src/maimai_baseline/runtime-versions.toml`，只适用于旧路径；新 `maidata` 空入口不读取该表，也不新设版本表。其他文档不复制当前版本白名单。`0wd-v3` 是工作区名称，不是既有 baseline/checkpoint 版本。
 
 不新增没有实际消费者的配置字段。来源提交、复制范围和讨论结论写在文档中，不把它们变成训练启动门禁。保留真实架构、参数 shape、缓存布局、mask、索引、有限值和必要恢复状态检查；不通过宽松加载掩盖新旧架构差异。
+
+训练默认值和资产使用规则是协作约定，不将其强塞为空入口的政策校验。本轮不提前实现未来模型、数据或恢复合同；后续有实际消费者时，再实现其必要数学、表示和严格恢复检查。
 
 ## 训练和资产规则
 
