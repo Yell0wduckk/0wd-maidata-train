@@ -42,8 +42,8 @@ def config(encoder_config):
         decoder_train_device='cpu',decoder_train_workers=0,decoder_train_precision='fp32',
         decoder_train_learning_rate=1e-3,decoder_train_weight_decay=.01,decoder_train_gradient_clip=1.,
         decoder_train_warmup_steps=1,decoder_train_scheduler_epochs=6,decoder_train_stop_after_epochs=2,
-        decoder_train_audio_groups_per_batch=2,decoder_train_gradient_accumulation_steps=1,
-        decoder_train_token_budget=24,decoder_train_physical_weight=.1,decoder_train_judge_weight=.2,
+        decoder_train_gradient_accumulation_steps=1,decoder_train_token_budget=45056,
+        decoder_train_chunk_token_budget=24,decoder_train_physical_weight=.1,decoder_train_judge_weight=.2,
         decoder_train_trajectory_weight=.3,decoder_history_dropout=.15)
     return c
 
@@ -173,7 +173,7 @@ def test_actual_frozen_update_reuses_producers_and_chunk_global_denominators(con
     batches = [collate_audio([r],config=config) for r in rows]
     model = DecoderTrainer(config)
     other = deepcopy(model)
-    one = dict(config,decoder_train_token_budget=10000)
+    one = dict(config,decoder_train_chunk_token_budget=10000)
     together = collate_audio(rows,config=one)
     opts = [recipe.optimizer(m.decoder.parameters(),config) for m in (model,other)]
     scheds = [recipe.scheduler(o,[1]*6,config) for o in opts]
@@ -261,7 +261,36 @@ def test_real_dataset_reads_fields_supports_and_plan_without_rebuilding(config,t
     batch = collate_audio([one,dataset[('1',2)]],config=c)
     assert len(batch.windows)==6 and len(batch.audio_variants)==2
     plan.occurrences(3)
-    assert sum(len(p) for step in plan.batches(3,c) for p in step)==2
+    assert sum(len(p) for step in plan.batches(3,c) for p in step)==6
+    from collections import Counter
+    from maidata.decoder_training.data import WindowBatchSampler
+    from maidata.decoder_training.batching import joint_cost
+    small = dict(c,decoder_train_token_budget=20)
+    sampler = WindowBatchSampler(plan,small)
+    sampler.epoch = 3
+    seen = []
+    for requests in sampler:
+        assert len({r[0] for r in requests})==len(requests)
+        parts = [dataset[r] for r in requests]
+        batch = collate_audio(parts,config=small)
+        seen.extend(w['identity'] for w in batch.windows)
+        assert batch.budget_cost['weighted_tokens']<=20 or len(batch.windows)==1
+        ordered = sorted([w for p in parts for w in p['windows']],key=lambda w:w['sequence_index'])
+        lengths = []
+        for w in ordered:
+            target,history = plan._lengths[w['identity'][0]]
+            length = target+(0 if w['example'].history_dropped else history)
+            assert length==len(w['example'].inputs)
+            lengths.append(length)
+        cost = joint_cost([len(plan.groups[v]['encoder_starts_beats'])*c['target_beats']*c['fpn_rates'][0]
+                           for v in batch.audio_variants],lengths,small)
+        assert cost==batch.budget_cost
+    expected = [(r['window_id'],r['occurrence']) for r in plan.occurrences(3)]
+    assert seen==expected
+    original = [(r['window_id'],r['occurrence']) for r in plan._original_occurrences(3)]
+    assert Counter(seen)==Counter(original) and seen!=original
+    assert expected==[(r['window_id'],r['occurrence']) for r in plan.occurrences(3)]
+    assert expected!=[(r['window_id'],r['occurrence']) for r in plan.occurrences(4)]
     bad = deepcopy(plan.manifest)
     bad['config']['chart_history_beats']+=1
     (tmp_path/'plan/plan.json').write_text(json.dumps(bad))
@@ -270,25 +299,29 @@ def test_real_dataset_reads_fields_supports_and_plan_without_rebuilding(config,t
 
 
 class EpochDataset(torch.utils.data.Dataset):
-    def __init__(self,items,config,training):
-        self.items,self.config,self.training = items,config,training
+    def __init__(self,items,config,plan):
+        self.items,self.config,self.training = items,config,plan.training
+        self.orders = {e:plan.occurrences(e) for e in range(1,config['decoder_train_scheduler_epochs']+1)}
     def __len__(self):
         return len(self.items)
     def __getitem__(self,index):
-        variant,epoch = index
+        variant,epoch,selection = index
+        rows = self.orders[epoch]
+        selected = {(rows[i]['window_id'],rows[i]['occurrence']):i for i in selection}
         item = dict(self.items[int(variant)])
         item['windows'] = []
         c = self.config
         tokens = (Moment(0),Note.make('slide','A2'),Route(0,1),SlideDuration(24),Moment(500),Note.make('tap','A1'))
         for original in self.items[int(variant)]['windows']:
             identity,occurrence = original['identity']
-            if not self.training and occurrence:
+            if original['identity'] not in selected:
                 continue
             old = original['example']
             w = build_window(tokens,original['timing'],sequence_start_tick=0,start_tick=old.start_tick,end_tick=old.end_tick,
                 audio_after_beats=1,audio_end_seconds=1.2,history_beats=4,history_dropout=c['decoder_history_dropout'],
                 training=self.training,rng=history_rng(c['decoder_train_seed'],epoch,identity,occurrence))
-            item['windows'].append(dict(original,example=w,stages=(None,)*w.boundary_index+original['stages'][old.boundary_index:]))
+            item['windows'].append(dict(original,example=w,sequence_index=selected[original['identity']],
+                stages=(None,)*w.boundary_index+original['stages'][old.boundary_index:]))
         return item
 
 
@@ -296,10 +329,12 @@ class EpochDataset(torch.utils.data.Dataset):
 def test_runner_exact_epoch_resume_dropout_validation_and_failure(config,tmp_path,monkeypatch,workers):
     from functools import partial
     from torch.utils.data import DataLoader
-    from maidata.training.data import AudioBatchSampler,worker_init
+    from maidata.training.data import worker_init
+    from maidata.decoder_training.data import WindowBatchSampler
+    from maidata.decoder_training.batching import occurrence_batches
     from maidata.decoder_training.recipe import PATH_KEYS
     c = dict(config,decoder_dropout=.1,decoder_history_dropout=.5,decoder_train_stop_after_epochs=6,
-             decoder_train_workers=workers)
+             decoder_train_workers=workers,decoder_train_token_budget=24)
     c.update({k:str(tmp_path/k) for k in PATH_KEYS})
     items = [training_item(i,c,monkeypatch) for i in range(2)]
     class Plan:
@@ -308,12 +343,22 @@ def test_runner_exact_epoch_resume_dropout_validation_and_failure(config,tmp_pat
             self.training=training
             self.manifest={'epoch':1}
         def batches(self,e,c):
-            order = ['1','0'] if e%2 else ['0','1']
-            return [[order]]
+            rows = self.occurrences(e)
+            # Use complete freshly formed history/dropout input lengths.
+            data = EpochDataset(items,c,self)
+            lengths = [len(data[(r['audio_variant'],e,(r['sequence_index'],))]['windows'][0]['example'].inputs)
+                       for r in rows]
+            audio = {str(i):len(item['coverage'].starts(include_tail=False))*c['target_beats']*c['fpn_rates'][0]
+                     for i,item in enumerate(items)}
+            return occurrence_batches(rows,audio,lengths,c)
         def occurrences(self,e):
-            return list(range(6 if self.training else 4))
+            rows = [dict(window_id=w['identity'][0],occurrence=w['identity'][1],audio_variant=str(i))
+                    for i in range(2) for w in items[i]['windows'] if self.training or not w['identity'][1]]
+            if self.training:
+                random.Random(f'decoder-windows:{c["decoder_train_seed"]}:{e}').shuffle(rows)
+            return [dict(row,sequence_index=i) for i,row in enumerate(rows)]
     def loader(p,c,hashes):
-        return DataLoader(EpochDataset(items,c,p.training),batch_sampler=AudioBatchSampler(p,c),
+        return DataLoader(EpochDataset(items,c,p),batch_sampler=WindowBatchSampler(p,c),
             collate_fn=partial(collate_audio,config=c,packed=True),generator=torch.Generator().manual_seed(71),
             num_workers=workers,persistent_workers=workers > 0,worker_init_fn=worker_init)
     frozen = {name:deepcopy(getattr(DecoderTrainer(c),name).state_dict()) for name in ('encoder','draft','planner')}
@@ -330,12 +375,13 @@ def test_runner_exact_epoch_resume_dropout_validation_and_failure(config,tmp_pat
     full = dict(c,decoder_train_output=str(tmp_path/'full'))
     runner.run(full)
     interrupted = dict(c,decoder_train_output=str(tmp_path/'interrupted'))
+    steps = [len(Plan(None,c,training=True).batches(e,c)) for e in range(1,7)]
     actual_update = runner.update
     calls = 0
     def fail(*args,**kwargs):
         nonlocal calls
         calls += 1
-        if calls==3:
+        if calls==sum(steps[:2])+1:
             raise RuntimeError('interruption')
         return actual_update(*args,**kwargs)
     monkeypatch.setattr(runner,'update',fail)
@@ -359,7 +405,7 @@ def test_runner_exact_epoch_resume_dropout_validation_and_failure(config,tmp_pat
                 torch.testing.assert_close(value,other,rtol=0,atol=0)
             else:
                 assert value==other
-    assert a['step']==b['step']==6
+    assert a['step']==b['step']==sum(steps)
     assert torch.equal(a['rng']['torch'],b['rng']['torch'])
     assert a['rng']['python']==b['rng']['python']
     import numpy as np
@@ -372,7 +418,7 @@ def test_runner_exact_epoch_resume_dropout_validation_and_failure(config,tmp_pat
     continuous = [json.loads(s) for s in (tmp_path/'full/metrics.jsonl').read_text().splitlines()]
     assert [m['train'] for m in continuous]==[m['train'] for m in metrics]
     assert metrics[-1]['validation']['diagnostics']['history_dropped']==0
-    assert runner.run(interrupted,resume=path)['step']==6
+    assert runner.run(interrupted,resume=path)['step']==sum(steps)
     with pytest.raises(ValueError,match='binding changed'):
         runner.run(dict(interrupted,decoder_history_dropout=.2),resume=path)
 
@@ -464,6 +510,42 @@ def test_gt_targets_do_not_enter_frozen_producer(config,monkeypatch):
 def test_required_recipe_is_not_filled_from_pretraining_defaults(config):
     from maidata.entry import CONFIG
     assert CONFIG['decoder_train_workers']==12
+    assert CONFIG['decoder_train_warmup_steps']==200
+    assert CONFIG['decoder_train_gradient_accumulation_steps']==1
+    assert CONFIG['decoder_train_token_budget']==45056
+    assert CONFIG['decoder_train_audio_token_weight']==CONFIG['decoder_train_chart_token_weight']==1
     assert CONFIG['decoder_train_learning_rate'] is None and CONFIG['decoder_train_checkpoint'] is None
     with pytest.raises(ValueError,match='explicit Decoder training recipe'):
         recipe.validate(CONFIG)
+
+
+def test_joint_budget_padding_deduplication_oversize_and_final_accumulation(config):
+    from maidata.decoder_training.batching import occurrence_batches,joint_cost
+    rows = [dict(audio_variant=v,window_id=str(i),occurrence=0) for i,v in enumerate(('a','a','b','c','a'))]
+    c = dict(config,decoder_train_token_budget=32,decoder_train_gradient_accumulation_steps=2)
+    steps = occurrence_batches(rows,dict(a=10,b=14,c=50),[4,9,4,3,5],c)
+    assert steps==[[[rows[0],rows[1]],[rows[2]]],[[rows[3]],[rows[4]]]]
+    assert joint_cost([10],[4,9],c)['weighted_tokens']==28
+    assert joint_cost([10,14],[4,4],c)['weighted_tokens']==36  # audio padding is charged
+    assert joint_cost([50],[3],c)['oversized']
+    weighted = dict(c,decoder_train_audio_token_weight=2,decoder_train_chart_token_weight=.5)
+    assert joint_cost([10],[4,9],weighted)['weighted_tokens']==29
+    # Accumulation 1 never joins batches; final partial cycles keep their rows.
+    assert len(occurrence_batches(rows[:4],dict(a=10,b=14,c=50),[4,9,4,3],c)[-1])==1
+
+
+@pytest.mark.parametrize('dropout',[0.,.15,1.])
+def test_length_index_matches_real_inputs_with_negative_start_chain_and_tail(config,monkeypatch,dropout):
+    from maidata.decoder_training.lengths import chart_lengths
+    tokens = [Moment(0),Note.make('slide','A2'),Route(0,1),SlideDuration(24),
+              Moment(500),Note.make('hold','A1'),HoldDuration(2),Moment(500),Note.make('touch','C')]
+    record,_,_ = fields(monkeypatch,tokens,audio_end=4)
+    rows = [dict(window_id=str(start),start_tick=start,end_tick=start+288) for start in (-96,0,96,288,576)]
+    lengths = chart_lengths(record,rows,4)
+    timing = TimingMap.from_ir(record['metadata'])
+    for row in rows:
+        w = build_window(tokens,timing,sequence_start_tick=0,start_tick=row['start_tick'],end_tick=row['end_tick'],
+            audio_after_beats=1,audio_end_seconds=4,history_beats=4,history_dropout=dropout,
+            training=True,rng=history_rng(19,2,row['window_id'],0))
+        target,history = lengths[row['window_id']]
+        assert target+(0 if w.history_dropped else history)==len(w.inputs)

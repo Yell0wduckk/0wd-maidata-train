@@ -110,13 +110,15 @@ CONFIG = {
     "decoder_train_learning_rate": None,
     "decoder_train_weight_decay": None,
     "decoder_train_gradient_clip": None,
-    "decoder_train_warmup_steps": None,
+    "decoder_train_warmup_steps": 200,  # Optimizer updates.
     "decoder_train_scheduler_epochs": None,
     "decoder_train_stop_after_epochs": None,
     "decoder_train_precision": None,
-    "decoder_train_audio_groups_per_batch": None,
-    "decoder_train_gradient_accumulation_steps": None,
-    "decoder_train_token_budget": None,  # Padded M input tokens per chunk; no history truncation.
+    "decoder_train_gradient_accumulation_steps": 1,  # One batch per optimizer update.
+    "decoder_train_token_budget": 45056,  # Padded unique full-song P0 + padded M inputs.
+    "decoder_train_audio_token_weight": 1.0,
+    "decoder_train_chart_token_weight": 1.0,
+    "decoder_train_chunk_token_budget": 45056,  # Independent M computation cap; never crop history.
     "decoder_train_physical_weight": None,
     "decoder_train_judge_weight": None,
     "decoder_train_trajectory_weight": None,

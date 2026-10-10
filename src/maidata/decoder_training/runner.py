@@ -45,7 +45,7 @@ class Metrics:
 
 
 def prepared_chunks(batch, config):
-    if batch.token_budget != config['decoder_train_token_budget']:
+    if batch.token_budget != config['decoder_train_chunk_token_budget']:
         raise ValueError('worker chunk budget differs from runtime configuration')
     return batch.chunks
 
@@ -95,7 +95,8 @@ def update(model, batches, opt, sched, config, geometry, *, audit=False):
                   or not gradients['decoder'] or not changed['decoder']):
         raise ValueError('stage II must update M only, with frozen E/D/P')
     return metrics,dict(gradient_norm=float(norm),gradients=gradients,changed_parameter_tensors=changed,
-                        chunks=len(costs),padded_token_costs=costs)
+                        chunks=len(costs),padded_token_costs=costs,
+                        batch_costs=[b.budget_cost for b in batches])
 
 
 @torch.no_grad()
@@ -207,22 +208,25 @@ def run(config, *, resume=None, cuda_check=False, check_step=0):
         loaders[0].batch_sampler.epoch = epoch
         iterator = epoch_iterator(loaders[0],restored[0])
         restored[0] = None
-        metrics,updates,groups,windows = Metrics(),0,0,0
+        metrics,updates,group_instances = Metrics(),0,0
+        groups, identities = set(), []
         while batches := list(islice(iterator,config['decoder_train_gradient_accumulation_steps'])):
             current,_ = update(model,batches,opt,sched,config,geometry)
             metrics.merge(current)
             updates += 1
             step += 1
-            groups += sum(len(b.audio_variants) for b in batches)
-            windows += sum(len(b.windows) for b in batches)
+            group_instances += sum(len(b.audio_variants) for b in batches)
+            groups.update(v for b in batches for v in b.audio_variants)
+            identities.extend(w['identity'] for b in batches for w in b.windows)
             print(json.dumps(dict(epoch=epoch,update=updates,updates=steps[epoch-1],step=step,
-                                  loss=current.report(config)['loss'],lr=opt.param_groups[0]['lr'])),flush=True)
-        expected = len(plans[0].occurrences(epoch))
-        if updates != steps[epoch-1] or groups != len(plans[0].groups) or windows != expected:
+                                  loss=current.report(config)['loss'],lr=opt.param_groups[0]['lr'],
+                                  batch_costs=[b.budget_cost for b in batches])),flush=True)
+        expected = [(r['window_id'], r['occurrence']) for r in plans[0].occurrences(epoch)]
+        if updates != steps[epoch-1] or groups != set(plans[0].groups) or identities != expected:
             raise ValueError('incomplete occurrence epoch; checkpoint not saved')
         final = epoch == config['decoder_train_stop_after_epochs']
         result = dict(epoch=epoch,step=step,train=metrics.report(config),seconds=time.perf_counter()-start,
-                      audio_groups=groups,windows=windows)
+                      audio_groups=len(groups),audio_group_instances=group_instances,windows=len(identities))
         improved = False
         if epoch % 5 == 0 or final:
             result['validation'] = validate(model,loaders[1],config,geometry,final=final,restored_rng=restored[1])

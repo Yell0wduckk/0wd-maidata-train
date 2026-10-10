@@ -5,7 +5,7 @@ import torch
 from maidata.audio.layout import prepare_encoder_layout
 from maidata.draft.layout import prepare_p0, prepare_selection
 from maidata.decoder.batching import collate_windows, audio_query_layout, audio_key_spans
-from .batching import window_chunks
+from .batching import window_chunks, joint_cost
 from .supervision import prepare
 
 
@@ -48,15 +48,19 @@ def prepare_batch(batch, config):
             before_beats=before, after_beats=after)
     batch.chunks = []
     p0 = batch.layouts['p0']
+    batch.budget_cost = joint_cost(p0['present'].sum(-1).tolist(),
+        [len(w['example'].inputs) for w in batch.windows], config)
+    if batch.budget_cost['oversized'] and len(batch.windows) != 1:
+        raise ValueError('multi-window batch exceeds the joint token budget')
     spans = audio_key_spans(layout['resample'][0]['valid'].flatten()[p0['indices']] & p0['present'])
-    for indices in window_chunks(batch.windows, config['decoder_train_token_budget']):
+    for indices in window_chunks(batch.windows, config['decoder_train_chunk_token_budget']):
         rows = [batch.windows[i] for i in indices]
         tokens, types, _ = collate_windows([w['example'] for w in rows], device='cpu')
         index = torch.tensor(indices, dtype=torch.long)
         audio = draft.audio_mapping[batch.groups[index]]
         batch.chunks.append(Chunk(index, tokens, types, prepare(rows),
             audio_query_layout(tokens.valid, audio, len(batch.coverages), spans=spans), tokens.valid.numel()))
-    batch.token_budget = config['decoder_train_token_budget']
+    batch.token_budget = config['decoder_train_chunk_token_budget']
     # Transport only tensors + small occurrence metadata. Rule objects, complete
     # support dictionaries and GT token trees stay inside the worker.
     batch.windows = [dict(identity=w['identity'], history_dropped=w['example'].history_dropped)
