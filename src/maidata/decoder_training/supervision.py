@@ -10,6 +10,7 @@ from maidata.time import duration_end
 from maidata.decoder.supports import categorical_support, time_candidates
 from maidata.decoder.probability import categorical_log_probabilities, interval_log_probabilities
 from maidata.decoder.losses import Reduction, DecoderLoss, physical_categories
+from .intervals import compact_time_group
 
 
 KEYS = ('main', 'physical', 'judge', 'trajectory')
@@ -95,11 +96,12 @@ def prepare(windows):
         if bounds[0] is not None:
             packed[key].update(lower=pad_sequence([v[0] for v in bounds],batch_first=True),
                                upper=pad_sequence([v[1] for v in bounds],batch_first=True,padding_value=1))
+            packed[key] = compact_time_group(packed[key])
     return Prepared(packed, counts, dict(indices=torch.tensor(list(flag_rows),dtype=torch.long).reshape(-1,2),
         args=torch.tensor(list(flag_rows.values()),dtype=torch.long).reshape(-1,2)))
 
 
-def loss(heads, output, prepared, *, distributions, geometry, diagnostics=None):
+def loss(heads, output, prepared, *, distributions, geometry, diagnostics=None, time_diagnostics=None):
     zero = output.hidden.float().sum()*0
     totals = dict(main=zero, physical=zero.expand(4), judge=zero, trajectory=zero)
     # The shared conditional adapter runs once per NOTE, not once per flag.
@@ -124,15 +126,24 @@ def loss(heads, output, prepared, *, distributions, geometry, diagnostics=None):
         else:
             logits = None
         lp = (categorical_log_probabilities(logits,g['allowed'],validate=False) if logits is not None else
-            interval_log_probabilities(heads.time_parameters(h,key),g['lower'],g['upper'],g['allowed'],distributions[key],validate=False))
-        nll = -torch.logsumexp(lp.masked_fill(~g['target'],-torch.inf),-1)
+            interval_log_probabilities(heads.time_parameters(h,key),g['lower'],g['upper'],g['allowed'],
+                distributions[key],validate=False,output_dtype=torch.float64))
+        # Finish interval unions in FP64 before reducing per-decision FP32 losses.
+        nll = -torch.logsumexp(lp.masked_fill(~g['target'],-torch.inf),-1).float()
         totals['main'] = totals['main'] + (nll*g['main']).sum()
         if g['has_physical']:
-            totals['physical'] = totals['physical'] + (physical_categories(lp,g['penalty'],validate=False)*g['scale'][:,None]).sum(0)
+            totals['physical'] = totals['physical'] + (physical_categories(lp,g['penalty'],validate=False).float()*g['scale'][:,None]).sum(0)
         if key == 'route':
             j,t = geometry(lp,g['target'].long().argmax(-1))
             totals['judge'], totals['trajectory'] = totals['judge']+j.sum(), totals['trajectory']+t.sum()
-        if diagnostics is not None:
+        if time_diagnostics is not None and logits is None:
+            # A merged integration region is not an emitted time candidate;
+            # argmax of region mass would be a different, invalid accuracy metric.
+            row = time_diagnostics.setdefault(key, dict(probability_sum=0., nll_sum=0., count=0))
+            row['probability_sum'] += float(((-nll.detach()).exp()*g['main']).sum())
+            row['nll_sum'] += float((nll.detach()*g['main']).sum())
+            row['count'] += int(g['main'].sum())
+        if diagnostics is not None and logits is not None:
             name = (f'pad_{key[1]}' if key[0] == 'pad' else FLAGS[key[1]]) if isinstance(key,tuple) else key
             prediction = lp.detach().argmax(-1)
             correct = g['target'].gather(1,prediction[:,None])[:,0] & g['main']

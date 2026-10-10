@@ -95,6 +95,8 @@ loss = sums.objective(physical_weight=physical_weight,
 
 `DecoderLoss`可跨窗口或分块相加，最后才求均值。主监督按实际分类/时间决策计数；Physical按有效类型/内容单位计数，NOTE内部kind/pad各0.5，四类固定`(1,1,4,1)/4`；几何两项按ROUTE位置独立平均。有效零罚项保留Physical分母，flags完全不参与Physical梯度。使用逻辑batch分块反传时须先确定整个逻辑batch的分母，再按同一分母缩放各分子；不能先对每块求均值。
 
+阶段二训练对delta和duration采用离线合并的时间积分区间：相邻cell仅在基础合法、GT归属及四类新增归责一致时合并，保留非连续缺口和GT边界。直接对并集求Logistic质量，避免对全部可生成格逐格计算loss；生成候选、分布、归责和决策计数不变。见[训练概率与缓存](decoder-training.md)。
+
 ## 验证范围
 
 定向CPU测试位于`tests/test_decoder_{network,time_windows,supervision,session}.py`，覆盖默认/非默认结构、K变化、NA与合法零、teacher/incremental一致、因果性与目标类型隔离、plan位置不变性、空mask、FP32及CPU BF16反向、真实字段/规则接口、窗尾与BPM、三套loss、跨模块梯度与冻结、链/分支快照。几何只读加载、旧数学对照和无旧包运行时依赖分别验证。

@@ -9,7 +9,7 @@ from torch.nn.functional import pad
 from maidata.decoder.types import TokenBatch
 from .supervision import Prepared, KEYS
 
-SCHEMA = 'maidata.decoder-window-tensors.v1'
+SCHEMA = 'maidata.decoder-window-tensors.v2'
 CONFIG_KEYS = ('target_beats', 'target_stride_beats', 'audio_after_beats', 'chart_history_beats')
 
 

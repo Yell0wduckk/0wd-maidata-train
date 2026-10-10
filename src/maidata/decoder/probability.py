@@ -54,7 +54,7 @@ def interval_log_mass(raw, lower, upper, spec, *, validate=True):
     return torch.logsumexp(x[..., 0].log_softmax(-1).unsqueeze(-2) + component, -1)
 
 
-def interval_log_probabilities(raw, lower, upper, valid, spec, *, validate=True):
+def interval_log_probabilities(raw, lower, upper, valid, spec, *, validate=True, output_dtype=torch.float32):
     """Normalize the joint finite cells + tail over BASIC support, before Physical."""
     if validate:
         if valid.shape != lower.shape or valid.dtype != torch.bool:
@@ -64,7 +64,7 @@ def interval_log_probabilities(raw, lower, upper, valid, spec, *, validate=True)
     a = lower.masked_fill(~valid, 0)
     b = upper.masked_fill(~valid, 1)
     mass = interval_log_mass(raw, a, b, spec, validate=validate).masked_fill(~valid, -torch.inf)
-    return (mass - torch.logsumexp(mass, -1, keepdim=True)).float()
+    return (mass - torch.logsumexp(mass, -1, keepdim=True)).to(output_dtype)
 
 
 def categorical_log_probabilities(logits, allowed, *, validate=True):

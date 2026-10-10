@@ -12,6 +12,7 @@
 | `decoder_training.preparation/transport` | worker 内整理去重映射、padding 和分块；按 dtype 打包 IPC、pin memory 与分块 H2D |
 | `decoder_training.export_windows/support_cache` | 离线恢复真实动作与首次归责账本，准备窗首、窗内和终端支持 |
 | `decoder_training.window_cache` | 读取已打包的输入与监督张量，执行历史 dropout、padding 和行索引平移 |
+| `decoder_training.intervals/compact_windows` | 离线合并等价时间积分区间；从已有窗口张量转换，不重查规则 |
 | `decoder_training.network` | 只持有 M；接收已选取的公开缓存张量，执行可训练投影 |
 | `decoder_training.batching` | 按实际 M 输入长度连续分块，不改变 occurrence 顺序或裁剪历史 |
 | `decoder_training.supervision` | 离线整理支持与计数；训练执行批量小头及三组独立 loss 归约 |
@@ -49,6 +50,10 @@
 
 批量小头实现与 `decoder.supervision.decoder_loss` 逐行参考比较总和、计数和梯度。分块及梯度累积不采用窗口均值的平均。
 
+MOMENT（delta）、HOLD_DURATION、SLIDE_DURATION 的训练概率直接积分紧凑区间，不枚举全部 tick/cell。仅合并端点严格相接、GT归属相同、四类Physical新增归责位相同的基础合法cell；保留不连续支持的缺口、GT边界和无穷尾部。每个合并区间的Logistic质量等于原cell质量之和，因此基础归一化、GT NLL及四类Physical补集概率保持原数学定义。有效决策计数、NOTE五五分配和逻辑batch分母沿用合并前计数，不按合并后的区间数量计数。
+
+区间端点、CDF质量及并集归约使用FP64，完成每个决策的概率归约后再输出FP32 loss；不在大量窄格的FP32 log概率上累加。模型主体精度与参数不变。紧凑区间只供loss积分，推理仍按原cell/代表tick生成，不改变可生成时间或Physical规则。末轮分类诊断保留accuracy；时间诊断使用GT cell的概率总和、NLL总和及计数，不对合并区域的质量做argmax冒充时间格准确率。
+
 ## 计算复用与传输
 
 通过独立命令准备当前选择范围的窗口张量：
@@ -58,6 +63,14 @@ python -m maidata.decoder_training.export_windows --config decoder-stage2.json -
 ```
 
 将 `decoder_train_window_cache` 指向输出目录。该步骤复用已有字段、Physical，不重建源缓存或 P0/Z/plan；只处理计划中的基础窗和空尾窗，重复 occurrence 共用一份产物。每个窗口保存不压缩的 dtype 连续张量缓冲及轻量布局，新增产物在离线生成时检查一次落盘往返。历史长度和目标长度保存在 manifest。
+
+窗口张量v2使用上述紧凑时间积分区间。已有v1窗口可直接转换到新目录：
+
+```sh
+python -m maidata.decoder_training.compact_windows --source OLD_WINDOW_CACHE --output COMPACT_WINDOW_CACHE --workers 12
+```
+
+转换仅读取已完成的窗口张量，保留token、顺序、长度、计数及非时间监督；不读取字段、Physical、音频或P0/Z/plan。将 `decoder_train_window_cache` 改为新目录，从原完整轮checkpoint恢复，保留optimizer、scheduler和RNG；不改运行中的源码或原缓存。
 
 DataLoader worker 只读取所选窗口输入与监督张量，以及所需 P0/Z/plan；按 seed/epoch/occurrence 选择历史视图、平移标签索引、padding，再按 dtype 打包。标签、合法 mask、Physical 罚项及其计数已离线确定。训练进程不做整谱解压、校验、规则重放或候选生成；不扫描输入张量的形状、有限值及归属。模型投影和概率运算的重复输入检查在训练/validation 调用中关闭；合法性 mask、概率归一化与梯度裁剪是实际计算，继续保留。
 

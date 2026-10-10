@@ -48,11 +48,11 @@ def prepared_chunks(batch, config):
     return batch.chunks
 
 
-def chunk_loss(model, conditions, audio_kv, chunk, config, geometry, *, diagnostics=None):
+def chunk_loss(model, conditions, audio_kv, chunk, config, geometry, *, diagnostics=None, time_diagnostics=None):
     memory = model.memory(conditions,audio_kv,chunk.indices,chunk.audio_layout)
     output = model.decoder(chunk.tokens,chunk.next_types,memory)
     terms = loss(model.decoder.heads,output,chunk.labels,distributions=model.distributions,
-                 geometry=geometry,diagnostics=diagnostics)
+                 geometry=geometry,diagnostics=diagnostics,time_diagnostics=time_diagnostics)
     return terms,output
 
 
@@ -100,7 +100,7 @@ def validate(model, loader, config, geometry, *, final, restored_rng=None):
     mode,rng = model.training,checkpoint.rng_state()
     model.eval()
     device = next(model.decoder.parameters()).device
-    metrics,diagnostics = Metrics(),dict(field_accuracy={},windows=0,history_dropped=0)
+    metrics,diagnostics = Metrics(),dict(field_accuracy={},time_target_probability={},windows=0,history_dropped=0)
     try:
         for raw in epoch_iterator(loader,restored_rng):
             prepared_chunks(raw,config)
@@ -112,7 +112,8 @@ def validate(model, loader, config, geometry, *, final, restored_rng=None):
                 for cpu_chunk in batch.chunks:
                     chunk = cpu_chunk.to(device)
                     terms,output = chunk_loss(model,conditions,audio_kv,chunk,config,geometry,
-                        diagnostics=diagnostics['field_accuracy'] if final else None)
+                        diagnostics=diagnostics['field_accuracy'] if final else None,
+                        time_diagnostics=diagnostics['time_target_probability'] if final else None)
                     metrics.add(terms)
                     del terms,output,chunk
             if final:
