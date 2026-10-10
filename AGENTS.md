@@ -10,6 +10,8 @@
 
 ## 新 Encoder 与保留的旧模型
 
+新字段的数据与规则层位于 `maidata.chart`、`maidata.time`、`maidata.physical`，接口见 `docs/chart-fields-physical.md`。只实现编解码、语法、时间标签、Physical查询/动作/回退，不引入embedding、小头、Decoder或训练。生产模块不导入旧包；测试可以使用保留旧实现作单段数值/规则对照。几何通过显式资源路径读取，不重建旧资产。
+
 - `maidata` 不导入旧模型或参考仓库。帮助和配置展示仅需标准库，实际构建时延迟导入 Torch；默认命令成功构建 `AudioEncoder` 并提示 Decoder 与训练未实现。
 - 新 Encoder 通过 `prepare_song`、`encode_windows`、`forward` 消费准备好的 Mel、aux32、绝对拍坐标和有效位，仅公开 P0/P1/P2 三路局部输出。独立输入生产已实现；Decoder、草稿、训练与恢复系统仍待单独实现。
 - 复制来源是 `main-new-audio-draft-beat` 的一拍草稿/native 音频路线。当前 native 路径冻结保留的音频模块，训练步读取外部原生 22 拍 P0/C0/C1 缓存。

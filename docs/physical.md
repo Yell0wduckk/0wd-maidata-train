@@ -1,6 +1,6 @@
 # 行内条件预测与 Physical
 
-这是复制源码保留的字段、L3 和 Physical 语义参考。新 encoder 尚未实现，不改变这些规则。当前路线与执行边界见 [current-runtime](current-runtime.md)；版本兼容只由中央 runtime-versions.toml 维护。
+这是复制源码保留的旧字段、L3和Physical语义参考。新字段的数据/规则层见[chart-fields-physical](chart-fields-physical.md)，不直接采用本页的旧行结构和神经网络接线。当前路线与执行边界见[current-runtime](current-runtime.md)；旧模型版本兼容只由中央runtime-versions.toml维护。
 
 ## 行内条件读出
 

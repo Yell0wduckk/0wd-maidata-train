@@ -47,6 +47,7 @@ where = ["src"]
 namespaces = false
 
 [tool.setuptools.package-data]
+"maidata.chart" = ["assets/*.json"]
 maimai_baseline = ["assets/*.json", "runtime-versions.toml"]
 "maimai_baseline.physical" = ["csrc/*.cpp", "csrc/*.cu"]
 

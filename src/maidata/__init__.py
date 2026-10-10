@@ -1,1 +1,1 @@
-"""Independent maidata audio encoder and its editable build entry."""
+"""Independent audio encoder, input preparation and chart data/rule modules."""

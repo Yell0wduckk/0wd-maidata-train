@@ -1,0 +1,201 @@
+"""Token adapter over rule-only actions; speculative queries never commit."""
+from dataclasses import dataclass
+import math
+
+from maidata.chart.grammar import Grammar, GrammarSnapshot
+from maidata.chart.types import (ChartError, Completion, End, Moment, Note,
+                                Route, HoldDuration, SlideDuration, BUTTON_PADS, TOUCH_PADS)
+from maidata.time import duration_end
+from .actions import materialize
+from .rules import reasons, prune_history, EPS
+
+
+@dataclass(frozen=True)
+class Decision:
+    basic_errors: tuple[str, ...] = ()
+    physical: frozenset[str] = frozenset()
+    deferred: bool = False
+
+    @property
+    def allowed(self):
+        return not self.basic_errors and not self.physical
+
+
+@dataclass(frozen=True)
+class PhysicalSnapshot:
+    grammar: GrammarSnapshot
+    actions: tuple
+
+
+@dataclass(frozen=True)
+class DurationSupport:
+    ticks: tuple[int, ...]
+    decisions: tuple[Decision, ...]
+    intervals: tuple[tuple[int, int], ...]  # inclusive integer tick intervals
+
+
+class PhysicalError(ValueError):
+    def __init__(self, decision):
+        self.decision = decision
+        super().__init__(f'candidate rejected: basic={decision.basic_errors}, physical={sorted(decision.physical)}')
+
+
+class PhysicalState:
+    def __init__(self, timing, geometry, *, audio_end_seconds):
+        if not math.isfinite(audio_end_seconds) or audio_end_seconds <= 0:
+            raise ValueError('audio_end_seconds must be finite and positive')
+        self.timing, self.geometry = timing, geometry
+        self.audio_end_seconds = float(audio_end_seconds)
+        self.grammar = Grammar(timing)
+        self.actions = ()
+
+    def snapshot(self):
+        return PhysicalSnapshot(self.grammar.snapshot(), self.actions)
+
+    def restore(self, snapshot):
+        if not isinstance(snapshot, PhysicalSnapshot):
+            raise TypeError('expected PhysicalSnapshot, not a token/action count')
+        self.grammar.restore(snapshot.grammar)
+        self.actions = snapshot.actions
+
+    def _basic(self, c):
+        start = self.timing.second(c.tick)
+        if start < -EPS or start >= self.audio_end_seconds:
+            return ('onset_outside_audio',)
+        duration = c.track.duration_tick if c.track else c.duration_tick
+        if c.note.short_hold or c.note.short_touch_hold:
+            duration = 1
+        if duration is not None and duration_end(self.timing, c.tick, duration, slide=c.track is not None) > self.audio_end_seconds+EPS:
+            return ('duration_outside_audio',)
+        return ()
+
+    def _trial(self, token, window_end=None):
+        grammar = Grammar(self.timing)
+        grammar.restore(self.grammar.snapshot())
+        completion = grammar.accept(token, window_end=window_end)
+        return grammar, completion
+
+    def query(self, token, *, window_end=None):
+        try:
+            g, c = self._trial(token, window_end)
+        except (ChartError, ValueError) as e:
+            return Decision((str(e),))
+        s = g.state
+        if isinstance(token, End) or (isinstance(token, Moment) and s.phase == 'closed'):
+            return Decision()
+        if isinstance(token, Moment):
+            # Window-closing queries above do not require a possible NOTE.
+            failures = set()
+            for kind, pads in (('tap', BUTTON_PADS), ('touch', TOUCH_PADS)):
+                for pad in pads:
+                    candidate = Completion(s.owner+1, s.moment, s.cursor, Note.make(kind, pad))
+                    basic = self._basic(candidate)
+                    if basic:
+                        return Decision(basic)
+                    bad = reasons(self.actions, materialize(candidate, self.timing, self.geometry), touch_repeat=False)
+                    if not bad:
+                        return Decision()
+                    failures.update(bad)
+            return Decision(physical=frozenset(failures))
+        if c is not None:
+            basic = self._basic(c)
+            if basic:
+                return Decision(basic)
+            return Decision(physical=reasons(self.actions, materialize(c, self.timing, self.geometry)))
+        if isinstance(token, Note):
+            # Only the head is known for a slide. A placeholder route would
+            # incorrectly rule out a chain that completes this prefix.
+            proxy = token if token.kind in ('hold', 'touch_hold') else Note.make('tap', token.pad)
+            candidate = Completion(s.owner, s.moment, s.cursor, proxy,
+                                   duration_tick=2 if token.kind in ('hold', 'touch_hold') else None)
+            basic = self._basic(candidate)
+            if basic:
+                return Decision(basic)
+            return Decision(physical=reasons(self.actions, materialize(candidate, self.timing, self.geometry)), deferred=True)
+        if isinstance(token, Route):
+            old = self.grammar.state
+            if old.phase == 'track_done' and old.track_count >= 2:
+                return Decision(physical=frozenset({'multitouch'}))
+            return Decision(deferred=True)
+        return Decision()
+
+    def accept(self, token, *, window_end=None):
+        decision = self.query(token, window_end=window_end)
+        if not decision.allowed:
+            raise PhysicalError(decision)
+        grammar, completion = self._trial(token, window_end)
+        actions = self.actions
+        if completion is not None:
+            actions += (materialize(completion, self.timing, self.geometry),)
+        if isinstance(token, (End, Moment)) and grammar.state.phase != 'closed':
+            actions = prune_history(actions, self.timing.second(grammar.state.cursor))
+        self.grammar, self.actions = grammar, actions
+        return completion
+
+    def close_window(self, target):
+        grammar = Grammar(self.timing)
+        grammar.restore(self.grammar.snapshot())
+        grammar.close_window(target)
+        self.grammar = grammar
+
+    def query_duration_ticks(self, ticks):
+        phase = self.grammar.state.phase
+        if phase not in ('hold', 'chain'):
+            raise ChartError('duration support requires a pending hold or complete route prefix')
+        ticks = tuple(ticks)
+        if any(type(t) is not int for t in ticks) or any(a >= b for a, b in zip(ticks, ticks[1:])):
+            raise ValueError('duration candidates must be increasing integer ticks')
+        constructor = HoldDuration if phase == 'hold' else SlideDuration
+        decisions = []
+        for tick in ticks:
+            try:
+                decision = self.query(constructor(tick))
+            except ChartError as e:
+                decision = Decision((str(e),))
+            decisions.append(decision)
+        intervals = []
+        for tick, decision in zip(ticks, decisions):
+            if not decision.allowed:
+                continue
+            if intervals and intervals[-1][1]+1 == tick:
+                intervals[-1] = intervals[-1][0], tick
+            else:
+                intervals.append((tick, tick))
+        return DurationSupport(ticks, tuple(decisions), tuple(intervals))
+
+    def query_note_positions(self, kind):
+        """Only kind is known; flags are absent from physical support."""
+        pads = TOUCH_PADS if kind in ('touch', 'touch_hold') else BUTTON_PADS
+        return {pad: self.query(Note.make(kind, pad)) for pad in pads}
+
+    def query_note_kinds(self):
+        """Existential projection over positions, without choosing a route."""
+        from maidata.chart.types import KINDS
+        result = {}
+        for kind in KINDS:
+            # Touch repeat belongs to the position stage only, as in the old
+            # engine; do not transfer that rule's responsibility to kind.
+            if kind in ('touch', 'touch_hold'):
+                g = self.grammar.state
+                decisions = []
+                for pad in TOUCH_PADS:
+                    n = Note.make(kind, pad)
+                    try:
+                        self._trial(n)
+                    except (ChartError, ValueError) as e:
+                        decisions.append(Decision((str(e),)))
+                        continue
+                    c = Completion(g.owner+1,g.moment,g.cursor,n,duration_tick=2 if kind == 'touch_hold' else None)
+                    basic = self._basic(c)
+                    decisions.append(Decision(basic, frozenset() if basic else reasons(
+                        self.actions,materialize(c,self.timing,self.geometry),touch_repeat=False), kind == 'touch_hold'))
+            else:
+                decisions = self.query_note_positions(kind).values()
+            decisions = tuple(decisions)
+            if any(d.allowed for d in decisions):
+                result[kind] = Decision(deferred=any(d.deferred for d in decisions if d.allowed))
+            else:
+                basic = tuple(sorted({e for d in decisions for e in d.basic_errors}))
+                bad = frozenset(e for d in decisions for e in d.physical)
+                result[kind] = Decision(basic, bad)
+        return result

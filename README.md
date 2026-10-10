@@ -4,7 +4,9 @@
 
 新 `maidata` 包已实现独立、可训练的音频 Encoder。18 项架构配置集中在 `src/maidata/entry.py` 顶部的普通 `CONFIG` 字典；构造器无第二套默认值，尺寸随配置推导。用法见 [Encoder 入口与接口](docs/maidata-entry.md)。
 
-**当前交付为 Encoder 与独立音频输入生产。** frontend、geometry、attention、blocks、pyramid、encoder 和 types 已实现；公开结果仅有 P0/P1/P2，支持按曲准备 G0 和按窗编码。`maidata.preparation` 生产直接拍网格 Mel、全曲 aux32、坐标和 mask，并构造 SongInputs/WindowInputs，见[输入缓存说明](docs/encoder-audio-cache.md)。Decoder、草稿、训练循环、loss 和 checkpoint 尚未接入。设计正本位于 [new-audio-encoder.md](../0wd-v3-refactor-docs/new-audio-encoder.md)。目录名 `0wd-v3` 不改变旧模型的架构或版本兼容值；旧模型版本仍只在 `src/maimai_baseline/runtime-versions.toml` 维护，新 Encoder 不读取该表。
+**当前交付包括 Encoder、独立音频输入生产和字段/Physical数据规则层。** frontend、geometry、attention、blocks、pyramid、encoder 和 types 已实现；Encoder公开结果仅有 P0/P1/P2，支持按曲准备 G0 和按窗编码。`maidata.preparation` 生产直接拍网格 Mel、全曲 aux32、坐标和 mask，并构造 SongInputs/WindowInputs，见[输入缓存说明](docs/encoder-audio-cache.md)。Decoder网络、草稿、训练循环、loss 和 checkpoint 尚未接入。设计正本位于 [new-audio-encoder.md](../0wd-v3-refactor-docs/new-audio-encoder.md)。目录名 `0wd-v3` 不改变旧模型的架构或版本兼容值；旧模型版本仍只在 `src/maimai_baseline/runtime-versions.toml` 维护，新 Encoder 不读取该表。
+
+独立的 `maidata.chart`、`maidata.time` 与 `maidata.physical` 已实现新字段的数据与规则层：IR编解码、Route-71连续链/分支、时间标签、Physical候选查询及动作回退。它们不实现可学习字段模块或Decoder网络，说明见[新字段与Physical](docs/chart-fields-physical.md)。
 
 仅覆盖 Encoder 的模块、接口与验证要求见 [实施文档](../0wd-v3-refactor-docs/encoder-execution-plan.md)。
 
@@ -25,6 +27,7 @@
 - [当前源码状态](docs/current-runtime.md)
 - [Maidata Encoder 入口与张量接口](docs/maidata-entry.md)
 - [全官谱音频输入缓存](docs/encoder-audio-cache.md)
+- [新字段、时间与 Physical](docs/chart-fields-physical.md)
 - [复制范围、独立 Git 与外部依赖](docs/import-and-layout.md)
 - [文档索引](docs/README.md)
 - [一拍草稿实现参考](docs/audio-draft.md)
