@@ -48,11 +48,11 @@ def _cuts(roots, lower, upper):
     return sorted(cuts)
 
 
-def _partition(roots, lower, upper, query):
+def _partition(roots, lower, upper, query, record=decision_record):
     rows = []
     cuts = _cuts(roots, lower, upper)
     for a, b in zip(cuts, cuts[1:]):
-        d = decision_record(query((a+b-1)//2))
+        d = record(query((a+b-1)//2))
         if rows and rows[-1][2] == d and rows[-1][1]+1 == a:
             rows[-1][1] = b-1
         else:
@@ -60,7 +60,7 @@ def _partition(roots, lower, upper, query):
     return rows
 
 
-def duration_support(state):
+def duration_support(state, *, query=None, record=decision_record):
     s, timing = state.grammar.state, state.timing
     slide = s.phase == 'chain'
     if s.phase not in ('chain', 'hold'):
@@ -92,10 +92,10 @@ def duration_support(state):
     # release/hold press_end = T(T^-1(origin + duration*scale) + 22/96)
     roots.extend((advance_ticks(timing,t,-22)-origin)/scale for t in fixed)
     return dict(domain=[lower,upper], intervals=_partition(roots,lower,upper,
-                lambda n: state.query(constructor(n))), outside_basic='duration_outside_audio')
+                lambda n: (query or state.query)(constructor(n)), record), outside_basic='duration_outside_audio')
 
 
-def moment_support(state):
+def moment_support(state, *, query=None, record=decision_record):
     """Absolute tick support for real onsets; window-closing queries bypass it."""
     s, timing = state.grammar.state, state.timing
     lower = s.cursor+1
@@ -114,10 +114,9 @@ def moment_support(state):
     end = max(0., max((history_end(a) for a in state.actions), default=timing.second(lower)))
     active_upper = min(upper, math.ceil(timing.second_to_beat(end)*96)+3)
     rows = _partition(roots, lower, max(lower-1,active_upper),
-                      lambda n: state.query(Moment(timing.delta_ms(s.cursor,n))))
+                      lambda n: (query or state.query)(Moment(timing.delta_ms(s.cursor,n))), record)
     if active_upper < upper:
-        from .state import Decision
-        d = decision_record(Decision())
+        d = record((query or state.query)(Moment(timing.delta_ms(s.cursor, max(lower,active_upper+1)))))
         if rows and rows[-1][2] == d:
             rows[-1][1] = upper
         else:

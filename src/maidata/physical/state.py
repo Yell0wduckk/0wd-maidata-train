@@ -121,10 +121,16 @@ class PhysicalState:
             return Decision(physical=reasons(self.actions, materialize(candidate, self.timing, self.geometry)), deferred=True)
         if isinstance(token, Route):
             old = self.grammar.state
-            if old.phase == 'track_done' and old.track_count >= 2:
+            if old.phase == 'track_done' and (old.track_count >= 2 or token.route_id == 70
+                    or any(a.track and a.owner == old.owner and a.wifi for a in self.actions)):
                 return Decision(physical=frozenset({'multitouch'}))
             return Decision(deferred=True)
         return Decision()
+
+    def query_types(self):
+        """Prefix-only type support; complete-action checks remain independent."""
+        from .attribution import AttributionState
+        return {kind: value.raw.decision() for kind, value in AttributionState(self).query_types().items()}
 
     def accept(self, token, *, window_end=None):
         decision = self.query(token, window_end=window_end)

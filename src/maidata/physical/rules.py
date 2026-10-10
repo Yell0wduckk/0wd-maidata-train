@@ -1,7 +1,6 @@
 """Port of the accepted interval rules; chains are one hand with many motions."""
 from collections import defaultdict
 from dataclasses import replace
-from .geometry import pad_bit, Geometry
 
 EPS = 1e-10
 CATEGORIES = ('multitouch', 'overlap', 'slide_too_fast', 'tap_on_slide')
@@ -93,39 +92,6 @@ def hand_segments(actions):
 
 
 def reasons(history, c, *, touch_repeat=True, check_same_path=True):
-    bad = set()
-    t, bit = c.press_start, pad_bit(c.pad)
-    launches_here = any(a.track and a.pad == c.pad and abs(a.launch-t) <= EPS for a in history)
-    for a in history:
-        if c.head:
-            if a.press_start <= t+EPS and t < a.press_end-EPS and pad_bit(a.pad) & bit:
-                bad.add('overlap')
-            if c.touch and touch_repeat and a.touch and a.pad == c.pad and -EPS <= t-a.press_start <= .25+EPS:
-                bad.add('overlap')
-            if a.track and not c.touch:
-                if a.launch-EPS <= t <= a.guard_end+EPS and a.pad == c.pad and not launches_here:
-                    bad.add('tap_on_slide')
-                for entered, mask in a.entries:
-                    if entered < t-EPS and t <= entered+.2+EPS and mask & bit:
-                        if not (launches_here and a.pad == c.pad and abs(entered-a.launch) <= EPS):
-                            bad.add('tap_on_slide')
-        if c.track and a.track:
-            if c.pad == a.pad and c.path_key == a.path_key and a.press_start-EPS <= t <= a.launch+EPS:
-                bad.add('slide_too_fast')
-            # Internal joints are motion starts, not new NOTE/head/wait events.
-            for old in a.motions:
-                for i, new in enumerate(c.motions):
-                    appearance = t if i == 0 else new.start
-                    if (check_same_path and not old.exempt and not new.exempt
-                            and Geometry.covers(old.path, new.path)
-                            and old.start <= new.start+EPS and old.end >= appearance-EPS):
-                        bad.add('slide_too_fast')
-    if c.track and not c.head:
-        own = [a for a in history if a.track and a.owner == c.owner]
-        if len(own) >= 2 or any(a.wifi for a in own) or c.wifi:
-            bad.add('multitouch')
-    spans = [(c.press_start, c.press_end)]+([(c.launch, c.release)] if c.track else [])
-    if any(n > 2 and any(lo < end-EPS and hi > start+EPS for start, end in spans)
-           for lo, hi, n in hand_segments((*history, c))):
-        bad.add('multitouch')
-    return frozenset(bad)
+    from .conflicts import action_conflicts
+    return frozenset(w.category for w in action_conflicts(
+        history, c, touch_repeat=touch_repeat, check_same_path=check_same_path))

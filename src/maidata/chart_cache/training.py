@@ -12,13 +12,14 @@ import os
 from pathlib import Path
 
 from maidata.chart.codec import token_from_dict
-from maidata.chart.types import Note, Route, Moment, HoldDuration, SlideDuration
 from maidata.physical import PhysicalState
-from maidata.physical.support import decision_record, duration_support, moment_support, interval_decision
+from maidata.physical.attribution import AttributionState
+from maidata.physical.conflicts import Conflict
+from maidata.physical.state import Decision
 from maidata.physical.rules import CATEGORIES, CATEGORY_WEIGHTS, CATEGORY_DIVISOR
 from maidata.time import TimingMap
 
-SCHEMA = 'maidata.training-physical-original.v1'
+SCHEMA = 'maidata.training-physical-original.v2'
 
 
 def build_supports(record, geometry):
@@ -26,32 +27,36 @@ def build_supports(record, geometry):
     state = PhysicalState(timing,geometry,audio_end_seconds=record['source']['audio_end_seconds'])
     tokens = [token_from_dict(t) for t in record['tokens']]
     state.inject_boundary(tokens[0],start_tick=record['start_tick'])
+    attribution = AttributionState(state)
     stages = []
     for i, token in enumerate(tokens[1:],1):
-        s = state.grammar.state
-        stage = dict(target_token_index=i, cursor_tick=s.cursor, owner=s.owner,
-                     phase=s.phase, grammar_types=list(state.grammar.allowed_types()))
-        if isinstance(token,Note):
-            stage['kind'] = {k:decision_record(d) for k,d in state.query_note_kinds().items()}
-            stage['pad_kind'] = token.kind
-            stage['pad'] = {p:decision_record(d) for p,d in state.query_note_positions(token.kind).items()}
-        elif isinstance(token,Route):
-            first = s.phase in ('route','track_done')
-            stage['route'] = [decision_record(state.query(Route(r,0 if first else None))) for r in range(71)]
-        elif isinstance(token,(HoldDuration,SlideDuration)):
-            stage['duration'] = duration_support(state)
-        elif isinstance(token,Moment):
-            stage['moment'] = moment_support(state)
+        stage = attribution.stage_and_accept(token)
+        stage['target_token_index'] = i
         stages.append(stage)
-        state.accept_source(token)
-    # The final real prefix still needs a terminal time query at training time.
-    stages.append(dict(target_token_index=len(tokens),cursor_tick=state.grammar.state.cursor,
-                       owner=state.grammar.state.owner,phase=state.grammar.state.phase,
-                       grammar_types=list(state.grammar.allowed_types()),moment=moment_support(state)))
+    stage = attribution.terminal_stage()
+    stage['target_token_index'] = len(tokens)
+    stages.append(stage)
     return dict(schema=SCHEMA,view='original',chart_id=record['source']['chart_id'],
                 source_schema=record['schema'],categories=list(CATEGORIES),
                 category_weights=list(CATEGORY_WEIGHTS),category_divisor=CATEGORY_DIVISOR,
                 stages=stages,token_count=len(tokens),boundary_target=False)
+
+
+def _validate_decision(record):
+    for key, witnesses in (('physical', 'conflicts'), ('penalty', 'new_conflicts')):
+        value = record[key]
+        if type(value) is not int or not 0 <= value < 16:
+            raise ValueError('invalid Physical category mask')
+        conflicts = frozenset(Conflict.from_record(row) for row in record[witnesses])
+        if any(c.category not in CATEGORIES for c in conflicts):
+            raise ValueError('unknown conflict category')
+        mask = sum(1 << i for i,c in enumerate(CATEGORIES) if any(w.category == c for w in conflicts))
+        if value != mask:
+            raise ValueError('Physical mask/witness mismatch')
+    if not {Conflict.from_record(c) for c in record['new_conflicts']} <= {Conflict.from_record(c) for c in record['conflicts']}:
+        raise ValueError('new responsibility without raw witness')
+    if any(type(record[k]) is not bool for k in ('deferred', 'penalty_deferred')):
+        raise ValueError('invalid deferred state')
 
 
 def validate(record):
@@ -62,6 +67,13 @@ def validate(record):
     for i,s in enumerate(record['stages'],1):
         if s['target_token_index'] != i:
             raise ValueError('support target index mismatch')
+        if set(s['types']) != set(s['grammar_types']):
+            raise ValueError('missing prefix type support')
+        for field in ('types', 'kind', 'pad'):
+            for value in s.get(field, {}).values():
+                _validate_decision(value)
+        for value in s.get('route', []):
+            _validate_decision(value)
         for kind in ('duration','moment'):
             if kind not in s:
                 continue
@@ -71,6 +83,7 @@ def validate(record):
             for a,b,d in support['intervals']:
                 if a != cursor or b < a or b > hi or not 0 <= d['physical'] < 16:
                     raise ValueError('support interval coverage/mask mismatch')
+                _validate_decision(d)
                 cursor = b+1
             if cursor != max(lo,hi+1):
                 raise ValueError('incomplete time support domain')
@@ -98,16 +111,27 @@ def load_supports(path):
         return validate(json.load(stream))
 
 
-def time_decision(stage, tick, *, window_end=None, censored=False):
-    """Clip cached real-onset support using the consumer's actual window.
+def candidate_decision(record, *, penalty=True):
+    """Training defaults to new responsibility; hard masks explicitly use raw."""
+    key = 'penalty' if penalty else 'physical'
+    deferred = 'penalty_deferred' if penalty else 'deferred'
+    return Decision(tuple(record['basic']),frozenset(c for i,c in enumerate(CATEGORIES)
+                    if record[key] & (1 << i)),record[deferred])
 
-    Window-closing exact queries and censored tails have no NOTE-completion
-    constraint. Probabilities and q are computed by the future training layer.
-    """
-    from maidata.physical.state import Decision
+
+def type_decision(stage, token_type, *, penalty=True):
+    return candidate_decision(stage['types'][token_type], penalty=penalty)
+
+
+def time_decision(stage, tick, *, window_end=None, censored=False, penalty=True):
+    """Apply actual-window closure after reading window-independent supports."""
     if 'moment' in stage and (censored or window_end is not None and tick >= window_end):
         return Decision()
-    return interval_decision(stage.get('duration',stage.get('moment')),tick)
+    support = stage.get('duration',stage.get('moment'))
+    for lo,hi,record in support['intervals']:
+        if lo <= tick <= hi:
+            return candidate_decision(record, penalty=penalty)
+    return Decision((support['outside_basic'],))
 
 
 def duration_candidate_cells(stage, timing):

@@ -97,7 +97,9 @@ PYTHONPATH=src python -m maidata.chart_cache.rebuild_fields \
 
 `python -m maidata.chart_cache.migrate` 读取已验收、已上传的原谱v1缓存；显式将旧END锚移入start_tick、将旧wifi NOTE转为slide/Route-70，然后重新生成v2动作与训练支持。不重算音频、几何，不生成镜像。不可表示源谱读取原有failure IR重试最新编码，仍不可表示的保留原因与IR，不能当成功谱。
 
-每个训练产物schema为 `maidata.training-physical-original.v1`，同样使用 `charts/<ID>/<difficulty>.json.gz`。`stages`与真实目标位置逐一对应，首枚输入边界不预测，另保留末尾时间查询支持。所有支持严格来自目标前的GT前缀：kind对位置作存在性投影，pad使用teacher kind，route使用既有连续段/branch，duration使用完整已选轨道。flags不参与Physical；ROUTE的语法错误与基础合法性独立于四类Physical mask。源码只产生候选支持，模型概率q、−log(1−q)、梯度及训练循环不在本次范围。
+每个训练产物schema为 `maidata.training-physical-original.v2`，同样使用 `charts/<ID>/<difficulty>.json.gz`。`stages`与真实目标位置逐一对应，首枚输入边界不预测，另保留末尾时间查询支持。所有支持严格来自目标前的GT前缀：类型覆盖全部语法允许选择，kind对位置作存在性投影，pad使用teacher kind，route使用既有连续段/branch，duration使用完整已选轨道。每个候选分别保存完整`physical`与首次归责`penalty`及具体冲突证据；同一冲突不重复计罚，同类新冲突仍保留。flags不参与Physical；语法错误与基础合法性独立于四类Physical mask。源码只产生候选支持，模型概率q、−log(1−q)、梯度及训练循环不在本次范围。
+
+已有成功原谱v2字段时，使用独立 `python -m maidata.chart_cache.rebuild_supports` 只生产受影响训练支持，复用原字段SHA和动作映射，不再次写入字段。该入口支持重复的`--chart-id`精确选择；接口和读取语义见[Physical首次归责](physical-attribution.md)。旧训练支持v1不能直接作为v2使用。
 
 时间支持保存绝对起音tick或duration整数tick的完整区间分区，按规则比较的交点计算，不逐tick穷举整曲，不假设单调safe_upper。Duration基础域由真实音频末端及written BPM确定；释放交点使用完整TimingMap的22tick逆映射。每段分别保存basic错误、四类位mask及deferred，允许合法支持多段不连续。`load_supports`正常读回检查schema、索引和区间覆盖；`time_decision(..., window_end=..., censored=...)`对窗外/尾部查询绕过真实NOTE完成性约束。4tick duration cell通过既有duration_cells适配，不缓存模型概率。窗口长度、stride、历史预算与数据计划均由后续消费者指定。
 

@@ -64,6 +64,8 @@ state.restore(saved)
 
 连续链共享一次head、启动等待、占手和末尾释放；快滑逐段使用实际运动时间与旧覆盖/豁免。内部接点不生成新head或等待，也不调用独立轨道handoff。并行分支保持独立轨道占手，最多一个附加分支；WiFi轨道按两手占用计算，包含WiFi的分支组合可编码；完整动作按原有Physical规则判断并保留违规GT。权重(1,1,4,1)与固定四类归约仅导出为后续loss常量，当前不计算模型损失或梯度。
 
+训练候选通过独立 `AttributionState` 维护首次归责，包含Router类型选择；完整动作拒绝与训练新增归责分别读取。`PhysicalState.query_types()`提供类型支持。具体冲突证据、快照、缓存v2及仅重建支持的接口见[Physical首次归责](physical-attribution.md)。
+
 ## 验证
 
 ```powershell
