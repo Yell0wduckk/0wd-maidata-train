@@ -1,1 +1,1 @@
-"""Independent audio encoder, input preparation and chart data/rule modules."""
+"""Independent Encoder, Draft, Decoder, preparation and chart/rule modules."""

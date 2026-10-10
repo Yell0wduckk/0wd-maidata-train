@@ -4,7 +4,7 @@
 
 ## 新 maidata：独立音频 Encoder
 
-入口为 `python -m maidata`，调用方式与 CPU 验证命令见 [maidata-entry](maidata-entry.md)。`entry.py` 顶部普通 `CONFIG` 集中Encoder与Draft架构参数，构造器无第二套默认值；`--help` 与 `--show-config` 仅依赖标准库。默认命令延迟导入 Torch，成功构建 `AudioEncoder` 并提示 Decoder 与训练未实现。
+入口为 `python -m maidata`，调用方式与 CPU 验证命令见 [maidata-entry](maidata-entry.md)。`entry.py` 顶部普通 `CONFIG` 集中Encoder、Draft与Decoder架构参数，构造器无第二套默认值；`--help` 与 `--show-config` 仅依赖标准库。默认命令延迟导入 Torch，成功构建 `AudioEncoder` 并提示整曲生成和训练调度未实现。
 
 当前代码位于 `src/maidata/audio/{types,frontend,geometry,attention,blocks,pyramid,encoder}.py`，不导入旧 `maimai_baseline`、`maimai_dataset` 或朋友仓库。已实现：
 
@@ -21,7 +21,7 @@ Encoder 合成验证见[入口文档](maidata-entry.md#cpu-合成验证)。独�
 
 `maidata.chart`实现结构化token、语法、Route-71、IR往返、镜像与窗口终端标签；`maidata.time`实现96 tick拍轴、written-BPM时长、全局等待/释放和4tick标签cell；`maidata.physical`消费既有几何，支持单段/拼接链、候选支持、动作提交及快照恢复。详见[接口说明](chart-fields-physical.md)。
 
-不导入旧模型包、Torch或音频模块。flags不参与四类Physical判定，short音符与Tap/Touch占用等价，1tick音频越界单独处理。拼接链逐段检查几何、整体占手和释放；duration支持可以不连续。没有embedding、小头、时间概率网络、Decoder主体、训练或推理调度；旧模型及旧缓存合同保持原样。
+不导入旧模型包、Torch或音频模块。flags不参与四类Physical判定，short音符与Tap/Touch占用等价，1tick音频越界单独处理。拼接链逐段检查几何、整体占手和释放；duration支持可以不连续。字段/规则模块本身没有embedding、预测网络或调度；这些可学习组件位于独立`maidata.decoder`，旧模型及旧缓存合同保持原样。
 
 ## 新 Draft：D、R、P与独立适配
 
@@ -31,12 +31,20 @@ D只消费公开音频张量和独立条件，R/P各自只消费Z；网络不读
 
 CPU验证覆盖默认/非默认容量、源字段/simai标签、复用与mask、辅助loss及外部消费者经Z/plan12到Encoder的梯度和实际冻结。pilot320的R容量已按343谱、8828个16拍基础窗口统计为207行（含结束标记），D仍一拍一个Z。`maidata.training.pretrain`已提供可配置的五项损失加权、AdamW、warmup＋余弦调度、绝对停止轮及精度/种子辅助函数；独立batch函数默认每2个完整音频组更新一次、梯度累积1，每轮144次更新。默认配方见[Draft接口](draft.md#阶段一训练默认值)。完整训练/验证循环、DataLoader、Linux输入映射及checkpoint执行尚未落实，见[阶段一执行状态](encoder-draft-training.md)；未运行CUDA、原训练batch成本测量或训练。
 
+## 新 Decoder：网络、窗口与监督
+
+`maidata.decoder`独立实现五类输入、前k层Router、后段dense MMoE、内容小头、三个时间分布及主/Physical/几何loss，默认值只在`entry.CONFIG`维护。全曲P0和局部Z/预测plan12通过公开张量接口传入，生产网络与Decoder参数不共享；plan使用无位置评分，音频/Z使用绝对拍RoPE。接口和可运行构建命令见[Decoder模块](decoder.md)。
+
+`begin/complete`分开类型决策与后段计算，teacher forcing和窗内增量路径共用参数；跨窗全部self K/V重新prefill。独立窗口适配保留原始历史delta、4拍裁剪之外的最后真实起音与名义U尾部标签。独立支持适配读取首次归责记录，或在调用者提供的完整Physical状态上生成当前窗支持；网络不执行规则查询、不读缓存。
+
+CPU验证覆盖默认与非默认架构、并行/增量一致、目标类型隔离、plan位置与空mask、FP32/CPU BF16反向、真实字段/规则支持、非单调时间概率、独立归约、跨Encoder/D/P梯度与实际冻结、链/分支快照。完整训练循环、checkpoint和整曲生成调度不在本模块；未运行CUDA或重建缓存。
+
 ## 已复制的旧模型实现
 
 全曲原谱离线编排和读取入口为 `maidata.chart_cache`，见[缓存说明](chart-cache.md)。
 它复用当前官谱音频 variant 和既有几何，保存完整 token/时间/归属/Physical 动作，
 通过显式 `accept_source` 保留违规GT；不改变正常候选拒绝，不生成镜像或训练窗口。
-原谱v2采用外部边界MOMENT、严格正生成delta及slide/Route-70统一WiFi；`chart_cache.migrate`另生产teacher条件的训练Physical候选mask与非单调时间区间，模型概率和loss仍未接入。
+原谱v2采用外部边界MOMENT、严格正生成delta及slide/Route-70统一WiFi；`chart_cache.migrate`另生产teacher条件的训练Physical候选mask与非单调时间区间，模型概率和loss通过独立Decoder适配，缓存生产不依赖模型。
 全量实际完成情况以产物的 `production-summary.json` 为准，清单覆盖不等于全部成功。
 
 当前来源路线为：外部冻结 native 音频 → 一拍音频草稿 → 用户选定兼容草稿 checkpoint → 干净 token 缓存 → A。源实验采用 draft60/A90；该旧配方不是新 encoder 的训练安排。
@@ -70,11 +78,11 @@ CPU验证覆盖默认/非默认容量、源字段/simai标签、复用与mask、
 
 ## 新 Encoder 尚未衔接的部分
 
-新 Encoder 的全曲 G₀、每窗动态 S、局部 L、块内共享处理和三路局部输出已进入代码。Mel/aux32离线输入、公开P0全曲组合、新Draft D/R/P及辅助loss已实现；Decoder、Router、Decoder MMoE、训练循环、主loss和checkpoint尚未接入，不能把可构建模块称为可训练完整模型的入口。
+新 Encoder 的全曲 G₀、每窗动态 S、局部 L、块内共享处理和三路局部输出已进入代码。Mel/aux32离线输入、公开P0全曲组合、新Draft D/R/P及辅助loss已实现；Decoder、Router/MMoE与主loss已独立实现，完整训练循环与checkpoint尚未接入，不能把可构建模块称为可训练完整模型的入口。
 
 aux32 采用全曲统一的18维声学量、4维节奏统计和10维时间上下文，L 的 `k/R` 网格与 G0 的 `j+0.5` 拍中心按位置取值。网络模块只消费准备好的张量，输入模块独立计算全曲声学源及派生网格。新隐藏表示不自动兼容现有 native cache；内容未变的原始音频/Mel 不因新源码失效。
 
-新Draft始终要求覆盖全曲的P0；只抽取部分监督窗口也不能省去其他音频中心。主Decoder按其[设计](../../0wd-v3-refactor-docs/new-decoder.md)消费全曲P0、局部Z及预测plan12，并在当前窗口条件下重新处理因果历史；其网络与训练调度需独立实现。
+新Draft始终要求覆盖全曲的P0；只抽取部分监督窗口也不能省去其他音频中心。主Decoder按其[设计](../../0wd-v3-refactor-docs/new-decoder.md)消费全曲P0、局部Z及预测plan12，并在当前窗口条件下重新处理因果历史；其网络与小头/loss已独立实现，完整训练与整曲生成调度另行接入。
 
 ## 独立副本的执行边界
 

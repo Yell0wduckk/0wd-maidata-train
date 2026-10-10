@@ -1,6 +1,6 @@
 # 新字段、时间与 Physical
 
-当前交付仅为数据与规则层。没有 embedding、字段预测头、分布网络、Decoder、Router/MMoE、训练循环或推理调度。设计正本见 [new-decoder](../../0wd-v3-refactor-docs/new-decoder.md)。
+本页说明独立数据与规则层，不在这些模块中放入embedding、预测头或模型调度。可学习字段、Decoder、Router/MMoE与概率/loss由独立[Decoder模块](decoder.md)提供。设计正本见 [new-decoder](../../0wd-v3-refactor-docs/new-decoder.md)。
 
 ## 模块与接口
 
@@ -14,7 +14,7 @@
 
 ## 字段与编码
 
-- 仅五种 token；没有 END。外部调用 `inject_boundary(Moment(delta), start_tick=a, history_present=..., window_end=b)` 注入边界；有历史时 delta 从最后真实起音计算，无历史或历史 dropout 时为0，绝对锚仍是a。边界角色由运行时指定，不从数值零推断。生成 MOMENT 必须前进至少1 tick，直接 NOTE 才将边界登记为真实起音。连续空窗与终端查询不更新最后真实起音。
+- 仅五种token；没有END。外部调用 `inject_boundary(Moment(delta), start_tick=a, history_present=..., window_end=b)` 注入边界；未启用历史dropout时，delta从全曲最后真实起音计算，4拍token历史为空也保留该间隔。`history_present`表示是否向本窗提供历史间隔，不由裁剪后的token数量推断；此前尚无真实起音或历史dropout时delta为0，绝对锚仍是a。dropout不清除持久保存的最后真实起音。边界角色由运行时指定，不从数值零推断。生成MOMENT必须前进至少1 tick，直接NOTE才将边界登记为真实起音。连续空窗与终端查询不更新最后真实起音。
 - `Note.make(kind, pad, **flags)`将适用的未指定flags设为有效0，不适用字段保持None。按钮为A1..A8；Touch为A/B/D/E各8区加C。Python的`break_`在JSON中为`break`。
 - NOTE.kind只有tap、hold、touch、touch_hold、slide；WiFi由ROUTE=70恢复。每条轨道首段允许全部71类；普通链的连续段排除70，WiFi路线后只接SLIDE_DURATION；完成duration后允许普通/WiFi并行分支。
 - `Route(route_id, track_break)`沿用Route-71；0..69普通路线，70 WiFi。首段必须提供0/1，后续段必须None。新分支重新从head起点开始。
@@ -76,4 +76,4 @@ $env:TMP = $env:TEMP
 .\.venv-audio\Scripts\python.exe -m pytest tests/test_chart_physical.py -m integration --basetemp=.test-temp/fields-physical-real
 ```
 
-覆盖五类NOTE与统一slide/WiFi路线、NA/零、IR往返、Route-71镜像、短音符、变BPM、4tick标签、终端尾部、长链/分支、flags等价、非单调duration支持、接点占用、交接裁剪和回退。仅这些有标记的对照测试导入旧包；生产模块不依赖旧包。未执行训练、CUDA或几何重建；全库缓存生产以实际产物摘要为准；旧MiaCode额外运行态、Decoder K/V和全模型回滚尚未接入。
+覆盖五类NOTE与统一slide/WiFi路线、NA/零、IR往返、Route-71镜像、短音符、变BPM、4tick标签、终端尾部、长链/分支、flags等价、非单调duration支持、接点占用、交接裁剪和回退。仅这些有标记的对照测试导入旧包；生产模块不依赖旧包。未执行训练、CUDA或几何重建；全库缓存生产以实际产物摘要为准。独立Decoder session可绑定模型K/V、pending字段与规则快照；旧MiaCode额外运行态和整曲推理调度仍由外部接入。

@@ -3,7 +3,7 @@
 import argparse
 from pprint import pprint
 
-from .model import build_model, build_draft, build_planner, build_reconstruction
+from .model import build_model, build_draft, build_planner, build_reconstruction, build_decoder
 
 CONFIG = {
     "mel_bins": 128,
@@ -21,6 +21,7 @@ CONFIG = {
     "target_beats": 16,
     "audio_before_beats": 4,
     "audio_after_beats": 4,
+    "chart_history_beats": 4,
     "dropout": 0.1,
     "rope_base": 10000,
     "rope_position_scale": 1.0,
@@ -71,26 +72,58 @@ CONFIG = {
     "pretrain_seed": 20261010,
     "pretrain_audio_groups_per_batch": 2,
     "pretrain_gradient_accumulation_steps": 1,
+    "decoder_dim": 256,
+    "decoder_layers": 6,
+    "decoder_router_layer": 2,
+    "decoder_heads": 8,
+    "decoder_shared_ffn_dim": 1024,
+    "decoder_expert_ffn_dim": 512,
+    "decoder_experts": 4,
+    "decoder_readout_ffn_dim": 256,
+    "decoder_dropout": 0.1,
+    "decoder_norm_eps": 1e-5,
+    "decoder_rope_base": 10000.0,
+    "decoder_rope_position_scale": 1.0,
+    "decoder_condition_gate_init": 1e-3,
+    "decoder_note_dims": (64, 128, 16, 16, 16, 8, 8),
+    "decoder_route_dims": (240, 16),
+    "decoder_time_base": 10000.0,
+    "decoder_time_scale": 1.0,
+    "decoder_time_components": 5,
+    "decoder_z_before_beats": 4,
+    "decoder_z_after_beats": 4,
+    "decoder_history_dropout": 0.15,
+    "decoder_time_distributions": {
+        "MOMENT": {"reference": 1000., "minimum_scale": 2.5,
+                   "initial_centers": (0., 100., 200., 400., 800.),
+                   "initial_scales": (50., 50., 200/3, 100., 200.)},
+        "HOLD_DURATION": {"reference": 1000., "minimum_scale": 2.5,
+                          "initial_centers": (100., 200., 400., 800., 1600.),
+                          "initial_scales": (100., 100., 400/3, 200., 400.)},
+        "SLIDE_DURATION": {"reference": 96., "minimum_scale": .25,
+                           "initial_centers": (0., 24., 48., 96., 192.),
+                           "initial_scales": (12., 12., 16., 24., 48.)},
+    },
 }
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="python -m maidata",
-        description="Maidata Encoder and Draft components; training is not implemented.",
+        description="Maidata Encoder, Draft and Decoder components; training is not implemented.",
     )
     parser.add_argument("--show-config", action="store_true", help="show the configuration in entry.py")
-    parser.add_argument("--component", choices=("encoder", "draft", "planner", "reconstruction"),
+    parser.add_argument("--component", choices=("encoder", "draft", "planner", "reconstruction", "decoder"),
                         default="encoder", help="build one independent component")
     args = parser.parse_args(argv)
     if args.show_config:
         pprint(CONFIG, sort_dicts=False)
         return 0
     builders = {"encoder": build_model, "draft": build_draft,
-                "planner": build_planner, "reconstruction": build_reconstruction}
+                "planner": build_planner, "reconstruction": build_reconstruction, "decoder": build_decoder}
     try:
         module = builders[args.component](CONFIG)
     except ValueError as exc:
         parser.error(str(exc))
-    print(f"{type(module).__name__} built. Decoder and training are not implemented.")
+    print(f"{type(module).__name__} built. End-to-end generation and training are not implemented.")
     return 0

@@ -1,6 +1,6 @@
 # Maidata Encoder 入口与接口
 
-`src/maidata` 已实现独立音频 Encoder：frontend、geometry、attention、blocks、pyramid、encoder 和 types。它消费准备好的 Mel、aux32、绝对拍坐标与有效位，输出 P0/P1/P2 三路局部表示。独立输入生产及真实音频适配见[全官谱音频输入缓存](encoder-audio-cache.md)。新Draft D/R/P及辅助loss已实现，见[Draft接口](draft.md)；Decoder、数据集/DataLoader、训练循环、主loss和checkpoint尚未实现；旧 `maimai_baseline` 保留作历史实现参考。
+`src/maidata` 已实现独立音频 Encoder：frontend、geometry、attention、blocks、pyramid、encoder 和 types。它消费准备好的 Mel、aux32、绝对拍坐标与有效位，输出 P0/P1/P2 三路局部表示。独立输入生产及真实音频适配见[全官谱音频输入缓存](encoder-audio-cache.md)。新Draft D/R/P及辅助loss已实现，见[Draft接口](draft.md)；Decoder网络及主/Physical/几何loss见[Decoder接口](decoder.md)，数据集/DataLoader、完整训练循环和checkpoint另行接入；旧 `maimai_baseline` 保留作历史实现参考。
 
 从独立仓库根目录运行：
 
@@ -12,7 +12,7 @@ python -m maidata --show-config
 python -m maidata
 ```
 
-帮助和 `--show-config` 仅依赖标准库，后者显示入口顶部的统一配置（含18项Encoder配置及Draft配置）。默认命令延迟导入 Torch，成功构建 `AudioEncoder`，输出 `AudioEncoder built. Decoder and training are not implemented.` 并正常退出；不创建训练目录或产物。`--component`可单独选择draft、planner或reconstruction，详见[Draft接口](draft.md)。
+帮助和 `--show-config` 仅依赖标准库，后者显示入口顶部的统一配置（含18项Encoder配置及Draft配置）。默认命令延迟导入 Torch，成功构建 `AudioEncoder`，输出 `AudioEncoder built. End-to-end generation and training are not implemented.` 并正常退出；不创建训练目录或产物。`--component`可单独选择draft、planner、reconstruction或decoder，详见[Draft接口](draft.md)。
 
 ## 配置与构建
 
