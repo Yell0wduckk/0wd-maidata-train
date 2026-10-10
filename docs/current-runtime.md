@@ -4,7 +4,7 @@
 
 ## 新 maidata：独立音频 Encoder
 
-入口为 `python -m maidata`，调用方式与 CPU 验证命令见 [maidata-entry](maidata-entry.md)。`entry.py` 顶部普通 `CONFIG` 集中Encoder、Draft与Decoder架构参数，构造器无第二套默认值；`--help` 与 `--show-config` 仅依赖标准库。默认命令延迟导入 Torch，成功构建 `AudioEncoder`，独立阶段一训练入口为 `python -m maidata.training`，整曲生成调度未实现。
+入口为 `python -m maidata`，调用方式与 CPU 验证命令见 [maidata-entry](maidata-entry.md)。`entry.py` 顶部普通 `CONFIG` 集中Encoder、Draft与Decoder架构参数，构造器无第二套默认值；`--help` 与 `--show-config` 仅依赖标准库。默认命令延迟导入 Torch，成功构建 `AudioEncoder`，独立阶段一训练入口为 `python -m maidata.training`，整曲推理入口为`python -m maidata.inference`。
 
 当前代码位于 `src/maidata/audio/{types,frontend,geometry,attention,blocks,pyramid,encoder}.py`，不导入旧 `maimai_baseline`、`maimai_dataset` 或朋友仓库。已实现：
 
@@ -37,9 +37,15 @@ CPU验证覆盖默认/非默认容量、源字段/simai标签、复用与mask、
 
 `begin/complete`分开类型决策与后段计算，teacher forcing和窗内增量路径共用参数；跨窗全部self K/V重新prefill。独立窗口适配保留原始历史delta、4拍裁剪之外的最后真实起音与名义U尾部标签。独立支持适配读取首次归责记录，或在调用者提供的完整Physical状态上生成当前窗支持；网络不执行规则查询、不读缓存。
 
-CPU验证覆盖默认与非默认架构、并行/增量一致、目标类型隔离、plan位置与空mask、FP32/CPU BF16反向、真实字段/规则支持、非单调时间概率、独立归约、跨Encoder/D/P梯度与实际冻结、链/分支快照。训练循环和checkpoint位于独立的`maidata.decoder_training`；整曲生成调度另行实现，未运行CUDA或重建缓存。
+CPU验证覆盖默认与非默认架构、并行/增量一致、目标类型隔离、plan位置与空mask、FP32/CPU BF16反向、真实字段/规则支持、非单调时间概率、独立归约、跨Encoder/D/P梯度与实际冻结、链/分支快照。训练循环和checkpoint位于独立的`maidata.decoder_training`；整曲生成由独立`maidata.inference`调度，未运行CUDA或重建缓存。
 
 阶段二已接入原谱v2字段/Physical、全局打乱的既有Decoder occurrence、GT历史与确定性15% history dropout；保持仍有效的完整物理动作，按等价前缀复用训练支持。训练和验证仅构建M，从配套的离线P0、全曲Z与预测plan12缓存读取条件，不构建或运行E/D/P/R，训练不回退在线计算；导出与消费模块独立。默认 row budget8192、累积1、warmup200，全部可配置；联合预算留给可能的第三阶段。训练只读离线窗口输入/监督张量，不解压整谱或执行 Physical 查询，启动和 batch 均不重新校验已验收输入，不哈希生产者 checkpoint。实际M token分块按整个逻辑batch的独立分母归约；恢复加载完整轮训练状态，源码/配方/budget/计划身份不作为恢复门禁；保留每5轮及末轮 validation 和原 batch CUDA 测量入口。其余未确定配方保持None，见[阶段二训练](decoder-training.md)。
+
+## 当前整曲推理与物化
+
+`python -m maidata.inference`显式加载阶段一E/D/P与阶段二M权重，读取配套grid或使用固定Mel统计提取音频，按新字段规则维护真实起音组、边界MOMENT、跨窗活动动作与完整规则快照。全曲E/D/P和M音频投影复用；各窗重新prefill历史，始终覆盖音频及一个完整空尾窗。Physical硬约束默认开启，trace默认关闭；路径、温度、种子与生成上限可配置。
+
+`python -m maidata.inference.materialize`独立调用MiaCode render/dump，核对新字段与时间轴后输出`maidata.txt`和`track.<音频扩展名>`。两入口不导入旧模型包、不增加源码哈希门禁。小型真实E/D/P/M已完成CPU FP32/BF16到MiaCode的端到端测试；真实训练checkpoint的CUDA生成与谱面质量未验收。命令、跨窗合同和模块边界见[推理与物化](maidata-inference.md)。
 
 ## 已复制的旧模型实现
 
@@ -80,14 +86,14 @@ CPU验证覆盖默认与非默认架构、并行/增量一致、目标类型隔�
 
 ## 新 Encoder 尚未衔接的部分
 
-新 Encoder 的全曲 G₀、每窗动态 S、局部 L、块内共享处理和三路局部输出已进入代码。Mel/aux32离线输入、公开P0全曲组合、新Draft D/R/P及辅助loss已实现；Decoder、Router/MMoE与主loss已独立实现，阶段一E/D/R/P训练循环与checkpoint已接入；主Decoder阶段二训练及checkpoint由独立`maidata.decoder_training`接入，整曲生成调度仍另行实现。
+新 Encoder 的全曲 G₀、每窗动态 S、局部 L、块内共享处理和三路局部输出已进入代码。Mel/aux32离线输入、公开P0全曲组合、新Draft D/R/P及辅助loss已实现；Decoder、Router/MMoE与主loss已独立实现，阶段一E/D/R/P训练循环与checkpoint已接入；主Decoder阶段二训练及checkpoint由独立`maidata.decoder_training`接入，整曲生成和可播放maidata物化由独立`maidata.inference`接入。
 
 aux32 采用全曲统一的18维声学量、4维节奏统计和10维时间上下文，L 的 `k/R` 网格与 G0 的 `j+0.5` 拍中心按位置取值。网络模块只消费准备好的张量，输入模块独立计算全曲声学源及派生网格。新隐藏表示不自动兼容现有 native cache；内容未变的原始音频/Mel 不因新源码失效。
 
-新Draft始终要求覆盖全曲的P0；只抽取部分监督窗口也不能省去其他音频中心。主Decoder按其[设计](../../0wd-v3-refactor-docs/new-decoder.md)消费全曲P0、局部Z及预测plan12，并在当前窗口条件下重新处理因果历史；其网络、小头/loss及阶段二训练已独立实现，整曲生成调度另行接入。
+新Draft始终要求覆盖全曲的P0；只抽取部分监督窗口也不能省去其他音频中心。主Decoder按其[设计](../../0wd-v3-refactor-docs/new-decoder.md)消费全曲P0、局部Z及预测plan12，并在当前窗口条件下重新处理因果历史；其网络、小头/loss及阶段二训练已独立实现，整曲生成见[当前推理入口](maidata-inference.md)。
 
 ## 独立副本的执行边界
 
-复制了旧源码、配置、schemas、必要 JSON/C++/CUDA 资源及文档；没有复制数据、权重、缓存、环境、旧测试或原 Git 历史。本轮未运行旧模型 CLI、CUDA、训练或整模型推理；新 Encoder 的使用与验证范围见 [maidata-entry](maidata-entry.md)。
+复制了旧源码、配置、schemas、必要 JSON/C++/CUDA 资源及文档；没有复制数据、权重、缓存、环境、旧测试或原 Git 历史。旧模型 CLI、CUDA及正式训练的验证按各任务实际记录；新 Encoder 的使用与验证范围见 [maidata-entry](maidata-entry.md)。
 
 旧 launcher 仍有源实验的远端路径；数据准备工具还保留 `--main-worktree` 默认定位，MiaCode/MajRadar 等是外部依赖。实际运行前使用明确输入和输出，不能把旧 launcher 当成新实验命令。详情见 [复制与布局](import-and-layout.md)。

@@ -10,6 +10,7 @@
 | [decoder-training](decoder-training.md) | 固定E/D/P、原谱窗口与Physical适配、批量监督、阶段二训练和完整轮恢复 |
 | [新 encoder 设计](../../0wd-v3-refactor-docs/new-audio-encoder.md) | G₀ / S / L、共享块、局部三尺度及边界 |
 | [Encoder 实施文档](../../0wd-v3-refactor-docs/encoder-execution-plan.md) | 已实现模块、完整张量协议、验证范围与 aux32 生产约定 |
+| [maidata-inference](maidata-inference.md) | 当前E/D/P/M整曲推理、新字段跨窗历史、MiaCode物化与可播放音频 |
 | [current-runtime](current-runtime.md) | 新 Encoder 和保留的旧模型的实际状态 |
 | [chart-fields-physical](chart-fields-physical.md) | 新token、IR编解码、时间语义与Physical查询/回退 |
 | [import-and-layout](import-and-layout.md) | 复制来源、独立 Git、排除项、外部依赖 |

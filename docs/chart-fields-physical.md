@@ -76,4 +76,4 @@ $env:TMP = $env:TEMP
 .\.venv-audio\Scripts\python.exe -m pytest tests/test_chart_physical.py -m integration --basetemp=.test-temp/fields-physical-real
 ```
 
-覆盖五类NOTE与统一slide/WiFi路线、NA/零、IR往返、Route-71镜像、短音符、变BPM、4tick标签、终端尾部、长链/分支、flags等价、非单调duration支持、接点占用、交接裁剪和回退。仅这些有标记的对照测试导入旧包；生产模块不依赖旧包。未执行训练、CUDA或几何重建；全库缓存生产以实际产物摘要为准。独立Decoder session可绑定模型K/V、pending字段与规则快照；旧MiaCode额外运行态和整曲推理调度仍由外部接入。
+覆盖五类NOTE与统一slide/WiFi路线、NA/零、IR往返、Route-71镜像、短音符、变BPM、4tick标签、终端尾部、长链/分支、flags等价、非单调duration支持、接点占用、交接裁剪和回退。仅这些有标记的对照测试导入旧包；生产模块不依赖旧包。未执行训练、CUDA或几何重建；全库缓存生产以实际产物摘要为准。独立Decoder session可绑定模型K/V、pending字段与规则快照；整曲推理与MiaCode物化由独立的[`maidata.inference`](maidata-inference.md)调用这些公共接口。

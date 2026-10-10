@@ -1,6 +1,6 @@
 # Decoder 模块与接口
 
-`maidata.decoder` 实现[设计正本](../../0wd-v3-refactor-docs/new-decoder.md)的网络、字段小头、时间概率、窗口输入与三类监督。默认六层、前两层 Router 共享段、后四层 dense MMoE；直接读取全曲 P0 与局部 Z/预测 plan12。网络不持有 Encoder、Draft、Planner、Physical 或数据文件。阶段二训练循环与checkpoint由独立的[`maidata.decoder_training`](decoder-training.md)接入；整曲生成调度另行实现。
+`maidata.decoder` 实现[设计正本](../../0wd-v3-refactor-docs/new-decoder.md)的网络、字段小头、时间概率、窗口输入与三类监督。默认六层、前两层 Router 共享段、后四层 dense MMoE；直接读取全曲 P0 与局部 Z/预测 plan12。网络不持有 Encoder、Draft、Planner、Physical 或数据文件。阶段二训练循环与checkpoint由独立的[`maidata.decoder_training`](decoder-training.md)接入；整曲生成调度由独立的[`maidata.inference`](maidata-inference.md)接入。
 
 ## 模块边界
 
