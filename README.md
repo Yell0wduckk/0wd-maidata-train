@@ -28,6 +28,7 @@
 - [Maidata Encoder 入口与张量接口](docs/maidata-entry.md)
 - [全官谱音频输入缓存](docs/encoder-audio-cache.md)
 - [新字段、时间与 Physical](docs/chart-fields-physical.md)
+- [全官谱原谱全曲缓存](docs/chart-cache.md)
 - [复制范围、独立 Git 与外部依赖](docs/import-and-layout.md)
 - [文档索引](docs/README.md)
 - [一拍草稿实现参考](docs/audio-draft.md)

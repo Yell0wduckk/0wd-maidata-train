@@ -138,6 +138,25 @@ class PhysicalState:
         grammar.close_window(target)
         self.grammar = grammar
 
+    def accept_source(self, token):
+        """Advance a real teacher prefix, retaining violations and true actions.
+
+        Grammar remains strict. Only completed actions are judged: pending
+        chains are deferred until their total duration is available. This is
+        deliberately separate from candidate accept, which still rejects.
+        """
+        grammar, completion = self._trial(token)
+        actions = self.actions
+        decision = Decision(deferred=grammar.state.phase in ('hold', 'route', 'chain'))
+        if completion is not None:
+            action = materialize(completion, self.timing, self.geometry)
+            decision = Decision(self._basic(completion), reasons(actions, action))
+            actions += (action,)
+        if isinstance(token, (End, Moment)):
+            actions = prune_history(actions, self.timing.second(grammar.state.cursor))
+        self.grammar, self.actions = grammar, actions
+        return completion, decision
+
     def query_duration_ticks(self, ticks):
         phase = self.grammar.state.phase
         if phase not in ('hold', 'chain'):
