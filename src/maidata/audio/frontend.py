@@ -7,6 +7,9 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 
+_FREQUENCY_WIDTH_FLOOR = 1e-4
+
+
 class _DepthwiseResidual2d(nn.Module):
     def __init__(self, channels: int, dropout: float) -> None:
         super().__init__()
@@ -55,8 +58,10 @@ class _QueryFrequencyAttentionProjection(nn.Module):
         centers = (torch.arange(frequency_queries).float() + 0.5) / frequency_queries
         self.raw_centers = nn.Parameter(torch.logit(centers))
         initial_width = 1 / (2 * frequency_queries)
+        # Offset the floor to preserve the intended initial width (1/8 for Q=4).
+        initial_softplus = max(initial_width - _FREQUENCY_WIDTH_FLOOR, torch.finfo(torch.float32).tiny)
         self.raw_widths = nn.Parameter(
-            torch.full((frequency_queries,), math.log(math.expm1(initial_width)))
+            torch.full((frequency_queries,), math.log(math.expm1(initial_softplus)))
         )
         self.dynamic_query = nn.Sequential(
             nn.LayerNorm(frequency_dim),
@@ -73,7 +78,7 @@ class _QueryFrequencyAttentionProjection(nn.Module):
         count = features.shape[-2]
         frequencies = (torch.arange(count, device=features.device).float() + 0.5) / count
         centers = self.raw_centers.sigmoid()
-        widths = F.softplus(self.raw_widths)
+        widths = F.softplus(self.raw_widths) + _FREQUENCY_WIDTH_FLOOR
         bias = -0.5 * ((frequencies[None] - centers[:, None]) / widths[:, None]).square()
         dynamic = self.dynamic_query(features.mean(-2)).unflatten(
             -1, (self.frequency_queries, self.frequency_dim)

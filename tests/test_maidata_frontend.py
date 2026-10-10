@@ -37,15 +37,28 @@ def test_spectral_shape_and_dynamic_frequency_initialization(
     torch.testing.assert_close(pool.dynamic_query[-1].weight, torch.zeros_like(pool.dynamic_query[-1].weight))
     torch.testing.assert_close(pool.dynamic_query[-1].bias, torch.zeros_like(pool.dynamic_query[-1].bias))
     torch.testing.assert_close(pool.raw_centers.sigmoid(), (torch.arange(queries) + 0.5) / queries)
-    torch.testing.assert_close(F.softplus(pool.raw_widths), torch.full((queries,), 1 / (2 * queries)))
+    initial_width = 1 / (2 * queries)
+    torch.testing.assert_close(F.softplus(pool.raw_widths) + 1e-4, torch.full((queries,), initial_width))
     # Odd Mel counts exercise the actual stride-2 output width, rather than 64.
     stem = tokenizer.stem(mel.unsqueeze(1))
     features = torch.randn(2, 7, stem.shape[-1], frequency_dim)
     weights = pool.attention_weights(features)
     frequencies = (torch.arange(stem.shape[-1]) + 0.5) / stem.shape[-1]
     bias = -0.5 * ((frequencies[None] - pool.raw_centers.sigmoid()[:, None]) /
-                   F.softplus(pool.raw_widths)[:, None]).square()
+                   initial_width).square()
     torch.testing.assert_close(weights, bias.softmax(-1).expand(2, 7, -1, -1))
+
+
+@pytest.mark.parametrize("queries", [5000, 5001])
+def test_frequency_query_count_remains_configurable_at_width_floor(queries):
+    # The requested initial width can reach or fall below the numerical floor.
+    tokenizer = SpectralTokenizer(4, 1, 2, queries, 2, 0.0)
+    assert torch.isfinite(tokenizer.frequency_pool.raw_widths).all()
+    widths = F.softplus(tokenizer.frequency_pool.raw_widths) + 1e-4
+    torch.testing.assert_close(widths, torch.full((queries,), 1e-4))
+    output = tokenizer(torch.randn(1, 2, 4), torch.ones(1, 2, dtype=torch.bool))
+    assert output.shape == (1, 2, 2)
+    assert torch.isfinite(output).all()
 
 
 def test_spectral_padding_is_ignored_by_convolution_and_normalization():
@@ -67,6 +80,22 @@ def test_spectral_padding_is_ignored_by_convolution_and_normalization():
     silent = tokenizer(torch.zeros_like(core), core_valid)
     assert torch.isfinite(silent).all()
     assert torch.count_nonzero(silent) > 0
+
+
+@pytest.mark.parametrize("raw_width", [-45.0, -100.0])
+def test_narrow_frequency_queries_keep_outputs_and_gradients_finite(raw_width):
+    torch.manual_seed(16)
+    tokenizer = SpectralTokenizer(128, 8, 8, 4, 16, 0.0)
+    with torch.no_grad():
+        tokenizer.frequency_pool.raw_widths.fill_(raw_width)
+    mel = torch.randn(1, 5, 128, requires_grad=True)
+    values = tokenizer(mel, torch.ones(1, 5, dtype=torch.bool))
+    assert torch.isfinite(values).all()
+    (values * torch.randn_like(values)).sum().backward()
+    assert torch.isfinite(mel.grad).all()
+    for name, parameter in tokenizer.named_parameters():
+        assert parameter.grad is not None, name
+        assert torch.isfinite(parameter.grad).all(), name
 
 
 def test_frontend_gradients_reach_mel_aux_and_dynamic_queries():
