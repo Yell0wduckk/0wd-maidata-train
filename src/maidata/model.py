@@ -1,7 +1,41 @@
-"""Build the currently implemented part of the model."""
+"""Independent component factories. Defaults live only in entry.CONFIG."""
+
+ENCODER_KEYS = (
+    'mel_bins', 'samples_per_beat', 'd_model', 'heads', 'ffn_dim', 'stage_depths',
+    'stage_attention_radii', 'temporal_kernel_size', 'stem_channels', 'frequency_dim',
+    'frequency_queries', 'fpn_rates', 'target_beats', 'audio_before_beats',
+    'audio_after_beats', 'dropout', 'rope_base', 'rope_position_scale',
+)
 
 
 def build_model(config):
     from .audio.encoder import AudioEncoder
 
-    return AudioEncoder(**config)
+    return AudioEncoder(**{key: config[key] for key in ENCODER_KEYS})
+
+
+def build_draft(config):
+    from .draft.generator import DraftGenerator
+    keys = ('layers', 'dim', 'heads', 'experts', 'expert_ffn_dim', 'latent_dim',
+            'dropout', 'norm_eps', 'difficulty_vocab_size', 'level_center', 'level_scale', 'span_scale')
+    return DraftGenerator(audio_dim=config['d_model'],
+        **{key: config['draft_' + key] for key in keys},
+        rope_base=config['rope_base'], rope_position_scale=config['rope_position_scale'])
+
+
+def build_planner(config):
+    from .draft.planner import PlannerHead
+    keys = ('dim', 'heads', 'mlp_dim', 'dropout', 'norm_eps')
+    return PlannerHead(latent_dim=config['draft_latent_dim'],
+        **{key: config['planner_' + key] for key in keys},
+        rope_base=config['rope_base'], rope_position_scale=config['rope_position_scale'])
+
+
+def build_reconstruction(config):
+    from .draft.reconstruction import ReconstructionHead
+    if config['reconstruction_query_rows'] is None:
+        raise ValueError('set reconstruction_query_rows from new-field target lengths including SEGMENT_END')
+    keys = ('layers', 'dim', 'heads', 'ffn_dim', 'dropout', 'norm_eps', 'query_rows',
+            'position_base', 'position_scale')
+    return ReconstructionHead(latent_dim=config['draft_latent_dim'], target_beats=config['target_beats'],
+                               **{key: config['reconstruction_' + key] for key in keys})

@@ -1,0 +1,71 @@
+"""Read accepted original chart records into real onset groups, without Physical."""
+from dataclasses import dataclass
+from fractions import Fraction
+
+from maidata.chart.codec import token_from_dict
+from maidata.chart.types import Moment, Note
+from maidata.time import TimingMap
+
+
+@dataclass(frozen=True)
+class OnsetGroup:
+    tick: int
+    tokens: tuple
+
+
+@dataclass(frozen=True)
+class PlanNote:
+    tick: int
+    kind: str
+    button: int | None
+
+
+@dataclass(frozen=True)
+class ChartData:
+    groups: tuple[OnsetGroup, ...]
+    notes: tuple[PlanNote, ...]
+    timing: TimingMap
+    source_end_beat: Fraction | None
+
+
+def from_record(record, *, source_end_beat=None):
+    """No Decoder window boundary/terminal is reused as a real R event."""
+    if record['schema'] != 'maidata.full-chart-original.v2' or record['view'] != 'original':
+        raise ValueError('Draft labels require the current original chart representation')
+    timing = TimingMap.from_ir(record['metadata'])
+    if source_end_beat is None:
+        end = record['metadata'].get('render_end_beat')
+        if end is not None:
+            source_end_beat = Fraction(end['num'], end['den'])
+    if source_end_beat is not None:
+        source_end_beat = Fraction(source_end_beat)
+        if source_end_beat <= 0:
+            raise ValueError('source end beat must be positive')
+    if len(record['tokens']) != len(record['token_map']):
+        raise ValueError('chart token/ownership lengths differ')
+    groups, notes, seen_owners = [], [], set()
+    owner, onset = None, None
+    for i, (raw, mapping) in enumerate(zip(record['tokens'], record['token_map'])):
+        token = token_from_dict(raw)
+        if mapping['token_index'] != i or type(mapping['tick']) is not int:
+            raise ValueError('invalid token index/tick mapping')
+        if isinstance(token, Moment):
+            continue
+        tick = mapping['tick']
+        if isinstance(token, Note):
+            owner, onset = mapping['owner'], tick
+            if type(owner) is not int or owner in seen_owners:
+                raise ValueError('NOTE ownership must be unique')
+            seen_owners.add(owner)
+            if not groups or tick != groups[-1][0]:
+                if groups and tick < groups[-1][0]:
+                    raise ValueError('onset groups must be ordered')
+                groups.append((tick, []))
+            kind = ('hold' if token.short_hold else 'touch_hold' if token.short_touch_hold else token.kind)
+            button = None if token.kind in ('touch', 'touch_hold') else int(token.pad[1:])
+            notes.append(PlanNote(tick, kind, button))
+        if owner is None or mapping['owner'] != owner or tick != onset:
+            raise ValueError('ROUTE/duration must retain its NOTE owner and onset')
+        groups[-1][1].append(token)
+    return ChartData(tuple(OnsetGroup(tick, tuple(tokens)) for tick, tokens in groups),
+                     tuple(notes), timing, source_end_beat)

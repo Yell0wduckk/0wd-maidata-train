@@ -6,14 +6,15 @@
 
 进入任务先读 README、docs/current-runtime.md；encoder 重构再读同级设计目录中的 `../0wd-v3-refactor-docs/new-audio-encoder.md`。
 
-当前 `src/maidata` 已实现独立音频 Encoder，入口为 `python -m maidata`。包含 frontend、geometry、attention、blocks、pyramid、encoder 和 types；18 项架构配置集中在 `entry.py` 顶部唯一的普通 `CONFIG`。独立的 `maidata.preparation` 负责直接拍网格 FFT、全曲 aux32 与输入缓存，说明见 `docs/encoder-audio-cache.md`。Encoder 与输入生产均不迁移 Decoder、训练循环或 checkpoint，不启动训练、上传或替换运行任务。入口说明见 `docs/maidata-entry.md`。
+当前 `src/maidata` 已实现独立音频 Encoder 与 Draft D/R/P，入口为 `python -m maidata`。所有架构配置集中在 `entry.py` 顶部唯一的普通 `CONFIG`。独立的 `maidata.preparation` 负责直接拍网格 FFT、全曲 aux32 与输入缓存，说明见 `docs/encoder-audio-cache.md`。`maidata.draft` 分离全曲P0组合/窗口选择、D、R、P、条件元数据、标签适配与辅助loss，接口见 `docs/draft.md`。Decoder、训练循环或 checkpoint 尚未实现；本次模块交付不启动训练、上传或替换运行任务。入口说明见 `docs/maidata-entry.md`。
 
 ## 新 Encoder 与保留的旧模型
 
 新字段的数据与规则层位于 `maidata.chart`、`maidata.time`、`maidata.physical`，接口见 `docs/chart-fields-physical.md`。只实现编解码、语法、时间标签、Physical查询/动作/回退，不引入embedding、小头、Decoder或训练。生产模块不导入旧包；测试可以使用保留旧实现作单段数值/规则对照。几何通过显式资源路径读取，不重建旧资产。
 
 - `maidata` 不导入旧模型或参考仓库。帮助和配置展示仅需标准库，实际构建时延迟导入 Torch；默认命令成功构建 `AudioEncoder` 并提示 Decoder 与训练未实现。
-- 新 Encoder 通过 `prepare_song`、`encode_windows`、`forward` 消费准备好的 Mel、aux32、绝对拍坐标和有效位，仅公开 P0/P1/P2 三路局部输出。独立输入生产已实现；Decoder、草稿、训练与恢复系统仍待单独实现。
+- 新 Encoder 通过 `prepare_song`、`encode_windows`、`forward` 消费准备好的 Mel、aux32、绝对拍坐标和有效位，仅公开 P0/P1/P2 三路局部输出。独立输入生产与新Draft已实现；Decoder、训练与恢复系统仍待单独实现。
+- Draft网络不持有Encoder或Decoder，D/R/P参数独立；公开张量组合保留计算图。R的query_rows从新字段长度元数据显式配置，不能按每个GT样本长度改变查询数或静默截断。主Decoder的Z/plan适配和条件attention归Decoder所有。
 - 复制来源是 `main-new-audio-draft-beat` 的一拍草稿/native 音频路线。当前 native 路径冻结保留的音频模块，训练步读取外部原生 22 拍 P0/C0/C1 缓存。
 - 旧 Decoder 仍读取全曲 P0 bank，旧草稿仍读取整曲 P0。新 Encoder 的可配置 24 拍默认窗口、S 工作槽和局部三尺度输出已实现，但尚未接入旧 Decoder 或草稿。
 - 新 Encoder 的 G₀ 可复用不等于冻结：tokenizer/encoder 可训练，同次前向按曲共享计算图，不能 detach 或跨参数更新缓存旧表示。

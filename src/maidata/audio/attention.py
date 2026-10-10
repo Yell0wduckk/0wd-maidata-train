@@ -5,24 +5,7 @@ from torch import Tensor
 from torch.nn import functional as F
 
 from .geometry import local_neighbors
-
-
-def apply_rope(value: Tensor, beats: Tensor, base: float, scale: float) -> Tensor:
-    """Rotate every adjacent dimension pair; compute phases in FP32."""
-    with torch.autocast(device_type=value.device.type, enabled=False):
-        frequencies = base ** (
-            -torch.arange(0, value.shape[-1], 2, device=value.device, dtype=torch.float32)
-            / value.shape[-1]
-        )
-        phase = beats.float()[:, None, :, None] * scale * frequencies
-        cosine, sine = phase.cos(), phase.sin()
-        even, odd = value.float()[..., 0::2], value.float()[..., 1::2]
-        rotated = torch.stack(
-            (even * cosine - odd * sine,
-             even * sine + odd * cosine),
-            dim=-1,
-        ).flatten(-2)
-    return rotated.to(value.dtype)
+from maidata.nn.position import apply_rope
 
 
 def local_joint_attention(

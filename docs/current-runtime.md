@@ -4,7 +4,7 @@
 
 ## 新 maidata：独立音频 Encoder
 
-入口为 `python -m maidata`，调用方式与 CPU 验证命令见 [maidata-entry](maidata-entry.md)。`entry.py` 顶部普通 `CONFIG` 集中18项架构参数，构造器无第二套默认值；`--help` 与 `--show-config` 仅依赖标准库。默认命令延迟导入 Torch，成功构建 `AudioEncoder` 并提示 Decoder 与训练未实现。
+入口为 `python -m maidata`，调用方式与 CPU 验证命令见 [maidata-entry](maidata-entry.md)。`entry.py` 顶部普通 `CONFIG` 集中Encoder与Draft架构参数，构造器无第二套默认值；`--help` 与 `--show-config` 仅依赖标准库。默认命令延迟导入 Torch，成功构建 `AudioEncoder` 并提示 Decoder 与训练未实现。
 
 当前代码位于 `src/maidata/audio/{types,frontend,geometry,attention,blocks,pyramid,encoder}.py`，不导入旧 `maimai_baseline`、`maimai_dataset` 或朋友仓库。已实现：
 
@@ -22,6 +22,14 @@ Encoder 合成验证见[入口文档](maidata-entry.md#cpu-合成验证)。独�
 `maidata.chart`实现结构化token、语法、Route-71、IR往返、镜像与窗口终端标签；`maidata.time`实现96 tick拍轴、written-BPM时长、全局等待/释放和4tick标签cell；`maidata.physical`消费既有几何，支持单段/拼接链、候选支持、动作提交及快照恢复。详见[接口说明](chart-fields-physical.md)。
 
 不导入旧模型包、Torch或音频模块。flags不参与四类Physical判定，short音符与Tap/Touch占用等价，1tick音频越界单独处理。拼接链逐段检查几何、整体占手和释放；duration支持可以不连续。没有embedding、小头、时间概率网络、Decoder主体、训练或推理调度；旧模型及旧缓存合同保持原样。
+
+## 新 Draft：D、R、P与独立适配
+
+`maidata.draft` 已实现全曲P0中心组合、逐拍非AR Dense MoE主干D、固定行重建R、单query Planner P、条件元数据、原谱标签、simai统计和辅助loss。默认值及使用方法见[Draft接口](draft.md)，设计正本为[new-draft](../../0wd-v3-refactor-docs/new-draft.md)。
+
+D只消费公开音频张量和独立条件，R/P各自只消费Z；网络不读文件，窗口组合不持有模型。Decoder的Z/plan12投影及attention未放入Draft。Encoder与D/P仅共享无状态RoPE数学，所有可学习参数独立。完整空尾窗保持有效Z与R/P监督，音频mask不替代Draft mask。
+
+本次CPU验证覆盖默认/非默认容量、源字段/simai标签、复用与mask、辅助loss及外部消费者经Z/plan12到Encoder的梯度和实际冻结；另读取一份既有v2谱面导出指定窗口标签。未运行CUDA、原训练batch成本测量、训练或主Decoder生成。训练与checkpoint调度仍未实现，R容量按后续选定的新字段行长度显式配置。
 
 ## 已复制的旧模型实现
 
@@ -62,14 +70,11 @@ Encoder 合成验证见[入口文档](maidata-entry.md#cpu-合成验证)。独�
 
 ## 新 Encoder 尚未衔接的部分
 
-新 Encoder 的全曲 G₀、每窗动态 S、局部 L、块内共享处理和三路局部输出已进入代码。Mel/aux32 离线缓存生产及 Encoder 输入适配已实现；Decoder、Router、MMoE、草稿、训练循环、loss 和 checkpoint 尚未接入，不能把可构建 Encoder 称为可训练完整模型的入口。
+新 Encoder 的全曲 G₀、每窗动态 S、局部 L、块内共享处理和三路局部输出已进入代码。Mel/aux32离线输入、公开P0全曲组合、新Draft D/R/P及辅助loss已实现；Decoder、Router、Decoder MMoE、训练循环、主loss和checkpoint尚未接入，不能把可构建模块称为可训练完整模型的入口。
 
 aux32 采用全曲统一的18维声学量、4维节奏统计和10维时间上下文，L 的 `k/R` 网格与 G0 的 `j+0.5` 拍中心按位置取值。网络模块只消费准备好的张量，输入模块独立计算全曲声学源及派生网格。新隐藏表示不自动兼容现有 native cache；内容未变的原始音频/Mel 不因新源码失效。
 
-两个训练衔接问题仍待决定：
-
-1. 当前 dense 训练为全曲因果历史补齐窗口；历史行需要的局部音频不能因新 Decoder 只读单窗就自动省掉。
-2. 当前草稿读取全曲 fine P0；新方案只计算所需 fine 窗口时，草稿的输入或训练安排需要另行适配。
+新Draft始终要求覆盖全曲的P0；只抽取部分监督窗口也不能省去其他音频中心。主Decoder按其[设计](../../0wd-v3-refactor-docs/new-decoder.md)消费全曲P0、局部Z及预测plan12，并在当前窗口条件下重新处理因果历史；其网络与训练调度需独立实现。
 
 ## 独立副本的执行边界
 

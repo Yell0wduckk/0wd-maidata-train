@@ -5,6 +5,7 @@
 | 文档 | 用途 |
 |---|---|
 | [maidata-entry](maidata-entry.md) | `python -m maidata`、唯一 CONFIG、张量接口和 CPU 合成验证命令 |
+| [draft](draft.md) | 独立D/R/P、全曲P0拼接、窗口、原谱/simai标签及辅助loss接口 |
 | [新 encoder 设计](../../0wd-v3-refactor-docs/new-audio-encoder.md) | G₀ / S / L、共享块、局部三尺度及边界 |
 | [Encoder 实施文档](../../0wd-v3-refactor-docs/encoder-execution-plan.md) | 已实现模块、完整张量协议、验证范围与 aux32 生产约定 |
 | [current-runtime](current-runtime.md) | 新 Encoder 和保留的旧模型的实际状态 |
