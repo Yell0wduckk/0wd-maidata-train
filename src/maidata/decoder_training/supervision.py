@@ -123,15 +123,13 @@ def loss(heads, output, prepared, *, distributions, geometry, diagnostics=None):
             logits = flag_logits[g['flag_rows'],key[1]]
         else:
             logits = None
-        lp = (categorical_log_probabilities(logits,g['allowed']) if logits is not None else
-            interval_log_probabilities(heads.time_parameters(h,key),g['lower'],g['upper'],g['allowed'],distributions[key]))
+        lp = (categorical_log_probabilities(logits,g['allowed'],validate=False) if logits is not None else
+            interval_log_probabilities(heads.time_parameters(h,key),g['lower'],g['upper'],g['allowed'],distributions[key],validate=False))
         nll = -torch.logsumexp(lp.masked_fill(~g['target'],-torch.inf),-1)
         totals['main'] = totals['main'] + (nll*g['main']).sum()
         if g['has_physical']:
-            totals['physical'] = totals['physical'] + (physical_categories(lp,g['penalty'])*g['scale'][:,None]).sum(0)
+            totals['physical'] = totals['physical'] + (physical_categories(lp,g['penalty'],validate=False)*g['scale'][:,None]).sum(0)
         if key == 'route':
-            if geometry is None:
-                raise ValueError('ROUTE requires fixed geometry distances')
             j,t = geometry(lp,g['target'].long().argmax(-1))
             totals['judge'], totals['trajectory'] = totals['judge']+j.sum(), totals['trajectory']+t.sum()
         if diagnostics is not None:

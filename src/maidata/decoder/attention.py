@@ -11,6 +11,7 @@ from .checks import require
 class Attention(nn.Module):
     def __init__(self, dim, memory_dim, heads, dropout, base, scale):
         super().__init__()
+        self.validate_inputs = True
         self.dim, self.heads, self.dropout = dim, heads, dropout
         self.base, self.scale = base, scale
         self.query = nn.Linear(dim, dim)
@@ -33,7 +34,7 @@ class Attention(nn.Module):
         raw = self.split(self.query(x.masked_fill(~valid[..., None], 0)))
         q = apply_rope(raw, beats.masked_fill(~valid, 0), self.base, self.scale)
         if kv.query_layout is not None:
-            if plan_index is not None or causal_offset is not None:
+            if self.validate_inputs and (plan_index is not None or causal_offset is not None):
                 raise ValueError('mapped queries apply only to full-song audio')
             return self.mapped(q, valid, kv)
         allowed = valid[:, None, :, None] & kv.valid[:, None, None, :]
@@ -58,7 +59,7 @@ class Attention(nn.Module):
 
     def mapped(self, q, valid, kv):
         layout = kv.query_layout
-        if tuple(valid.shape) != layout['shape'] or len(layout['indices']) != len(kv.valid):
+        if self.validate_inputs and (tuple(valid.shape) != layout['shape'] or len(layout['indices']) != len(kv.valid)):
             raise ValueError('audio query layout shape mismatch')
         # Query grouping costs O(tokens*D); the O(full-song*D) K/V tensors remain
         # unique for each song and layer, including during backward.
@@ -87,17 +88,20 @@ class Attention(nn.Module):
 class ConditionAdapter(nn.Module):
     def __init__(self, latent_dim, dim):
         super().__init__()
+        self.validate_inputs = True
         self.latent_dim = latent_dim
         self.z = nn.Linear(latent_dim, dim)
         self.plan = nn.Sequential(nn.Linear(12, dim), nn.GELU(), nn.Linear(dim, dim))
         self.source = nn.Embedding(2, dim)
 
     def forward(self, z, plan, plan_valid):
-        validate_memory(z, self.latent_dim)
-        if (plan.shape != (len(z.values), 12) or plan_valid.shape != plan.shape[:1]
-                or plan_valid.dtype != torch.bool):
+        if self.validate_inputs:
+            validate_memory(z, self.latent_dim)
+        if (self.validate_inputs and (plan.shape != (len(z.values), 12) or plan_valid.shape != plan.shape[:1]
+                or plan_valid.dtype != torch.bool)):
             raise ValueError('plan requires [B,12] and independent validity [B]')
-        require((torch.isfinite(plan) | ~plan_valid[:, None]).all(), 'valid plan values must be finite')
+        if self.validate_inputs:
+            require((torch.isfinite(plan) | ~plan_valid[:, None]).all(), 'valid plan values must be finite')
         a = self.z(z.values.masked_fill(~z.valid[..., None], 0)) + self.source.weight[0]
         b = self.plan(plan.masked_fill(~plan_valid[:, None], 0)) + self.source.weight[1]
         return Memory(torch.cat((a, b[:, None]), 1),

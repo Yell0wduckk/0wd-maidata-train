@@ -51,8 +51,8 @@ def select_condition_windows(z, groups, starts, window_valid, config):
                           before_beats=config['decoder_z_before_beats'], after_beats=config['decoder_z_after_beats'])
 
 
-def audio_key_spans(valid):
-    if valid.device.type != 'cpu' or valid.ndim != 2 or valid.dtype != torch.bool:
+def audio_key_spans(valid, *, validate=True):
+    if validate and (valid.device.type != 'cpu' or valid.ndim != 2 or valid.dtype != torch.bool):
         raise ValueError('audio key spans require a CPU validity matrix')
     spans = []
     for row in valid:
@@ -62,14 +62,14 @@ def audio_key_spans(valid):
     return tuple(spans)
 
 
-def audio_query_layout(valid, mapping, audio_count, *, spans=None):
+def audio_query_layout(valid, mapping, audio_count, *, spans=None, validate=True):
     """CPU indices collect a song's queries without repeating its full K/V bank."""
-    if valid.device.type != 'cpu' or mapping.device.type != 'cpu':
+    if validate and (valid.device.type != 'cpu' or mapping.device.type != 'cpu'):
         raise ValueError('audio query layout must be prepared on CPU')
-    if (valid.ndim != 2 or valid.dtype != torch.bool or mapping.shape != (len(valid),)
+    if validate and (valid.ndim != 2 or valid.dtype != torch.bool or mapping.shape != (len(valid),)
             or mapping.dtype != torch.long or ((mapping < 0) | (mapping >= audio_count)).any()):
         raise ValueError('invalid audio query mapping')
-    if spans is not None and len(spans) != audio_count:
+    if validate and spans is not None and len(spans) != audio_count:
         raise ValueError('audio key span count differs')
     return dict(mapping=mapping, shape=tuple(valid.shape), spans=spans, indices=tuple(
         (valid & (mapping == song)[:, None]).flatten().nonzero().flatten() for song in range(audio_count)))

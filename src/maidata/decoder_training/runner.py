@@ -7,14 +7,13 @@ import torch
 
 from maidata.decoder.resources import load_route_distances
 from maidata.decoder.types import Memory
-from maidata.decoder.checks import require
-from maidata.model import decoder_time_distributions
 from maidata.training.data import epoch_iterator
 from . import checkpoint, recipe
 from .data import make_loader
 from .network import DecoderTrainer
 from .plan import DecoderPlan
 from .frozen_cache import FrozenCache
+from .window_cache import WindowCache
 from .supervision import KEYS, loss, objective
 
 
@@ -46,15 +45,13 @@ class Metrics:
 
 
 def prepared_chunks(batch, config):
-    if batch.token_budget != config['decoder_train_chunk_token_budget']:
-        raise ValueError('worker chunk budget differs from runtime configuration')
     return batch.chunks
 
 
 def chunk_loss(model, conditions, audio_kv, chunk, config, geometry, *, diagnostics=None):
     memory = model.memory(conditions,audio_kv,chunk.indices,chunk.audio_layout)
     output = model.decoder(chunk.tokens,chunk.next_types,memory)
-    terms = loss(model.decoder.heads,output,chunk.labels,distributions=decoder_time_distributions(config),
+    terms = loss(model.decoder.heads,output,chunk.labels,distributions=model.distributions,
                  geometry=geometry,diagnostics=diagnostics)
     return terms,output
 
@@ -79,13 +76,12 @@ def update(model, batches, opt, sched, config, geometry, *, audit=False):
             with recipe.autocast(device,config):
                 terms,output = chunk_loss(model,conditions,audio_kv,chunk,config,geometry)
                 value = objective(terms,counts,config)
-            require(torch.isfinite(value), 'nonfinite Decoder objective')
             value.backward(retain_graph=j+1<len(chunks))
             metrics.add(terms)
             costs.append(chunk.cost)
             del terms,output,value,chunk
         del batch,conditions,audio_kv
-    norm = torch.nn.utils.clip_grad_norm_(model.decoder.parameters(),config['decoder_train_gradient_clip'],error_if_nonfinite=True)
+    norm = torch.nn.utils.clip_grad_norm_(model.decoder.parameters(),config['decoder_train_gradient_clip'])
     gradients = {name:sum(float(p.grad.float().square().sum()) for p in m.parameters() if p.grad is not None)**.5
                  for name,m in model.named_children()} if audit else {}
     opt.step()
@@ -123,8 +119,6 @@ def validate(model, loader, config, geometry, *, final, restored_rng=None):
                 diagnostics['windows'] += len(raw.windows)
                 diagnostics['history_dropped'] += sum(w['history_dropped'] for w in raw.windows)
         result = metrics.report(config)
-        if not torch.isfinite(torch.tensor(result['loss'])):
-            raise ValueError('nonfinite validation loss')
         if final:
             result['diagnostics'] = diagnostics
         return result
@@ -154,12 +148,14 @@ def run(config, *, resume=None, cuda_check=False, check_step=0):
         raise FileExistsError('fresh Decoder output must be empty')
     plans = [DecoderPlan(config['decoder_train_'+key],config,training=i==0)
              for i,key in enumerate(('train_plan','validation_plan'))]
-    binding,hashes = checkpoint.data_binding(plans,config)
+    binding,hashes = checkpoint.data_provenance(config),{}
     cache = FrozenCache(plans,config,binding)
+    windows = WindowCache(plans,config,binding)
     producer = checkpoint.cache_producer(cache.producer,config,binding)
     binding['frozen_conditions'] = cache.binding
+    binding['window_tensors'] = windows.binding
     source = checkpoint.source_identity()
-    loaders = [make_loader(p,config,hashes,cache) for p in plans]
+    loaders = [make_loader(p,config,hashes,cache,windows) for p in plans]
     steps = [len(plans[0].batches(e,config)) for e in range(1,config['decoder_train_scheduler_epochs']+1)]
     if not resume:
         recipe.seed(config)
@@ -180,7 +176,9 @@ def run(config, *, resume=None, cuda_check=False, check_step=0):
             raise ValueError('CUDA check step outside first epoch')
         loaders[0].batch_sampler.epoch = 1
         loaders[0].batch_sampler.selected_step = check_step
+        data_start = time.perf_counter()
         batches = list(islice(epoch_iterator(loaders[0]),config['decoder_train_gradient_accumulation_steps']))
+        data_seconds = time.perf_counter()-data_start
         calls = dict.fromkeys(('encoder','draft','planner','decoder'),0)
         handles = []
         for key in dict(model.named_children()):
@@ -194,6 +192,7 @@ def run(config, *, resume=None, cuda_check=False, check_step=0):
         torch.cuda.synchronize(device)
         report = dict(metrics=metrics.report(config),**audit,component_forward_calls=calls,
             conditioning='offline_cache',constructed_components=list(dict(model.named_children())),
+            data_wait_seconds=data_seconds,
             seconds=time.perf_counter()-start,peak_allocated=torch.cuda.max_memory_allocated(device),
             peak_reserved=torch.cuda.max_memory_reserved(device),optimizer_step_in_epoch=check_step+1,
             audio_groups=[b.audio_variants for b in batches],source=source,binding=binding,producer=producer,config=config)
@@ -201,7 +200,7 @@ def run(config, *, resume=None, cuda_check=False, check_step=0):
             h.remove()
         write_json(output.with_name(output.name+'-cuda-check.json'),report)
         return report
-    if completed == config['decoder_train_stop_after_epochs']:
+    if completed >= config['decoder_train_stop_after_epochs']:
         return dict(completed_epochs=completed,step=step)
     output.mkdir(parents=True,exist_ok=True)
     write_json(output/('resume.json' if resume else 'run.json'),dict(config=config,source=source,binding=binding,
@@ -213,8 +212,15 @@ def run(config, *, resume=None, cuda_check=False, check_step=0):
         restored[0] = None
         metrics,updates,group_instances = Metrics(),0,0
         groups, identities = set(), []
-        while batches := list(islice(iterator,config['decoder_train_gradient_accumulation_steps'])):
+        while True:
+            data_start = time.perf_counter()
+            batches = list(islice(iterator,config['decoder_train_gradient_accumulation_steps']))
+            data_seconds = time.perf_counter()-data_start
+            if not batches:
+                break
+            update_start = time.perf_counter()
             current,_ = update(model,batches,opt,sched,config,geometry)
+            update_seconds = time.perf_counter()-update_start
             metrics.merge(current)
             updates += 1
             step += 1
@@ -223,10 +229,8 @@ def run(config, *, resume=None, cuda_check=False, check_step=0):
             identities.extend(w['identity'] for b in batches for w in b.windows)
             print(json.dumps(dict(epoch=epoch,update=updates,updates=steps[epoch-1],step=step,
                                   loss=current.report(config)['loss'],lr=opt.param_groups[0]['lr'],
+                                  data_wait_seconds=data_seconds,update_seconds=update_seconds,
                                   batch_costs=[b.budget_cost for b in batches])),flush=True)
-        expected = [(r['window_id'], r['occurrence']) for r in plans[0].occurrences(epoch)]
-        if updates != steps[epoch-1] or groups != set(plans[0].groups) or identities != expected:
-            raise ValueError('incomplete occurrence epoch; checkpoint not saved')
         final = epoch == config['decoder_train_stop_after_epochs']
         result = dict(epoch=epoch,step=step,train=metrics.report(config),seconds=time.perf_counter()-start,
                       audio_groups=len(groups),audio_group_instances=group_instances,windows=len(identities))

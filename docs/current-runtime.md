@@ -39,7 +39,7 @@ CPU验证覆盖默认/非默认容量、源字段/simai标签、复用与mask、
 
 CPU验证覆盖默认与非默认架构、并行/增量一致、目标类型隔离、plan位置与空mask、FP32/CPU BF16反向、真实字段/规则支持、非单调时间概率、独立归约、跨Encoder/D/P梯度与实际冻结、链/分支快照。训练循环和checkpoint位于独立的`maidata.decoder_training`；整曲生成调度另行实现，未运行CUDA或重建缓存。
 
-阶段二已接入原谱v2字段/Physical、全局打乱的既有Decoder occurrence、GT历史与确定性15% history dropout；保持仍有效的完整物理动作，按等价前缀复用训练支持。训练和验证仅构建M，从配套的离线P0、全曲Z与预测plan12缓存读取条件，不构建或运行E/D/P/R，缺失或错配时不回退在线计算；导出与消费模块独立。默认联合budget45056、音频/谱面权重1:1、累积1、warmup200，全部可配置。实际M token分块按整个逻辑batch的独立分母归约；完整轮恢复同时绑定两个缓存manifest，保留每5轮及末轮验证和原batch CUDA检查入口。其余未确定配方保持None，见[阶段二训练](decoder-training.md)。
+阶段二已接入原谱v2字段/Physical、全局打乱的既有Decoder occurrence、GT历史与确定性15% history dropout；保持仍有效的完整物理动作，按等价前缀复用训练支持。训练和验证仅构建M，从配套的离线P0、全曲Z与预测plan12缓存读取条件，不构建或运行E/D/P/R，训练不回退在线计算；导出与消费模块独立。默认 row budget8192、累积1、warmup200，全部可配置；联合预算留给可能的第三阶段。训练只读离线窗口输入/监督张量，不解压整谱或执行 Physical 查询，启动和 batch 均不重新校验已验收输入，不哈希生产者 checkpoint。实际M token分块按整个逻辑batch的独立分母归约；恢复加载完整轮训练状态，源码/配方/budget/计划身份不作为恢复门禁；保留每5轮及末轮 validation 和原 batch CUDA 测量入口。其余未确定配方保持None，见[阶段二训练](decoder-training.md)。
 
 ## 已复制的旧模型实现
 

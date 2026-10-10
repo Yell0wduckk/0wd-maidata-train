@@ -21,7 +21,8 @@ from maidata.model import build_decoder,decoder_time_distributions
 from maidata.time import TimingMap
 from maidata.decoder_training.support_cache import ChartSupports
 from maidata.decoder_training import supervision,checkpoint,recipe,runner
-from maidata.decoder_training.data import collate_audio,history_rng,DecoderDataset
+from maidata.decoder_training.data import collate_audio,DecoderDataset
+from maidata.decoder_training.ordering import history_rng
 from maidata.decoder_training.network import DecoderTrainer
 from maidata.decoder_training.producer import FrozenProducer
 from maidata.decoder_training.batching import window_chunks
@@ -43,7 +44,7 @@ def config(encoder_config):
         decoder_train_device='cpu',decoder_train_workers=0,decoder_train_precision='fp32',
         decoder_train_learning_rate=1e-3,decoder_train_weight_decay=.01,decoder_train_gradient_clip=1.,
         decoder_train_warmup_steps=1,decoder_train_scheduler_epochs=6,decoder_train_stop_after_epochs=2,
-        decoder_train_gradient_accumulation_steps=1,decoder_train_token_budget=45056,
+        decoder_train_gradient_accumulation_steps=1,decoder_train_row_budget=8192,
         decoder_train_chunk_token_budget=24,decoder_train_physical_weight=.1,decoder_train_judge_weight=.2,
         decoder_train_trajectory_weight=.3,decoder_history_dropout=.15)
     return c
@@ -161,7 +162,20 @@ def training_item(index,c,monkeypatch,*,remaster=False,epoch=1,training=True):
                     training=training,rng=history_rng(c['decoder_train_seed'],epoch,identity,occurrence))
                 windows.append(dict(identity=(identity,occurrence),chart_id=key,start=start,example=w,
                     stages=chart.window(w)[0],timing=chart.timing,audio_end=1.2))
-    return freeze_item(dict(item,windows=windows),c)
+    return freeze_item(dict(item,windows=[tensor_window(w) for w in windows]),c)
+
+
+def tensor_window(row):
+    from dataclasses import fields
+    w = row['example']
+    tokens, types, _ = collate_windows([w], device='cpu')
+    labels = supervision.prepare([row])
+    for group in labels.groups.values():
+        group['indices'][:, 1] -= w.boundary_index
+    labels.flags['indices'][:, 1] -= w.boundary_index
+    return dict(row, tokens={f.name:getattr(tokens,f.name)[0] for f in fields(tokens)}, next_types=types[0],
+                labels=dict(groups=labels.groups,counts=labels.counts,flags=labels.flags),
+                length=len(w.inputs), offset=w.boundary_index, history_dropped=w.history_dropped)
 
 
 def freeze_item(item,c):
@@ -228,7 +242,7 @@ def test_actual_cached_update_only_constructs_m_and_preserves_chunk_denominators
 
 
 def test_chunk_budget_never_crops_history_or_reorders_occurrences():
-    rows = [dict(example=type('W',(),{'inputs':tuple(range(n))})()) for n in (7,3,25,4)]
+    rows = [dict(length=n) for n in (7,3,25,4)]
     chunks = window_chunks(rows,16)
     assert chunks==[[0,1],[2],[3]]
     assert sum(chunks,[])==list(range(4))
@@ -291,13 +305,25 @@ def test_real_dataset_reads_fields_supports_and_plan_without_rebuilding(config,t
     class Cache:
         def read(self,variant):
             return cached[variant]['p0'],cached[variant]['dp']
-    dataset = DecoderDataset(plan,c,hashes,Cache())
-    dataset.geometry = g
+    from maidata.decoder_training.export_windows import compile_window
+    from maidata.decoder.windows import real_onsets
+    compiled = {}
+    for record in records:
+        key = record['source']['chart_id']
+        from maidata.chart_cache.training import load_supports
+        chart = ChartSupports(record,load_supports(tmp_path/'physical'/f'charts/{key[0]}/5.json.gz'),g)
+        onsets = real_onsets(chart.tokens,chart.timing,sequence_start_tick=chart.start_tick)
+        for row in plan.windows:
+            if row['chart_id']==key:
+                compiled[row['window_id']] = compile_window(chart,row,c,1.2,onsets)
+    class Windows:
+        def read(self,key): return compiled[key]
+    dataset = DecoderDataset(plan,c,hashes,Cache(),Windows())
     with patch('maidata.chart_cache.training.build_supports',side_effect=AssertionError('no cache rebuild')):
         one = dataset[('0',2)]
         again = dataset[('0',2)]
     assert [w['identity'] for w in one['windows']]==[w['identity'] for w in again['windows']]
-    assert [w['example'] for w in one['windows']]==[w['example'] for w in again['windows']]
+    assert [w['history_dropped'] for w in one['windows']]==[w['history_dropped'] for w in again['windows']]
     assert len(one['windows'])==3
     batch = collate_audio([one,dataset[('1',2)]],config=c)
     assert len(batch.windows)==6 and len(batch.audio_variants)==2
@@ -305,8 +331,8 @@ def test_real_dataset_reads_fields_supports_and_plan_without_rebuilding(config,t
     assert sum(len(p) for step in plan.batches(3,c) for p in step)==6
     from collections import Counter
     from maidata.decoder_training.data import WindowBatchSampler
-    from maidata.decoder_training.batching import joint_cost
-    small = dict(c,decoder_train_token_budget=20)
+    from maidata.decoder_training.batching import batch_cost
+    small = dict(c,decoder_train_row_budget=20)
     sampler = WindowBatchSampler(plan,small)
     sampler.epoch = 3
     seen = []
@@ -315,15 +341,15 @@ def test_real_dataset_reads_fields_supports_and_plan_without_rebuilding(config,t
         parts = [dataset[r] for r in requests]
         batch = collate_audio(parts,config=small)
         seen.extend(w['identity'] for w in batch.windows)
-        assert batch.budget_cost['weighted_tokens']<=20 or len(batch.windows)==1
+        assert batch.budget_cost['row_tokens']<=20 or len(batch.windows)==1
         ordered = sorted([w for p in parts for w in p['windows']],key=lambda w:w['sequence_index'])
         lengths = []
         for w in ordered:
             target,history = plan._lengths[w['identity'][0]]
-            length = target+(0 if w['example'].history_dropped else history)
-            assert length==len(w['example'].inputs)
+            length = target+(0 if w['history_dropped'] else history)
+            assert length==w['length']
             lengths.append(length)
-        cost = joint_cost([len(plan.groups[v]['encoder_starts_beats'])*c['target_beats']*c['fpn_rates'][0]
+        cost = batch_cost([len(plan.groups[v]['encoder_starts_beats'])*c['target_beats']*c['fpn_rates'][0]
                            for v in batch.audio_variants],lengths,small)
         assert cost==batch.budget_cost
     expected = [(r['window_id'],r['occurrence']) for r in plan.occurrences(3)]
@@ -335,13 +361,11 @@ def test_real_dataset_reads_fields_supports_and_plan_without_rebuilding(config,t
     cached['0']['dp']['chart_conditions']['0:5']['level_text'] = '14.50'
     dataset[('0',2)]  # Display formatting does not change the numeric D condition.
     cached['0']['dp']['chart_conditions']['0:5']['level'] = 15.
-    with pytest.raises(ValueError,match='difficulty/level'):
-        dataset[('0',2)]
+    dataset[('0',2)]  # Accepted producer metadata is not revalidated per batch.
     bad = deepcopy(plan.manifest)
     bad['config']['chart_history_beats']+=1
     (tmp_path/'plan/plan.json').write_text(json.dumps(bad))
-    with pytest.raises(ValueError,match='config differs'):
-        DecoderPlan(tmp_path/'plan',c,training=True)
+    assert DecoderPlan(tmp_path/'plan',c,training=True).manifest == bad
 
 
 class EpochDataset(torch.utils.data.Dataset):
@@ -366,8 +390,8 @@ class EpochDataset(torch.utils.data.Dataset):
             w = build_window(tokens,original['timing'],sequence_start_tick=0,start_tick=old.start_tick,end_tick=old.end_tick,
                 audio_after_beats=1,audio_end_seconds=1.2,history_beats=4,history_dropout=c['decoder_history_dropout'],
                 training=self.training,rng=history_rng(c['decoder_train_seed'],epoch,identity,occurrence))
-            item['windows'].append(dict(original,example=w,sequence_index=selected[original['identity']],
-                stages=(None,)*w.boundary_index+original['stages'][old.boundary_index:]))
+            item['windows'].append(tensor_window(dict(original,example=w,sequence_index=selected[original['identity']],
+                stages=(None,)*w.boundary_index+original['stages'][old.boundary_index:])))
         return item
 
 
@@ -380,7 +404,7 @@ def test_runner_exact_epoch_resume_dropout_validation_and_failure(config,tmp_pat
     from maidata.decoder_training.batching import occurrence_batches
     from maidata.decoder_training.recipe import PATH_KEYS
     c = dict(config,decoder_dropout=.1,decoder_history_dropout=.5,decoder_train_stop_after_epochs=6,
-             decoder_train_workers=workers,decoder_train_token_budget=24)
+             decoder_train_workers=workers,decoder_train_row_budget=24)
     c.update({k:str(tmp_path/k) for k in PATH_KEYS})
     items = [training_item(i,c,monkeypatch) for i in range(2)]
     class Plan:
@@ -403,15 +427,17 @@ def test_runner_exact_epoch_resume_dropout_validation_and_failure(config,tmp_pat
             if self.training:
                 random.Random(f'decoder-windows:{c["decoder_train_seed"]}:{e}').shuffle(rows)
             return [dict(row,sequence_index=i) for i,row in enumerate(rows)]
-    def loader(p,c,hashes,cache):
+    def loader(p,c,hashes,cache,windows):
         return DataLoader(EpochDataset(items,c,p),batch_sampler=WindowBatchSampler(p,c),
             collate_fn=partial(collate_audio,config=c,packed=True),generator=torch.Generator().manual_seed(71),
             num_workers=workers,persistent_workers=workers > 0,worker_init_fn=worker_init)
     from types import SimpleNamespace
     monkeypatch.setattr(runner,'FrozenCache',lambda *a:SimpleNamespace(producer={'sha256':'fixed-producer'},binding={'p0':'p','dp':'d'}))
+    monkeypatch.setattr(runner,'WindowCache',lambda *a:SimpleNamespace(binding='windows'))
     monkeypatch.setattr(runner,'DecoderPlan',Plan)
     monkeypatch.setattr(runner,'make_loader',loader)
-    monkeypatch.setattr(checkpoint,'data_binding',lambda *a:({'fixed':'inputs'},{}))
+    monkeypatch.setattr(checkpoint,'data_binding',lambda *a: (_ for _ in ()).throw(AssertionError('startup verification')))
+    monkeypatch.setattr(checkpoint,'data_provenance',lambda *a:{'fixed':'inputs'})
     monkeypatch.setattr(checkpoint,'source_identity',lambda:{'fixed':'source'})
     monkeypatch.setattr(checkpoint,'cache_producer',lambda identity,*a:identity)
     monkeypatch.setattr(runner,'load_route_distances',lambda p:distances())
@@ -462,12 +488,11 @@ def test_runner_exact_epoch_resume_dropout_validation_and_failure(config,tmp_pat
     assert [m['train'] for m in continuous]==[m['train'] for m in metrics]
     assert metrics[-1]['validation']['diagnostics']['history_dropped']==0
     assert runner.run(interrupted,resume=path)['step']==sum(steps)
-    with pytest.raises(ValueError,match='binding changed'):
-        runner.run(dict(interrupted,decoder_history_dropout=.2),resume=path)
+    assert runner.run(dict(interrupted,decoder_history_dropout=.2),resume=path)['step']==sum(steps)
     monkeypatch.setattr(runner,'FrozenCache',lambda *a:SimpleNamespace(producer={'sha256':'fixed-producer'},
         binding={'p0':'p','dp':'changed'}))
-    with pytest.raises(ValueError,match='binding changed'):
-        runner.run(interrupted,resume=path)
+    monkeypatch.setattr(checkpoint,'source_identity',lambda:{'changed':'source'})
+    assert runner.run(interrupted,resume=path)['step']==sum(steps)
 
 
 def test_producer_load_is_paired_strict_and_stage_two_resume_is_separate(config,tmp_path,monkeypatch):
@@ -486,10 +511,9 @@ def test_producer_load_is_paired_strict_and_stage_two_resume_is_separate(config,
     assert identity['sha256']==checkpoint.digest_file(path)
     with patch('torch.load',side_effect=AssertionError('training must not load producer weights')):
         assert checkpoint.cache_producer(identity,c,binding)==identity
-    with pytest.raises(ValueError,match='checkpoint differs'):
-        checkpoint.cache_producer(dict(identity,sha256='wrong'),c,binding)
-    with pytest.raises(ValueError,match='architecture'):
-        checkpoint.cache_producer(identity,dict(c,draft_level_scale=8),binding)
+    with patch.object(checkpoint,'digest_file',side_effect=AssertionError('training hash')):
+        assert checkpoint.cache_producer(dict(identity,sha256='old'),c,binding)['sha256']=='old'
+        assert checkpoint.cache_producer(identity,dict(c,draft_level_scale=8),binding)==identity
     for name in ('encoder','draft','planner'):
         for a,b in zip(getattr(model,name).parameters(),getattr(upstream,name).parameters()):
             torch.testing.assert_close(a,b,atol=0,rtol=0)
@@ -565,26 +589,24 @@ def test_required_recipe_is_not_filled_from_pretraining_defaults(config):
     assert CONFIG['decoder_train_workers']==12
     assert CONFIG['decoder_train_warmup_steps']==200
     assert CONFIG['decoder_train_gradient_accumulation_steps']==1
-    assert CONFIG['decoder_train_token_budget']==45056
-    assert CONFIG['decoder_train_audio_token_weight']==CONFIG['decoder_train_chart_token_weight']==1
+    assert CONFIG['decoder_train_row_budget']==8192
+    assert 'decoder_train_audio_token_weight' not in CONFIG and 'decoder_train_chart_token_weight' not in CONFIG
     assert CONFIG['decoder_train_learning_rate'] is None and CONFIG['decoder_train_checkpoint'] is None
     with pytest.raises(ValueError,match='explicit Decoder training recipe'):
         recipe.validate(CONFIG)
 
 
-def test_joint_budget_padding_deduplication_oversize_and_final_accumulation(config):
-    from maidata.decoder_training.batching import occurrence_batches,joint_cost
+def test_row_budget_ignores_audio_preserves_padding_oversize_and_final_accumulation(config):
+    from maidata.decoder_training.batching import occurrence_batches,batch_cost
     rows = [dict(audio_variant=v,window_id=str(i),occurrence=0) for i,v in enumerate(('a','a','b','c','a'))]
-    c = dict(config,decoder_train_token_budget=32,decoder_train_gradient_accumulation_steps=2)
-    steps = occurrence_batches(rows,dict(a=10,b=14,c=50),[4,9,4,3,5],c)
-    assert steps==[[[rows[0],rows[1]],[rows[2]]],[[rows[3]],[rows[4]]]]
-    assert joint_cost([10],[4,9],c)['weighted_tokens']==28
-    assert joint_cost([10,14],[4,4],c)['weighted_tokens']==36  # audio padding is charged
-    assert joint_cost([50],[3],c)['oversized']
-    weighted = dict(c,decoder_train_audio_token_weight=2,decoder_train_chart_token_weight=.5)
-    assert joint_cost([10],[4,9],weighted)['weighted_tokens']==29
-    # Accumulation 1 never joins batches; final partial cycles keep their rows.
-    assert len(occurrence_batches(rows[:4],dict(a=10,b=14,c=50),[4,9,4,3],c)[-1])==1
+    c = dict(config,decoder_train_row_budget=32,decoder_train_gradient_accumulation_steps=2)
+    steps = occurrence_batches(rows,dict(a=10000,b=14000,c=50000),[4,9,4,40,5],c)
+    assert steps==[[rows[:3],[rows[3]]],[[rows[4]]]]
+    assert batch_cost([10000],[4,9],c)['row_tokens']==18
+    assert batch_cost([10000,14000],[4,4],c)['row_tokens']==8
+    assert not batch_cost([50000],[3],c)['oversized']
+    assert batch_cost([1],[40],c)['oversized']
+    assert len(occurrence_batches(rows,dict(a=10,b=14,c=50),[4,9,4,40,5],c)[-1])==1
 
 
 @pytest.mark.parametrize('dropout',[0.,.15,1.])

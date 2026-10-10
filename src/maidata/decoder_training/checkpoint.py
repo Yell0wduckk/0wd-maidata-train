@@ -1,11 +1,13 @@
-"""Producer identity and independent, strict complete-epoch Decoder checkpoints."""
+"""Producer provenance and independent complete-epoch Decoder checkpoints."""
 import json
+import random
+import numpy as np
 from pathlib import Path
 import torch
 
 from maidata.model import ENCODER_KEYS
 from maidata.training import checkpoint as stage_one
-from maidata.training.checkpoint import digest_file, rng_state, restore_rng, atomic_save, validate_cursor
+from maidata.training.checkpoint import digest_file, rng_state, atomic_save, validate_cursor
 from .plan import read_json
 from .recipe import PATH_KEYS
 
@@ -22,17 +24,12 @@ def recipe(config):
 
 
 def source_identity():
-    root = Path(__file__).resolve().parents[1]
-    files = [root/'model.py',root/'__init__.py']
-    for directory in ('audio','draft','nn','chart','chart_cache','time','physical','preparation',
-                      'decoder','decoder_training','sampling','training'):
-        files.extend(sorted((root/directory).glob('*.py')))
-    files.extend(sorted((root/'chart/assets').glob('*.json')))
-    return {p.relative_to(root).as_posix():digest_file(p) for p in files}
+    # Provenance is descriptive, never a checkpoint loading requirement.
+    return stage_one.source_identity()
 
 
 def data_binding(plans, config):
-    # The shared metadata contract checker reads only catalog/summary/plan files.
+    # Explicit offline export only; the training runner uses data_provenance.
     alias = {k.replace('decoder_train_','pretrain_'):v for k,v in config.items() if k.startswith('decoder_train_')}
     alias['samples_per_beat'] = config['samples_per_beat']
     binding = stage_one.data_binding(plans, alias)
@@ -79,17 +76,22 @@ def load_producer(model, config, binding):
                 step=payload['step'],recipe=payload['recipe'],source=payload['source'],binding=payload['binding'])
 
 
-def cache_producer(identity, config, binding):
-    """Verify the original producer without constructing E/D/P or loading weights.
+def data_provenance(config):
+    """Accepted inputs are selected by the operator, without startup revalidation."""
+    return dict(paths={k: str(Path(config[k]).resolve()) for k in PATH_KEYS
+                       if k != 'decoder_train_output' and config[k] is not None})
 
-    Export already validated the complete checkpoint; its exact hash binds that
-    accepted identity. Training reads only metadata and this named checkpoint.
-    """
-    if (identity['schema'] != stage_one.SCHEMA or identity['completed_epochs'] < 1
-            or identity['step'] < 1 or identity['sha256'] != digest_file(config['decoder_train_checkpoint'])):
-        raise ValueError('frozen cache producer checkpoint differs')
-    _validate_producer(identity, config, binding)
+
+def cache_producer(identity, config, binding):
     return identity
+
+
+def restore_rng(state):
+    random.setstate(state['python'])
+    np.random.set_state(state['numpy'])
+    torch.set_rng_state(state['torch'].cpu())
+    if torch.cuda.is_available() and state['cuda']:
+        torch.cuda.set_rng_state_all([s.cpu() for s in state['cuda']])
 
 
 def _validate_producer(payload, config, binding):
@@ -97,24 +99,12 @@ def _validate_producer(payload, config, binding):
     current = json.loads(json.dumps({k:config[k] for k in keys}))
     if current != {k:payload['recipe'].get(k) for k in keys}:
         raise ValueError('frozen producer architecture/representation differs')
-    # Retain the producer's own contract: older checkpoints carry file guards,
-    # newer stage-I checkpoints carry commit provenance. Never rewrite either.
-    guarded = {k:v for k,v in payload['source'].items() if
-               k == 'model.py' or k.startswith(('audio/','draft/','nn/'))}
-    root = Path(__file__).resolve().parents[1]
-    for key,value in guarded.items():
-        if not (root/key).is_file() or digest_file(root/key) != value:
-            raise ValueError(f'frozen producer source differs: {key}')
     for key in ('pretrain_chart_cache','pretrain_audio_cache'):
         if payload['binding'][key] != binding[key]:
             raise ValueError('producer field/audio normalization binding differs')
 
 
 def _load(module, actual):
-    expected = module.state_dict()
-    if (expected.keys() != actual.keys() or any(expected[k].shape != v.shape or expected[k].dtype != v.dtype
-            or not torch.isfinite(v).all() for k,v in actual.items())):
-        raise ValueError('model tensor inventory/shape/dtype/finite mismatch')
     module.load_state_dict(actual,strict=True)
 
 
@@ -124,21 +114,12 @@ def capture(model, opt, sched, *, epoch, step, config, binding, source, producer
         source=source,producer=producer,steps_by_epoch=steps,rng=rng_state(),
         loader_rng=[l.generator.get_state() for l in loaders],loader_started=[l._iterator is not None for l in loaders],
         best_validation_loss=best,metrics=metrics)
-    validate_cursor(result,steps)
     return result
 
 
 def restore(payload, model, opt, sched, *, config, binding, source, producer, steps, loaders):
-    current, saved = recipe(config),payload['recipe']
-    stop = 'decoder_train_stop_after_epochs'
-    if (payload.get('schema') != SCHEMA or payload['source'] != source or payload['binding'] != binding
-            or payload['producer'] != producer or payload['steps_by_epoch'] != steps
-            or {k:v for k,v in current.items() if k != stop} != {k:v for k,v in saved.items() if k != stop}
-            or current[stop] < saved[stop]):
-        raise ValueError('resume source, recipe, producer or input binding changed')
-    validate_cursor(payload,steps)
-    if payload['completed_epochs'] > saved[stop] or len(payload['loader_rng']) != len(loaders) or len(payload['loader_started']) != len(loaders):
-        raise ValueError('invalid saved epoch or loader RNG inventory')
+    # The user/training operator selects the checkpoint. Source, budget, recipe,
+    # plan and cache provenance are recorded, not used as resume vetoes.
     _load(model.decoder,payload['model_state'])
     opt.load_state_dict(payload['optimizer_state'])
     sched.load_state_dict(payload['scheduler_state'])

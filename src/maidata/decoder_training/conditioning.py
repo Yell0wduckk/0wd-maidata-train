@@ -4,8 +4,6 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 
 from maidata.draft.types import BeatMemory
-from maidata.draft.layout import prepare_selection
-from maidata.draft.windows import select_windows
 from maidata.decoder.types import Memory
 
 
@@ -48,9 +46,12 @@ def collate_conditions(items, windows, config):
     mapping = torch.tensor(window_groups, dtype=torch.long)
     starts = torch.tensor(starts, dtype=torch.float32)
     valid = torch.ones(len(starts), dtype=torch.bool)
-    layout = prepare_selection(z.beats, z.valid, mapping, starts, valid, target_beats=config['target_beats'],
-        before_beats=config['decoder_z_before_beats'], after_beats=config['decoder_z_after_beats'])
-    selected = select_windows(z, mapping, starts, valid, target_beats=config['target_beats'],
-        before_beats=config['decoder_z_before_beats'], after_beats=config['decoder_z_after_beats'], layout=layout).memory
+    count = config['decoder_z_before_beats'] + config['target_beats'] + config['decoder_z_after_beats']
+    desired = starts[:, None] - config['decoder_z_before_beats'] + torch.arange(count).float() + .5
+    position = (desired-z.beats[mapping, :1]).long()
+    safe = position.clamp(0, z.values.shape[1]-1)
+    selected_valid = (position >= 0) & (position < z.values.shape[1]) & z.valid[mapping[:, None], safe]
+    selected = Memory(z.values[mapping[:, None], safe].masked_fill(~selected_valid[..., None], 0),
+                      desired, selected_valid)
     return Conditions(audio, Memory(selected.values, selected.beats, selected.valid), torch.stack(plans),
         torch.stack(plan_valid), torch.tensor(indices, dtype=torch.long), torch.tensor(audio_mapping, dtype=torch.long))

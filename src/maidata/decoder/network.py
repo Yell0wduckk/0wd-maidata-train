@@ -16,6 +16,7 @@ class Decoder(nn.Module):
                  norm_eps, rope_base, rope_position_scale, note_dims, route_dims,
                  time_base, time_scale, time_components, condition_gate_init):
         super().__init__()
+        self.validate_inputs = True
         integers = (dim, audio_dim, latent_dim, layers, router_layer, heads, shared_ffn_dim,
                     expert_ffn_dim, experts, readout_ffn_dim, time_components)
         if any(type(v) is not int or v <= 0 for v in integers):
@@ -42,18 +43,21 @@ class Decoder(nn.Module):
 
     def prepare_audio(self, audio):
         """Project unique song banks once per forward/parameter version; retain gradients."""
-        validate_memory(audio, self.audio_dim)
+        if self.validate_inputs:
+            validate_memory(audio, self.audio_dim)
         return tuple(layer.audio_attn.project(audio) for layer in self.layers)
 
     def prepare_memory(self, audio_kv, audio_mapping, z, plan, plan_valid, *, audio_layout=None):
         """One fresh object per target window batch; conditions come from public tensors."""
-        if (len(audio_kv) != len(self.layers) or audio_mapping.dtype != torch.long
-                or audio_mapping.shape != (len(z.values),)):
+        if (self.validate_inputs and (len(audio_kv) != len(self.layers) or audio_mapping.dtype != torch.long
+                or audio_mapping.shape != (len(z.values),))):
             raise ValueError('invalid song-to-window mapping')
-        require(((audio_mapping >= 0) & (audio_mapping < len(audio_kv[0].valid))).all(),
-                'invalid song-to-window mapping')
+        if self.validate_inputs:
+            require(((audio_mapping >= 0) & (audio_mapping < len(audio_kv[0].valid))).all(),
+                    'invalid song-to-window mapping')
         if audio_layout is not None:
-            require((audio_mapping == audio_layout['mapping']).all(), 'audio query layout ownership differs')
+            if self.validate_inputs:
+                require((audio_mapping == audio_layout['mapping']).all(), 'audio query layout ownership differs')
         condition = self.condition(z, plan, plan_valid)
         def select(kv):
             if audio_layout is not None:
@@ -66,9 +70,9 @@ class Decoder(nn.Module):
 
     def begin(self, tokens, memory, *, cache=None):
         """Run ONLY the shared front. No next type or content label is accepted."""
-        if cache is not None and cache.memory is not memory:
+        if self.validate_inputs and (cache is not None and cache.memory is not memory):
             raise ValueError('new window/memory requires fresh self-attention prefill')
-        if len(memory.audio) != len(self.layers) or len(memory.condition) != len(self.layers):
+        if self.validate_inputs and (len(memory.audio) != len(self.layers) or len(memory.condition) != len(self.layers)):
             raise ValueError('memory layer count mismatch')
         x = self.embedding(tokens)
         front = []
@@ -81,10 +85,11 @@ class Decoder(nn.Module):
 
     def complete(self, routed, next_types):
         """Reusing routed with a new type recomputes ALL affected back-layer K/V."""
-        if next_types.shape != routed.valid.shape or next_types.dtype != torch.long:
+        if self.validate_inputs and (next_types.shape != routed.valid.shape or next_types.dtype != torch.long):
             raise ValueError('next types must be aligned valid five-class IDs')
-        require(((next_types >= 0) & (next_types < 5) | ~routed.valid).all(),
-                'next types must be aligned valid five-class IDs')
+        if self.validate_inputs:
+            require(((next_types >= 0) & (next_types < 5) | ~routed.valid).all(),
+                    'next types must be aligned valid five-class IDs')
         types = next_types.masked_fill(~routed.valid, 0)
         x = (routed.hidden + self.target_type(types)).masked_fill(~routed.valid[..., None], 0)
         memory, old = routed.memory, routed.previous

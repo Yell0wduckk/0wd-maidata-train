@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 
-PATH_KEYS = tuple('decoder_train_'+k for k in ('checkpoint','p0_cache','dp_cache','train_plan','validation_plan','chart_cache',
+PATH_KEYS = tuple('decoder_train_'+k for k in ('checkpoint','p0_cache','dp_cache','window_cache','train_plan','validation_plan','chart_cache',
     'physical_cache','audio_cache','mel_root','source_root','geometry','slide_data','route_distances','output'))
 
 
@@ -15,7 +15,7 @@ def validate(config):
     missing = [k for k in keys if config[k] is None]
     if missing:
         raise ValueError('set explicit Decoder training recipe: '+', '.join(missing))
-    for key in ('gradient_accumulation_steps','token_budget','chunk_token_budget','scheduler_epochs','stop_after_epochs'):
+    for key in ('gradient_accumulation_steps','row_budget','chunk_token_budget','scheduler_epochs','stop_after_epochs'):
         if type(config['decoder_train_'+key]) is not int or config['decoder_train_'+key] < 1:
             raise ValueError(f'{key} must be a positive integer')
     for key in ('warmup_steps','workers'):
@@ -27,10 +27,6 @@ def validate(config):
         value = config['decoder_train_'+key]
         if isinstance(value,bool) or not math.isfinite(value) or value < 0 or (key in ('learning_rate','gradient_clip') and value == 0):
             raise ValueError(f'invalid {key}')
-    for key in ('audio_token_weight', 'chart_token_weight'):
-        value = config['decoder_train_'+key]
-        if isinstance(value, bool) or not math.isfinite(value) or value <= 0:
-            raise ValueError(f'{key} must be finite and positive')
     if config['decoder_train_stop_after_epochs'] > config['decoder_train_scheduler_epochs']:
         raise ValueError('absolute stop exceeds scheduler horizon')
     if config['decoder_train_precision'] not in ('fp32','bf16') or config['decoder_train_optimizer'] != 'adamw':

@@ -24,9 +24,9 @@ def nll(logp, target_mask, *, counted=True):
     return Reduction(-torch.logsumexp(logp[target_mask], -1), 1)
 
 
-def physical_categories(logp, forbidden):
+def physical_categories(logp, forbidden, *, validate=True):
     """One candidate's mass counted once per category, before any hard mask."""
-    if forbidden.shape != (*logp.shape, 4) or forbidden.dtype != torch.bool:
+    if validate and (forbidden.shape != (*logp.shape, 4) or forbidden.dtype != torch.bool):
         raise ValueError('expected four independent Physical supports')
     # Using legal complement avoids catastrophic q -> 1 cancellation. A finite
     # floor handles a category that forbids all basic choices without NaN grads.

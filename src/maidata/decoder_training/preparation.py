@@ -2,9 +2,9 @@
 from dataclasses import dataclass
 import torch
 
-from maidata.decoder.batching import collate_windows, audio_query_layout, audio_key_spans
-from .batching import window_chunks, joint_cost
-from .supervision import prepare
+from maidata.decoder.batching import audio_query_layout, audio_key_spans
+from .batching import window_chunks, batch_cost
+from .window_cache import collate_prepared
 
 
 @dataclass
@@ -23,21 +23,18 @@ class Chunk:
 
 def prepare_batch(batch, config):
     batch.chunks = []
-    batch.budget_cost = joint_cost(batch.audio_lengths,
-        [len(w['example'].inputs) for w in batch.windows], config)
-    if batch.budget_cost['oversized'] and len(batch.windows) != 1:
-        raise ValueError('multi-window batch exceeds the joint token budget')
+    batch.budget_cost = batch_cost(batch.audio_lengths, [w['length'] for w in batch.windows], config)
     conditions = batch.conditions
-    spans = audio_key_spans(conditions.audio.valid)
+    spans = audio_key_spans(conditions.audio.valid, validate=False)
     for indices in window_chunks(batch.windows, config['decoder_train_chunk_token_budget']):
         rows = [batch.windows[i] for i in indices]
-        tokens, types, _ = collate_windows([w['example'] for w in rows], device='cpu')
+        tokens, types, labels = collate_prepared(rows)
         index = torch.tensor(indices, dtype=torch.long)
         audio = conditions.audio_mapping[conditions.occurrence_mapping[index]]
-        batch.chunks.append(Chunk(index, tokens, types, prepare(rows),
-            audio_query_layout(tokens.valid, audio, len(batch.audio_variants), spans=spans), tokens.valid.numel()))
+        batch.chunks.append(Chunk(index, tokens, types, labels,
+            audio_query_layout(tokens.valid, audio, len(batch.audio_variants), spans=spans, validate=False), tokens.valid.numel()))
     batch.token_budget = config['decoder_train_chunk_token_budget']
     # Transport only tensors + small occurrence metadata. Rule objects, complete
     # support dictionaries and GT token trees stay inside the worker.
-    batch.windows = [dict(identity=w['identity'], history_dropped=w['example'].history_dropped)
+    batch.windows = [dict(identity=w['identity'], history_dropped=w['history_dropped'])
                      for w in batch.windows]

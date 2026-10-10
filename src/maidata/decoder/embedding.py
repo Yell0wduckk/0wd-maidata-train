@@ -9,6 +9,7 @@ from .checks import require
 class TokenEmbedding(nn.Module):
     def __init__(self, dim, note_dims, route_dims, time_base, time_scale):
         super().__init__()
+        self.validate_inputs = True
         if (len(note_dims) != 7 or len(route_dims) != 2
                 or any(type(v) is not int or v <= 0 for v in (*note_dims, *route_dims))
                 or sum(note_dims) != dim or sum(route_dims) != dim):
@@ -26,27 +27,32 @@ class TokenEmbedding(nn.Module):
 
     def forward(self, tokens):
         t, valid = tokens.types, tokens.valid
-        if (t.ndim != 2 or valid.shape != t.shape or valid.dtype != torch.bool
+        if (self.validate_inputs and (t.ndim != 2 or valid.shape != t.shape or valid.dtype != torch.bool
                 or tokens.beats.shape != t.shape or tokens.time.shape != t.shape
-                or tokens.flags.shape != (*t.shape, 5)):
+                or tokens.flags.shape != (*t.shape, 5))):
             raise ValueError('invalid token tensor shapes')
         for x in (t, tokens.kind, tokens.pad, tokens.route, tokens.track_break):
-            if x.shape != t.shape or x.dtype != torch.long or x.device != t.device:
+            if self.validate_inputs and (x.shape != t.shape or x.dtype != torch.long or x.device != t.device):
                 raise ValueError('token IDs require aligned int64 tensors')
-        if tokens.flags.dtype != torch.long:
+        if self.validate_inputs and (tokens.flags.dtype != torch.long):
             raise ValueError('invalid token type/flag dtype')
-        require(((t >= 0) & (t <= 4) | ~valid).all(), 'invalid token type')
-        require(((torch.isfinite(tokens.beats) & torch.isfinite(tokens.time)) | ~valid).all(),
-                'valid token coordinates must be finite')
+        if self.validate_inputs:
+            require(((t >= 0) & (t <= 4) | ~valid).all(), 'invalid token type')
+        if self.validate_inputs:
+            require(((torch.isfinite(tokens.beats) & torch.isfinite(tokens.time)) | ~valid).all(),
+                    'valid token coordinates must be finite')
         note = valid & (t == 1)
         k, p, f = tokens.kind, tokens.pad, tokens.flags
-        require(((k >= 0) & (k < 5) | ~note).all(), 'invalid NOTE kind')
+        if self.validate_inputs:
+            require(((k >= 0) & (k < 5) | ~note).all(), 'invalid NOTE kind')
         k = k.clamp(0, 4)
         touch = (k == 2) | (k == 3)
-        require(((p >= 0) & (p < torch.where(touch, 33, 8)) | ~note).all(), 'invalid NOTE pad')
+        if self.validate_inputs:
+            require(((p >= 0) & (p < torch.where(touch, 33, 8)) | ~note).all(), 'invalid NOTE pad')
         applicable = self.applicable[k]
-        require((torch.where(applicable, (f >= 0) & (f <= 1), f == -1) | ~note[..., None]).all(),
-                'NOTE flags disagree with kind applicability')
+        if self.validate_inputs:
+            require((torch.where(applicable, (f >= 0) & (f <= 1), f == -1) | ~note[..., None]).all(),
+                    'NOTE flags disagree with kind applicability')
         pad = torch.where(touch[..., None], self.touch(p.clamp(0, 32)), self.button(p.clamp(0, 7)))
         parts = [self.kind(k), pad]
         for i, table in enumerate(self.flags):
@@ -54,7 +60,8 @@ class TokenEmbedding(nn.Module):
         notes = torch.cat(parts, -1)
         route = valid & (t == 2)
         r, b = tokens.route, tokens.track_break
-        require(((r >= 0) & (r <= 70) & (b >= -1) & (b <= 1) | ~route).all(), 'invalid ROUTE value')
+        if self.validate_inputs:
+            require(((r >= 0) & (r <= 70) & (b >= -1) & (b <= 1) | ~route).all(), 'invalid ROUTE value')
         routes = torch.cat((self.route(r.clamp(0, 70)),
             self.track_break(b.clamp(0, 1)).masked_fill(b[..., None] < 0, 0)), -1)
         times = sinusoidal(tokens.time.masked_fill(~valid, 0), self.dim, self.base, self.scale).to(notes.dtype)

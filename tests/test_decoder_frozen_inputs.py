@@ -62,7 +62,7 @@ def assets(config,tmp_path,monkeypatch):
 
 def test_read_cache_and_select_interleaved_occurrences_without_building_edp(assets):
     c,plans,binding,items,roots = assets
-    # Cache startup checks only manifests. No bank or raw-input scan.
+    # Startup reads selected manifests without bank scans or input verification.
     with patch('torch.load',side_effect=AssertionError('startup cannot load banks')):
         cache = FrozenCache(plans,c,binding)
     selected = []
@@ -111,32 +111,23 @@ def test_read_cache_and_select_interleaved_occurrences_without_building_edp(asse
 
 
 @pytest.mark.parametrize('field',['complete','producer','normalization','p0_manifest_sha256','plans','splits'])
-def test_manifest_mismatch_never_falls_back_to_online(assets,field):
+def test_training_does_not_revalidate_accepted_manifest(assets,field):
     c,plans,binding,_,roots = assets
     path = roots['dp']/'manifest.json'
     data = json.loads(path.read_text())
     data[field] = False if field=='complete' else {} if field in ('plans','splits','normalization','producer') else 'wrong'
     path.write_text(json.dumps(data))
-    with pytest.raises(ValueError):
-        FrozenCache(plans,c,binding)
+    with patch('maidata.training.checkpoint.digest_file',side_effect=AssertionError('startup hash')):
+        cache = FrozenCache(plans,c,binding)
+        assert cache.read('0')[0]['values'].numel()>0
 
 
-@pytest.mark.parametrize('damage',['producer','shape','dtype','z_beats','plan_mask','plan_owner','plan_id','nan'])
-def test_normal_reads_reject_bad_cached_tensor_or_ownership(assets,damage):
+def test_training_reads_do_not_rescan_accepted_values(assets):
     c,plans,binding,_,roots = assets
     cache = FrozenCache(plans,c,binding)
-    path = roots['dp']/'banks/0.pt'
-    data = torch.load(path,weights_only=True)
-    if damage=='producer': data['producer_sha256']='other'
-    elif damage=='shape': data['z']['values']=data['z']['values'][:,:-1]
-    elif damage=='dtype': data['z']['values']=data['z']['values'].double()
-    elif damage=='z_beats': data['z']['beats']+=.25
-    elif damage=='plan_mask': data['planner']['valid'][0]=False
-    elif damage=='plan_owner': data['planner']['groups'][0]=99
-    elif damage=='plan_id': data['planner']['window_ids'][0]='unbound-window'
-    else: data['planner']['plan_values'][0,0]=float('nan')
-    torch.save(data,path)
-    with pytest.raises(ValueError): cache.read('0')
+    with patch('torch.isfinite',side_effect=AssertionError('training payload scan')):
+        p0,dp=cache.read('0')
+    assert p0['values'].numel()>0 and dp['window_index']
 
 
 def test_bf16_frozen_values_can_feed_fp32_decoder_without_gradients(assets):

@@ -3,7 +3,7 @@ from dataclasses import replace
 import torch
 from torch import nn
 
-from maidata.model import build_decoder
+from maidata.model import build_decoder, decoder_time_distributions
 from maidata.decoder.types import Memory
 
 
@@ -11,6 +11,10 @@ class DecoderTrainer(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.decoder = build_decoder(config)
+        self.distributions = decoder_time_distributions(config)
+        for module in self.decoder.modules():
+            if hasattr(module, 'validate_inputs'):
+                module.validate_inputs = False
 
     def conditions(self, batch):
         # Cached BF16 outputs can also feed FP32 training. Autocast training
