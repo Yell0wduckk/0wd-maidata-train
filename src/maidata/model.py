@@ -1,5 +1,7 @@
-"""Model construction placeholder; architecture remains to be decided."""
+"""Build the currently implemented part of the model."""
 
 
 def build_model(config):
-    raise NotImplementedError("Maidata model and training are not implemented yet.")
+    from .audio.encoder import AudioEncoder
+
+    return AudioEncoder(**config)

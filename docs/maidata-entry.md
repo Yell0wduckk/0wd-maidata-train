@@ -1,6 +1,6 @@
-# Maidata 最小入口
+# Maidata Encoder 入口与接口
 
-新包 `src/maidata` 目前只有入口和空模型位置，架构仍在讨论。没有迁入 Encoder、Decoder、草稿、数据管线、训练循环或 checkpoint；旧 `maimai_baseline` 保留作现有实现参考。
+`src/maidata` 已实现独立音频 Encoder：frontend、geometry、attention、blocks、pyramid、encoder 和 types。它消费准备好的 Mel、aux32、绝对拍坐标与有效位，输出 P0/P1/P2 三路局部表示。完整输入生产、Decoder、草稿、数据集/DataLoader、训练循环、loss 和 checkpoint 尚未实现；旧 `maimai_baseline` 保留作历史实现参考。
 
 从独立仓库根目录运行：
 
@@ -12,14 +12,68 @@ python -m maidata --show-config
 python -m maidata
 ```
 
-前两条命令成功退出；`--show-config` 当前显示 `{}`。默认调用明确提示模型与训练尚未实现，返回非零状态，不创建输出目录或训练产物。新包仅依赖 Python 标准库。
+帮助和 `--show-config` 仅依赖标准库，后者显示入口顶部的18项架构配置。默认命令延迟导入 Torch，成功构建 `AudioEncoder`，输出 `AudioEncoder built. Decoder and training are not implemented.` 并正常退出；不创建训练目录或产物。
 
-## 修改与扩展
+## 配置与构建
 
-- [entry.py](../src/maidata/entry.py) 顶部的 `CONFIG = {}` 是唯一参数编辑位置。当前不预填未确定的架构或训练参数；后续只添加实现实际使用的参数。
-- [model.py](../src/maidata/model.py) 的 `build_model(config)` 是模型构建位置，目前只抛出明确的 `NotImplementedError`，不约定模型基类或网络形态。
-- `entry.main` 负责参数展示和调用模型构建；后续确定训练行为时再扩展，不预建空训练器、插件、数据接口或 checkpoint 框架。
+- [entry.py](../src/maidata/entry.py) 顶部普通 `CONFIG` 是唯一人工参数位置，默认值及含义见[设计正本](../../0wd-v3-refactor-docs/new-audio-encoder.md#21-当前默认值)。构造器显式接收参数，不另设同名默认值。
+- [model.py](../src/maidata/model.py) 的 `build_model(config)` 直接构建 `AudioEncoder(**config)`。模型宽度、heads、FFN、各 stage 深度、频率 query、窗口和输出密度均由这份配置传入。
+- `entry.main` 负责帮助、配置展示和构建。学习率、数据集、训练/恢复命令未提前设置。
 
-协作与默认操作规则由 `AGENTS.md` 和维护文档约束，不转换为入口中的固定参数白名单、来源哈希锁或验收凭据。未来的必要检查放在实际输入读取、运算和恢复位置，按真实表示和状态解释错误。
+容量变化不要求重算内容未变的 Mel/aux32；修改 Mel 频带数或采样密度时需提供匹配输入。只保留真实数学与张量约束，例如 `d_model/heads` 为偶数、三 stage 参数长度一致和输出网格长度可表示，不固定为默认宽度、层数或参数总数。
 
-本轮验证范围是三个入口命令的输出、退出状态与标准库独立启动；不代表模型、CUDA、训练或推理验证。
+## 张量接口与按曲复用
+
+完整字段、位置约定和 aux32 离线生产约定见[实施文档第4节](../../0wd-v3-refactor-docs/encoder-execution-plan.md#4-张量协议)及[第8节](../../0wd-v3-refactor-docs/encoder-execution-plan.md#8-aux32-离线输入约定)。其中 B 为不同曲目数，J 为批内最大拍数，W 为窗口数，R/M/d 来自配置，`C=A+T+Z`、`N=C×R`。布尔位统一 True=有效，坐标为绝对小数拍，索引为整数。
+
+| 容器 | 字段与形状 |
+|---|---|
+| `SongInputs` | `mel_patches[B,J,R,M]`、`sample_valid[B,J,R]`、`beat_centers[B,J]`、`aux32_centers[B,J,32]` |
+| `WindowInputs` | `mel[W,N,M]`、`aux32[W,N,32]`、`beats[W,N]`、`valid[W,N]`、`target_start_beats[W]`、`window_to_song[W]` |
+| `EncoderOutput` | 仅 `P0/P1/P2`，每路 `ScaleMemory` 含 `values[W,C×r,d]`、`beats[W,C×r]`、`valid[W,C×r]`；r 来自对应 fpn_rates |
+
+以下张量由输入生产方准备，示例展示调用方式，不读取音频文件或启动训练：
+
+```python
+from maidata.entry import CONFIG
+from maidata.model import build_model
+from maidata.audio.types import SongInputs, WindowInputs
+
+encoder = build_model(CONFIG)
+song_inputs = SongInputs(
+    mel_patches=mel_patches,
+    sample_valid=sample_valid,
+    beat_centers=beat_centers,
+    aux32_centers=aux32_centers,
+)
+window_inputs = WindowInputs(
+    mel=window_mel,
+    aux32=window_aux32,
+    beats=window_beats,
+    valid=window_valid,
+    target_start_beats=target_start_beats,
+    window_to_song=window_to_song,
+)
+memory = encoder.prepare_song(song_inputs)
+output = encoder.encode_windows(memory, window_inputs)
+p0_values = output.P0.values
+# 单次组合调用：output = encoder(song_inputs, window_inputs)
+```
+
+`prepare_song` 对每曲计算一份 G0 及各非末块的 G0 K/V；`encode_windows` 按 window_to_song 路由，每窗单独初始化和更新 S。SongMemory 保留 autograd 图，训练中同次前向的多窗可共享；参数更新后重新 prepare，不永久缓存或 detach。最终块省去 G0 K/V 与无消费者的 S 更新；输出不含 C0/C1/C2、最终 S 或旧 fine_memories。
+
+aux32 按全曲统一离线准备，网络只做融合。拍中心位于音频范围外时由生产方清零中心 aux32；部分有效 Mel 拍仍可生成 G0，整拍无效则输出零。不能用 GT 谱面长度推断音频有效位。
+
+## CPU 合成验证
+
+从仓库根使用现有 CPU 环境执行：
+
+```powershell
+New-Item -ItemType Directory -Force .test-temp | Out-Null
+$env:TEMP = (Join-Path (Get-Location) '.test-temp')
+$env:TMP = $env:TEMP
+$env:PYTHONPATH = (Join-Path (Get-Location) 'src')
+D:/Anaconda/python.exe -m pytest tests --basetemp .test-temp/encoder -q
+```
+
+小型 CPU 合成验证已通过，覆盖默认及非默认容量、前向/反向、mask、联合 attention 数学参考、同步读取、末块省算、按曲复用和坐标/FPN。BPM/相位测试仅验证已准备输入的逐位置消费，未运行真实时间映射或特征提取。最终命令结果以本轮交接为准，不把旧测试结果当作本仓库证据；该验证不包含 CUDA、真实音频资产、输入批量生产、训练或整模型生成。

@@ -1,18 +1,27 @@
-# 当前源码状态与重构边界
+# 当前源码状态与实现边界
 
-本文件区分新 `maidata` 空入口和独立副本保留的旧模型。新 encoder 的既有讨论位于 [设计正本](../../0wd-v3-refactor-docs/new-audio-encoder.md)，尚未实现；具体新架构后续再确定。来源与复制排除项见 [import-and-layout](import-and-layout.md)。
+本文件区分已实现的新 `maidata` 音频 Encoder 和独立副本保留的旧模型。Encoder 规格位于[设计正本](../../0wd-v3-refactor-docs/new-audio-encoder.md)，模块、张量协议和 aux32 生产约定位于[实施文档](../../0wd-v3-refactor-docs/encoder-execution-plan.md)。来源与复制排除项见 [import-and-layout](import-and-layout.md)。
 
-## 新 maidata 入口：仅空骨架
+## 新 maidata：独立音频 Encoder
 
-入口为 `python -m maidata`，说明见 [maidata-entry](maidata-entry.md)。`entry.py` 顶部的 `CONFIG = {}` 是唯一配置位置；`--help` 与 `--show-config` 可独立执行。默认执行到 `build_model` 占位时以 `NotImplementedError` 非零退出。
+入口为 `python -m maidata`，调用方式与 CPU 验证命令见 [maidata-entry](maidata-entry.md)。`entry.py` 顶部普通 `CONFIG` 集中18项架构参数，构造器无第二套默认值；`--help` 与 `--show-config` 仅依赖标准库。默认命令延迟导入 Torch，成功构建 `AudioEncoder` 并提示 Decoder 与训练未实现。
 
-本轮没有迁移 Decoder、设定网络层数或引入模型、数据、训练循环、checkpoint 实现；新入口不导入旧 `maimai_baseline` 或 Torch。协作约定保留在 Markdown 中，不增加政策门禁。旧模型及其 `runtime-versions.toml` 保持旧路径专属。
+当前代码位于 `src/maidata/audio/{types,frontend,geometry,attention,blocks,pyramid,encoder}.py`，不导入旧 `maimai_baseline`、`maimai_dataset` 或朋友仓库。已实现：
+
+- 独立频谱 tokenizer、aux32 融合与逐拍 G0 tokenizer；频率 query 和容量由配置传入。
+- `prepare_song` 按曲计算 G0 及非末块的 K/V，保持计算图；`encode_windows` 按绝对拍坐标初始化每窗 S，执行共享参数、同步读取的 L/S Conformer。
+- 局部联合 attention、完整 head RoPE、L 专属时间卷积、两次 stride transition，以及按坐标插值的局部 FPN。
+- `forward(song_inputs, window_inputs)` 组合前两步，只返回命名的 P0/P1/P2，各自携带 values、beats、valid。
+
+默认24拍输入的内部 C 长度为576/288/144，公开 P 长度为192/96/48；其他合法容量、深度和窗口由同一配置推导。没有 C0/C1/C2 高分辨率直出、最终 S 或 Decoder 可绕过本结构读取的全曲输出。
+
+本轮新增小型 CPU 合成测试并已通过，不读取旧资产或权重；验证范围及命令见[入口文档](maidata-entry.md#cpu-合成验证)，最终结果以本轮交接为准。BPM/相位检查只覆盖已准备输入的逐位置消费，未执行真实时间映射与特征提取、CUDA 或训练。协作约定保留在 Markdown 中，不新增政策门禁；旧模型及其 `runtime-versions.toml` 保持旧路径专属。
 
 ## 已复制的旧模型实现
 
 当前来源路线为：外部冻结 native 音频 → 一拍音频草稿 → 用户选定兼容草稿 checkpoint → 干净 token 缓存 → A。源实验采用 draft60/A90；该旧配方不是新 encoder 的训练安排。
 
-- `BaselineTransformer`、旧 CLI 和三个原有 Python 包保留。旧模型版本及兼容范围只由 `src/maimai_baseline/runtime-versions.toml` 维护，不约束新空入口。
+- `BaselineTransformer`、旧 CLI 和三个原有 Python 包保留。旧模型版本及兼容范围只由 `src/maimai_baseline/runtime-versions.toml` 维护，不约束新 Encoder。
 - native 路径读取外部 P0/C0/C1，冻结保留的 `audio_encoder`/`song_audio_encoder`；训练步不执行这两个音频网络。
 - 一拍草稿为整曲双向音频条件网络，每拍输出 128 维 token；重建头与 A 读取前/中/后三个 16 拍窗口共 48 槽。草稿输入、内部交互和谱面因果历史仍是全曲范围。
 - 主 A 保留结构化事件/字段、自回归生成历史、L3 与 Physical；当前一拍路线没有额外 B 训练步骤。
@@ -39,11 +48,11 @@
 
 教师权重选择由实际命令参数决定。最新来源说明使用微调后的教师（epoch4/step1550）；导出脚本还保留较早 full A90 的默认路径。副本没有这些权重，路径与来源不能仅凭旧说明推断。详见 [草稿参考](audio-draft.md)。
 
-## 新设计尚需实现的部分
+## 新 Encoder 尚未衔接的部分
 
-设计中的全曲 G₀、24 个动态 S、24 拍 L、四块内共享处理和 Decoder 仅读当前局部音频均未进入代码。不得只改文档或窗口长度就宣称完成架构迁移。
+新 Encoder 的全曲 G₀、每窗动态 S、局部 L、块内共享处理和三路局部输出已进入代码。完整 Mel/aux32 提取与离线缓存生产、真实数据适配、Decoder、Router、MMoE、草稿、训练循环、loss 和 checkpoint 不属于本次实现，不能把可构建 Encoder 称为可训练完整模型的入口。
 
-若目标窗继续为 16 拍，4＋16＋4 是一种 24 拍分配建议；本次没有把它定为实际配置。预计 24 拍的 C0/C1/C2 长度为 576/288/144，FPN 的 P0/P1/P2 为 192/96/48，这些是未来形状而非现有 native cache。
+aux32 采用全曲统一的18维声学量、4维节奏统计和10维时间上下文，L网格与G0拍中心按位置取值；当前模块只消费已经准备好的张量。新隐藏表示不自动兼容现有 native cache；内容未变的原始音频/Mel 不因新源码失效。
 
 两个训练衔接问题仍待决定：
 
@@ -52,6 +61,6 @@
 
 ## 独立副本的执行边界
 
-复制了旧源码、配置、schemas、必要 JSON/C++/CUDA 资源及文档；没有复制数据、权重、缓存、环境、测试或原 Git 历史。本轮未运行旧模型 CLI、CUDA、训练或推理；新空入口的使用与验证范围见 [maidata-entry](maidata-entry.md)。
+复制了旧源码、配置、schemas、必要 JSON/C++/CUDA 资源及文档；没有复制数据、权重、缓存、环境、旧测试或原 Git 历史。本轮未运行旧模型 CLI、CUDA、训练或整模型推理；新 Encoder 的使用与验证范围见 [maidata-entry](maidata-entry.md)。
 
 旧 launcher 仍有源实验的远端路径；数据准备工具还保留 `--main-worktree` 默认定位，MiaCode/MajRadar 等是外部依赖。实际运行前使用明确输入和输出，不能把旧 launcher 当成新实验命令。详情见 [复制与布局](import-and-layout.md)。

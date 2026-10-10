@@ -1,1 +1,1 @@
-"""Minimal entry point for the next maidata model."""
+"""Independent maidata audio encoder and its editable build entry."""

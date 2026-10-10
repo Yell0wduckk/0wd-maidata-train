@@ -1,0 +1,1 @@
+"""Independent audio encoder components."""
