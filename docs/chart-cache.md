@@ -32,9 +32,9 @@ MiaCode `--difficulty` 支持数字 ID（1..7），此处传源字段后缀，�
 唯一视图，没有增强开关。ID429 通过 `audio_only` 记录，不创建虚构谱面。
 
 每份成功谱为 `charts/<ID>/<difficulty>.json.gz`，schema 为
-`maidata.full-chart-original.v1`：
+`maidata.full-chart-original.v2`：
 
-- `tokens`：完整真实序列（一次全曲 END 起点），NA 保存 null，有效零保存 0。
+- `tokens`：完整真实序列（首枚外部边界 MOMENT，绝对起点保存在start_tick），NA 保存 null，有效零保存 0。
 - `metadata`：IR 头、完整 controls、来源及诊断；IR 的 180Hz tick 不作模型拍 tick。
 - `token_map`：token_index、96tick绝对拍位、秒数、moment、owner、track、segment，
   并保留原始 note ID、IR位置与源正文行列/raw。ROUTE 逐段映射，duration 归整轨。
@@ -48,7 +48,7 @@ from maidata.chart_cache import load_chart
 from maidata.chart.codec import EncodedChart, token_from_dict
 
 record = load_chart(cache_root / 'charts' / '10070' / '5.json.gz')
-chart = EncodedChart(tuple(token_from_dict(t) for t in record['tokens']), record['metadata'])
+chart = EncodedChart(tuple(token_from_dict(t) for t in record['tokens']), record['metadata'], record['start_tick'])
 ```
 
 读取验证 schema、唯一视图、字段/语法、拍坐标、动作归属及段时序；不重算 Physical。
@@ -80,5 +80,26 @@ Physical 计数和逐谱结果。这些是生产证据，不新增训练启动�
 ```
 
 覆盖候选拒绝与GT保留的分离、语法失败原子性、deferred连续链、链/分支映射、
-音频范围违规保留、存储读回和归属损坏拒绝。真实小样覆盖全部六类NOTE、
+音频范围违规保留、存储读回和归属损坏拒绝。真实小样覆盖全部五类NOTE和WiFi路线、
 多BPM、WiFi、并行分支及6段连续链。未运行 CUDA、训练或 Decoder。
+
+## 最新设计迁移与训练 Physical 缓存
+
+`python -m maidata.chart_cache.migrate` 读取已验收、已上传的原谱v1缓存；显式将旧END锚移入start_tick、将旧wifi NOTE转为slide/Route-70，然后重新生成v2动作与训练支持。不重算音频、几何，不生成镜像。不可表示源谱读取原有failure IR重试最新编码，仍不可表示的保留原因与IR，不能当成功谱。
+
+每个训练产物schema为 `maidata.training-physical-original.v1`，同样使用 `charts/<ID>/<difficulty>.json.gz`。`stages`与真实目标位置逐一对应，首枚输入边界不预测，另保留末尾时间查询支持。所有支持严格来自目标前的GT前缀：kind对位置作存在性投影，pad使用teacher kind，route使用既有连续段/branch，duration使用完整已选轨道。flags不参与Physical；ROUTE的语法错误与基础合法性独立于四类Physical mask。源码只产生候选支持，模型概率q、−log(1−q)、梯度及训练循环不在本次范围。
+
+时间支持保存绝对起音tick或duration整数tick的完整区间分区，按规则比较的交点计算，不逐tick穷举整曲，不假设单调safe_upper。Duration基础域由真实音频末端及written BPM确定；释放交点使用完整TimingMap的22tick逆映射。每段分别保存basic错误、四类位mask及deferred，允许合法支持多段不连续。`load_supports`正常读回检查schema、索引和区间覆盖；`time_decision(..., window_end=..., censored=...)`对窗外/尾部查询绕过真实NOTE完成性约束。4tick duration cell通过既有duration_cells适配，不缓存模型概率。窗口长度、stride、历史预算与数据计划均由后续消费者指定。
+
+远端入口（原谱旧包已在该目录，输出使用新目录，不覆盖旧包）：
+
+```bash
+PYTHONPATH=src python3 -m maidata.chart_cache.migrate \
+  --source /root/autodl-tmp/chart-cache-all-official-original-20261010 \
+  --output /root/autodl-tmp/chart-cache-original-v2-20261010 \
+  --physical-output /root/autodl-tmp/training-physical-original-20261010 \
+  --geometry /root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/physical/path-catalog \
+  --slide-data /root/autodl-tmp/0wd-v3-physical-20261010/resources/slide_data.json --workers 12
+```
+
+这里12是独立离线生产进程数；训练DataLoader workers默认也保持12。新产物首次写入压缩读回、结构验收及SHA记录一次。状态绑定生产代码与输入身份，同身份续跑复用已有结果；不增加旧音频/几何验收凭据。

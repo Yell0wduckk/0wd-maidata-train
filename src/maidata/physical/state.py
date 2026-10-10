@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import math
 
 from maidata.chart.grammar import Grammar, GrammarSnapshot
-from maidata.chart.types import (ChartError, Completion, End, Moment, Note,
+from maidata.chart.types import (ChartError, Completion, Moment, Note,
                                 Route, HoldDuration, SlideDuration, BUTTON_PADS, TOUCH_PADS)
 from maidata.time import duration_end
 from .actions import materialize
@@ -49,6 +49,13 @@ class PhysicalState:
         self.grammar = Grammar(timing)
         self.actions = ()
 
+    def inject_boundary(self, token, *, start_tick, history_present=True, window_end=None):
+        grammar = Grammar(self.timing)
+        grammar.restore(self.grammar.snapshot())
+        grammar.inject_boundary(token, start_tick=start_tick, history_present=history_present, window_end=window_end)
+        self.actions = prune_history(self.actions, self.timing.second(start_tick))
+        self.grammar = grammar
+
     def snapshot(self):
         return PhysicalSnapshot(self.grammar.snapshot(), self.actions)
 
@@ -81,7 +88,7 @@ class PhysicalState:
         except (ChartError, ValueError) as e:
             return Decision((str(e),))
         s = g.state
-        if isinstance(token, End) or (isinstance(token, Moment) and s.phase == 'closed'):
+        if isinstance(token, Moment) and s.phase == 'closed':
             return Decision()
         if isinstance(token, Moment):
             # Window-closing queries above do not require a possible NOTE.
@@ -127,7 +134,7 @@ class PhysicalState:
         actions = self.actions
         if completion is not None:
             actions += (materialize(completion, self.timing, self.geometry),)
-        if isinstance(token, (End, Moment)) and grammar.state.phase != 'closed':
+        if isinstance(token, Moment) and grammar.state.phase != 'closed':
             actions = prune_history(actions, self.timing.second(grammar.state.cursor))
         self.grammar, self.actions = grammar, actions
         return completion
@@ -152,7 +159,7 @@ class PhysicalState:
             action = materialize(completion, self.timing, self.geometry)
             decision = Decision(self._basic(completion), reasons(actions, action))
             actions += (action,)
-        if isinstance(token, (End, Moment)):
+        if isinstance(token, Moment):
             actions = prune_history(actions, self.timing.second(grammar.state.cursor))
         self.grammar, self.actions = grammar, actions
         return completion, decision
@@ -188,33 +195,33 @@ class PhysicalState:
         return {pad: self.query(Note.make(kind, pad)) for pad in pads}
 
     def query_note_kinds(self):
-        """Existential projection over positions, without choosing a route."""
+        """Existential projection; stop at the first allowed completion."""
         from maidata.chart.types import KINDS
         result = {}
         for kind in KINDS:
-            # Touch repeat belongs to the position stage only, as in the old
-            # engine; do not transfer that rule's responsibility to kind.
-            if kind in ('touch', 'touch_hold'):
-                g = self.grammar.state
-                decisions = []
-                for pad in TOUCH_PADS:
-                    n = Note.make(kind, pad)
+            decisions = []
+            pads = TOUCH_PADS if kind in ('touch', 'touch_hold') else BUTTON_PADS
+            for pad in pads:
+                if kind in ('touch', 'touch_hold'):
+                    g = self.grammar.state
+                    n = Note.make(kind,pad)
                     try:
-                        self._trial(n)
+                        trial, _ = self._trial(n)
                     except (ChartError, ValueError) as e:
-                        decisions.append(Decision((str(e),)))
-                        continue
-                    c = Completion(g.owner+1,g.moment,g.cursor,n,duration_tick=2 if kind == 'touch_hold' else None)
-                    basic = self._basic(c)
-                    decisions.append(Decision(basic, frozenset() if basic else reasons(
-                        self.actions,materialize(c,self.timing,self.geometry),touch_repeat=False), kind == 'touch_hold'))
+                        d = Decision((str(e),))
+                    else:
+                        c = Completion(g.owner+1,trial.state.moment,g.cursor,n,
+                                       duration_tick=2 if kind == 'touch_hold' else None)
+                        basic = self._basic(c)
+                        d = Decision(basic,frozenset() if basic else reasons(
+                            self.actions,materialize(c,self.timing,self.geometry),touch_repeat=False),kind == 'touch_hold')
+                else:
+                    d = self.query(Note.make(kind,pad))
+                decisions.append(d)
+                if d.allowed:
+                    result[kind] = d
+                    break
             else:
-                decisions = self.query_note_positions(kind).values()
-            decisions = tuple(decisions)
-            if any(d.allowed for d in decisions):
-                result[kind] = Decision(deferred=any(d.deferred for d in decisions if d.allowed))
-            else:
-                basic = tuple(sorted({e for d in decisions for e in d.basic_errors}))
-                bad = frozenset(e for d in decisions for e in d.physical)
-                result[kind] = Decision(basic, bad)
+                result[kind] = Decision(tuple(sorted({e for d in decisions for e in d.basic_errors})),
+                                        frozenset(e for d in decisions for e in d.physical))
         return result

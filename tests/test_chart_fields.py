@@ -30,17 +30,17 @@ def metadata(timing):
 
 
 def complex_tokens(timing):
-    return (End(0), Moment(0), Note.make('tap', 'A1', ex=1, break_=1),
+    return (Moment(0), Note.make('tap', 'A1', ex=1, break_=1),
             Note.make('touch', 'D1', firework=1, short_touch_hold=1),
             Note.make('hold', 'A2', break_=1), HoldDuration(2),
             Note.make('touch_hold', 'C'), HoldDuration(196),
             Note.make('slide', 'A3', ex=1), Route(0, 1), Route(2), SlideDuration(97),
             Route(4, 0), Route(0), SlideDuration(121),
-            Moment(timing.delta_ms(0, 192)), Note.make('wifi', 'A8'), Route(70, 1), SlideDuration(1),
+            Moment(timing.delta_ms(0, 192)), Note.make('slide', 'A8'), Route(70, 1), SlideDuration(1),
             Note.make('tap', 'A4', short_hold=1))
 
 
-@pytest.mark.parametrize('kind,pad', [('tap','A1'),('hold','A8'),('touch','C'),('touch_hold','E8'),('slide','A3'),('wifi','A7')])
+@pytest.mark.parametrize('kind,pad', [('tap','A1'),('hold','A8'),('touch','C'),('touch_hold','E8'),('slide','A3')])
 def test_note_applicability_and_serialization(kind, pad):
     n = Note.make(kind, pad)
     assert token_from_dict(token_to_dict(n)) == n
@@ -93,7 +93,7 @@ def test_ir_round_trip_with_chains_branches_and_modifiers(timing, geometry):
 
 @pytest.mark.parametrize('ticks', [0, 1, 2])
 def test_short_normalization(timing, geometry, ticks):
-    ir = decode_chart(EncodedChart((End(0), Moment(0), Note.make('hold','A1'), HoldDuration(2)), metadata(timing)), geometry)
+    ir = decode_chart(EncodedChart((Moment(0), Note.make('hold','A1'), HoldDuration(2)), metadata(timing)), geometry)
     d = ir['moments'][0]['groups'][0]['notes'][0]['duration']
     b = Fraction(ticks,96)
     d.update(beat_num=b.numerator, beat_den=b.denominator)
@@ -122,7 +122,8 @@ def test_unsupported_ir_is_not_silently_changed(timing, geometry, change):
 
 def test_grammar_atomic_routes_and_ownership(timing):
     g = Grammar(timing)
-    for t in (End(0), Moment(0), Note.make('slide','A1'), Route(0,1)):
+    g.inject_boundary(Moment(0), start_tick=0)
+    for t in ( Note.make('slide','A1'), Route(0,1)):
         g.accept(t)
     saved = g.snapshot()
     with pytest.raises(ChartError): g.accept(Route(2,0))
@@ -140,7 +141,8 @@ def test_grammar_atomic_routes_and_ownership(timing):
 
 def test_wifi_and_unbounded_data_chains(timing):
     g = Grammar(timing)
-    for t in (End(0),Moment(0),Note.make('wifi','A1'),Route(70,0)):
+    g.inject_boundary(Moment(0), start_tick=0)
+    for t in (Note.make('slide','A1'),Route(70,0)):
         g.accept(t)
     with pytest.raises(ChartError): g.accept(Route(0))
     g.accept(SlideDuration(96))
@@ -160,35 +162,37 @@ def test_timing_written_bpm_and_global_wait(timing):
 
 
 def test_windows_exact_and_censored_terminal(timing):
-    tokens = (End(0),Moment(0),Note.make('hold','A1'),HoldDuration(1000),
+    tokens = (Moment(0),Note.make('hold','A1'),HoldDuration(1000),
               Moment(timing.delta_ms(0,192)),Note.make('tap','A2'),
               Moment(timing.delta_ms(192,384)),Note.make('tap','A3'))
     w = window_sequence(tokens,timing,start_tick=0,end_tick=192,audio_after_beats=2,audio_end_seconds=10)
     assert w.tokens[-1] == HoldDuration(1000)  # crosses window without truncation
     assert w.terminal == TimeTarget(timing.delta_ms(0,192),192,False,True)
     w = window_sequence(tokens,timing,start_tick=193,end_tick=288,audio_after_beats=1,audio_end_seconds=10)
-    assert w.tokens == (End(193),)
+    assert w.tokens == (Moment(timing.delta_ms(192,193)),)
     assert w.terminal.censored  # exact onset at U is part of the unobserved tail
     assert w.terminal.absolute_tick == pytest.approx(384)
     w = window_sequence(tokens,timing,start_tick=480,end_tick=600,audio_after_beats=4,audio_end_seconds=timing.second(610.5))
-    assert w.terminal.censored and w.terminal.absolute_tick == pytest.approx(610.5)
+    assert w.terminal.censored and w.terminal.absolute_tick == pytest.approx(984)
 
 
 def test_terminal_does_not_replace_real_cursor(timing):
     g = Grammar(timing)
-    g.accept(End(0),window_end=96)
-    g.accept(Moment(0));g.accept(Note.make('tap','A1'))
+    g.inject_boundary(Moment(0), start_tick=0, window_end=96)
+    g.accept(Note.make('tap','A1'))
     g.accept(Moment(timing.delta_ms(0,192)))
     assert g.state.phase == 'closed' and g.state.last_real_tick == 0
     assert g.state.cursor == 0
-    g.accept(End(96),window_end=192)
-    g.accept(Moment(0))
+    g.inject_boundary(Moment(timing.delta_ms(0,96)), start_tick=96, window_end=192)
+    assert g.state.last_real_tick == 0
+    with pytest.raises(ChartError): g.accept(Moment(0))
+    g.accept(Note.make('tap','A2'))
     assert g.state.last_real_tick == 96
 
 
 def test_censored_terminal_closes_without_fabricating_a_grid_onset(timing):
     g = Grammar(timing)
-    g.accept(End(0),window_end=96)
+    g.inject_boundary(Moment(0), start_tick=0, window_end=96)
     target=TimeTarget(timing.delta_ms(0,80.5),80.5,True,True)
     g.close_window(target)
     assert g.state.last_real_tick is None and g.state.cursor == 0

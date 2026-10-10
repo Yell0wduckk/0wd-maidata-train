@@ -1,6 +1,6 @@
 """Incremental token grammar and stable token-to-action ownership."""
 from dataclasses import dataclass, replace
-from .types import (ChartError, End, Moment, Note, Route, HoldDuration,
+from .types import (ChartError, Moment, Note, Route, HoldDuration,
                     SlideDuration, Track, Completion)
 from .routes import chain_paths
 
@@ -9,7 +9,6 @@ from .routes import chain_paths
 class GrammarSnapshot:
     phase: str = 'start'
     cursor: int = 0
-    first_query: bool = True
     last_real_tick: int | None = None
     moment: int = -1
     owner: int = -1
@@ -34,14 +33,32 @@ class Grammar:
             raise TypeError('expected GrammarSnapshot')
         self.state = snapshot
 
+    def inject_boundary(self, token, *, start_tick, history_present=True, window_end=None):
+        """External input only; its role is runtime state, never a delta test."""
+        s = self.state
+        if not isinstance(token, Moment) or type(start_tick) is not int:
+            raise ChartError('boundary requires MOMENT and an absolute integer anchor')
+        if s.phase not in ('start', 'closed', 'done', 'track_done', 'boundary'):
+            raise ChartError('cannot inject boundary during incomplete content')
+        if s.last_real_tick is not None and start_tick <= s.last_real_tick:
+            raise ChartError('new window must start after the last real onset')
+        expected = self.timing.delta_ms(s.last_real_tick, start_tick) if history_present and s.last_real_tick is not None else 0.
+        if abs(token.delta_ms-expected) > 1e-6:
+            raise ChartError('boundary delta disagrees with last real onset/history visibility')
+        if window_end is not None and window_end <= start_tick:
+            raise ChartError('empty/reversed target range')
+        self.state = replace(s, phase='boundary', cursor=start_tick, note=None,
+                             routes=(), track_count=0, track_break=None, window_end=window_end,
+                             token_count=s.token_count+1)
+
     def allowed_types(self):
         s = self.state
         return {
-            'start': ('END',), 'closed': ('END',), 'query': ('MOMENT',),
+            'start': (), 'closed': (), 'boundary': ('NOTE', 'MOMENT'),
             'note': ('NOTE',), 'hold': ('HOLD_DURATION',), 'route': ('ROUTE',),
-            'chain': ('SLIDE_DURATION',) if s.note and s.note.kind == 'wifi' else ('ROUTE', 'SLIDE_DURATION'),
-            'done': ('NOTE', 'MOMENT', 'END'),
-            'track_done': ('NOTE', 'MOMENT', 'END') if s.note and s.note.kind == 'wifi' else ('ROUTE', 'NOTE', 'MOMENT', 'END'),
+            'chain': ('SLIDE_DURATION',) if s.routes == (70,) else ('ROUTE', 'SLIDE_DURATION'),
+            'done': ('NOTE', 'MOMENT'),
+            'track_done': ('NOTE', 'MOMENT') if s.routes == (70,) else ('ROUTE', 'NOTE', 'MOMENT'),
         }[s.phase]
 
     def accept(self, token, *, window_end=None):
@@ -50,37 +67,31 @@ class Grammar:
             raise ChartError(f'{token.type} is illegal after {s.phase}')
         updates = {'token_count': s.token_count+1}
         completion = None
-        if isinstance(token, End):
-            if s.last_real_tick is not None and token.start_tick <= s.last_real_tick:
-                raise ChartError('new window must start after the last real onset')
-            if window_end is not None and window_end <= token.start_tick:
-                raise ChartError('empty/reversed target range')
-            updates.update(phase='query', cursor=token.start_tick, first_query=True,
-                           note=None, routes=(), track_count=0, track_break=None, window_end=window_end)
-        elif isinstance(token, Moment):
+        if isinstance(token, Moment):
             tick = self.timing.tick_after(s.cursor, token.delta_ms)
-            if tick < s.cursor or (not s.first_query and tick == s.cursor):
-                raise ChartError('real MOMENT must advance')
+            if token.delta_ms <= 0 or tick <= s.cursor:
+                raise ChartError('generated MOMENT must advance by at least one tick')
             if s.window_end is not None and tick >= s.window_end:
                 updates.update(phase='closed', note=None, routes=())
             else:
-                updates.update(phase='note', cursor=tick, last_real_tick=tick,
-                               first_query=False, moment=s.moment+1, note=None)
+                updates.update(phase='note', cursor=tick, note=None)
         elif isinstance(token, Note):
+            if s.phase in ('boundary', 'note'):
+                updates.update(moment=s.moment+1, last_real_tick=s.cursor)
             updates.update(note=token, owner=s.owner+1, routes=(), track_count=0, track_break=None)
             if token.kind in ('hold', 'touch_hold'):
                 updates['phase'] = 'hold'
-            elif token.kind in ('slide', 'wifi'):
+            elif token.kind == 'slide':
                 updates['phase'] = 'route'
             else:
                 updates['phase'] = 'done'
-                completion = Completion(s.owner+1, s.moment, s.cursor, token, token_index=s.token_count)
+                completion = Completion(s.owner+1, updates.get('moment', s.moment), s.cursor, token, token_index=s.token_count)
         elif isinstance(token, Route):
             first = s.phase in ('route', 'track_done')
             if (token.track_break is None) == first:
                 raise ChartError('only the first ROUTE of a track carries track_break')
-            if (token.route_id == 70) != (s.note.kind == 'wifi'):
-                raise ChartError('WiFi and ordinary routes cannot be mixed')
+            if token.route_id == 70 and (not first or s.track_count):
+                raise ChartError('WiFi is allowed only as the first track and sole segment')
             routes = (token.route_id,) if first else s.routes+(token.route_id,)
             chain_paths(s.note.pad, routes)
             updates.update(phase='chain', routes=routes,
@@ -100,7 +111,7 @@ class Grammar:
         return completion
 
     def finish(self):
-        if self.state.phase not in ('done', 'track_done', 'query', 'closed'):
+        if self.state.phase not in ('done', 'track_done', 'boundary', 'closed'):
             raise ChartError(f'incomplete chart: {self.state.phase}')
 
     def close_window(self, target):
@@ -109,7 +120,7 @@ class Grammar:
         s = self.state
         if not isinstance(target, TimeTarget) or not target.closes_window:
             raise ChartError('expected a terminal TimeTarget')
-        if s.phase not in ('done', 'track_done', 'query'):
+        if s.phase not in ('done', 'track_done', 'boundary'):
             raise ChartError('cannot close a window with an incomplete note')
         if (not target.censored and s.window_end is not None and target.absolute_tick < s.window_end
                 or target.absolute_tick < s.cursor):

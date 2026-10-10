@@ -5,7 +5,7 @@ from fractions import Fraction
 import math
 
 from maidata.time import TimingMap, duration_end, split_duration
-from .types import (ChartError, End, Moment, Note, Route, HoldDuration,
+from .types import (ChartError, Moment, Note, Route, HoldDuration,
                     SlideDuration, APPLICABLE)
 from .grammar import Grammar
 from .routes import route_for, chain_paths, mirror_pad, mirror_route, path_for
@@ -15,6 +15,7 @@ from .routes import route_for, chain_paths, mirror_pad, mirror_route, path_for
 class EncodedChart:
     tokens: tuple
     metadata: dict
+    start_tick: int = 0
 
     @property
     def timing(self):
@@ -54,16 +55,18 @@ def encode_chart(ir):
     if any(a >= b for a, b in zip(onset_ticks, onset_ticks[1:])):
         raise ChartError('IR moments must be strictly increasing')
     cursor = min(0, onset_ticks[0]) if onset_ticks else 0
-    tokens = [End(cursor)]
+    start_tick = cursor
+    tokens = [Moment(0)]
     for m, tick in zip(ir['moments'], onset_ticks):
-        tokens.append(Moment(timing.delta_ms(cursor, tick)))
+        if tick != cursor:
+            tokens.append(Moment(timing.delta_ms(cursor, tick)))
         cursor = tick
         notes = [n for g in m['groups'] for n in g['notes']]
         if not notes:
             raise ChartError('empty real MOMENT')
         for n in notes:
             kind = n['kind']
-            if kind not in APPLICABLE:
+            if kind not in (*APPLICABLE, 'wifi'):
                 raise ChartError(f'unknown kind: {kind}')
             if kind in ('slide', 'wifi'):
                 if n['head']['kind'] != 'star':
@@ -72,7 +75,7 @@ def encode_chart(ir):
                 flags = _flags(n['head'].get('flags', ()), ('ex', 'break'))
                 if _chart_tick(n['wait']) != 96:
                     raise ChartError('only the default one-global-beat wait is represented')
-                tokens.append(Note.make(kind, n['start_pad'], **flags))
+                tokens.append(Note.make('slide', n['start_pad'], **flags))
                 if not n['branches']:
                     raise ChartError('slide has no tracks')
                 for branch in n['branches']:
@@ -102,10 +105,11 @@ def encode_chart(ir):
                 if duration is not None and duration >= 2:
                     tokens.append(HoldDuration(duration))
     g = Grammar(timing)
-    for t in tokens:
+    g.inject_boundary(tokens[0], start_tick=start_tick)
+    for t in tokens[1:]:
         g.accept(t)
     g.finish()
-    return EncodedChart(tuple(tokens), deepcopy({k: v for k, v in ir.items() if k != 'moments'}))
+    return EncodedChart(tuple(tokens), deepcopy({k: v for k, v in ir.items() if k != 'moments'}), start_tick)
 
 
 def _ir_tick(second):
@@ -126,7 +130,8 @@ def _position(tick):
 def decode_chart(encoded, geometry):
     timing, result = encoded.timing, deepcopy(encoded.metadata)
     g, moments, owners = Grammar(timing), {}, {}
-    for token in encoded.tokens:
+    g.inject_boundary(encoded.tokens[0], start_tick=encoded.start_tick)
+    for token in encoded.tokens[1:]:
         c = g.accept(token)
         if c is None:
             continue
@@ -141,7 +146,7 @@ def decode_chart(encoded, geometry):
                                    meter=deepcopy(meter), groups=[dict(each=False, notes=[])])
         if c.owner not in owners:
             n = c.note
-            kind = 'hold' if n.short_hold else 'touch_hold' if n.short_touch_hold else n.kind
+            kind = 'hold' if n.short_hold else 'touch_hold' if n.short_touch_hold else 'wifi' if c.track and c.track.routes == (70,) else n.kind
             flags = [name for name, v in (('ex', n.ex), ('break', n.break_), ('firework', n.firework)) if v]
             note = dict(id=f'note-{c.owner}', kind=kind, start_tick=_ir_tick(second), flags=flags)
             if c.track is None:
@@ -192,7 +197,7 @@ def token_to_dict(token):
 def token_from_dict(record):
     values = dict(record)
     kind = values.pop('type', None)
-    classes = {c.type: c for c in (End, Moment, Note, Route, HoldDuration, SlideDuration)}
+    classes = {c.type: c for c in (Moment, Note, Route, HoldDuration, SlideDuration)}
     if kind not in classes:
         raise ChartError(f'unknown token type: {kind}')
     if 'break' in values:

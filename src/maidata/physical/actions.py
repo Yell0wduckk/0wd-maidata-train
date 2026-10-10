@@ -85,6 +85,6 @@ def materialize(completion, timing, geometry):
     bounds = split_duration(launch, actual, [s.length for s in specs])
     motions = tuple(Motion(s.key, a, b, tuple((a+p*(b-a), mask) for p, mask in s.entries), s.exempt, s.path_id)
                     for s, (a, b) in zip(specs, bounds))
-    return Action(c.owner, c.moment, c.tick, n.kind, n.pad, head, start, press_end,
+    return Action(c.owner, c.moment, c.tick, 'wifi' if c.track.routes == (70,) else 'slide', n.pad, head, start, press_end,
                   launch, actual, advance_ticks(timing, actual, 22), timing.second(c.tick+166),
                   motions, c.track_index)

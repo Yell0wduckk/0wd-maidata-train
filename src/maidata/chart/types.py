@@ -3,14 +3,14 @@ from dataclasses import dataclass
 from typing import ClassVar
 import math
 
-KINDS = ('tap', 'hold', 'touch', 'touch_hold', 'slide', 'wifi')
+KINDS = ('tap', 'hold', 'touch', 'touch_hold', 'slide')
 BUTTON_PADS = tuple(f'A{i}' for i in range(1, 9))
 TOUCH_PADS = tuple(f'{r}{i}' for r in 'ABDE' for i in range(1, 9)) + ('C',)
 FLAGS = ('ex', 'break_', 'firework', 'short_hold', 'short_touch_hold')
 APPLICABLE = {
     'tap': ('ex', 'break_', 'short_hold'), 'hold': ('ex', 'break_'),
     'touch': ('firework', 'short_touch_hold'), 'touch_hold': ('firework',),
-    'slide': ('ex', 'break_'), 'wifi': ('ex', 'break_'),
+    'slide': ('ex', 'break_'),
 }
 GENERATED_TYPES = ('MOMENT', 'NOTE', 'ROUTE', 'HOLD_DURATION', 'SLIDE_DURATION')
 
@@ -23,15 +23,6 @@ def integer(value, name, minimum=None):
     if type(value) is not int or (minimum is not None and value < minimum):
         raise ChartError(f'{name}: expected integer >= {minimum}, got {value!r}')
     return value
-
-
-@dataclass(frozen=True)
-class End:
-    start_tick: int
-    type: ClassVar[str] = 'END'
-
-    def __post_init__(self):
-        integer(self.start_tick, 'start_tick')
 
 
 @dataclass(frozen=True)
@@ -108,7 +99,7 @@ class SlideDuration:
         integer(self.ticks, 'slide ticks', 1)
 
 
-Token = End | Moment | Note | Route | HoldDuration | SlideDuration
+Token = Moment | Note | Route | HoldDuration | SlideDuration
 
 
 @dataclass(frozen=True)

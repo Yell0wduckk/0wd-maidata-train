@@ -3,7 +3,7 @@ from pathlib import Path
 import json
 import pytest
 
-from maidata.chart import End, Moment, Note, Route, HoldDuration, SlideDuration
+from maidata.chart import Moment, Note, Route, HoldDuration, SlideDuration
 from maidata.chart.routes import path_for, route_for, catalog
 from maidata.chart.types import Completion, Track
 from maidata.time import TimingMap
@@ -28,12 +28,12 @@ def press(timing,geometry,tick,pad,kind='tap',owner=0,duration=None,**flags):
 
 def track(timing,geometry,tick,paths,duration,owner=0,index=0,kind='slide'):
     start='A'+paths[0][0]
-    return materialize(Completion(owner,tick,tick,Note.make(kind,start),
+    return materialize(Completion(owner,tick,tick,Note.make('slide',start),
                        track=Track(tuple(route_for(p) for p in paths),0,duration),track_index=index),timing,geometry)
 
 
 def begin(state,tick=0):
-    state.accept(End(tick));state.accept(Moment(0))
+    state.inject_boundary(Moment(0), start_tick=tick)
 
 
 @pytest.mark.parametrize('kind,pad,flag',[('tap','A1','short_hold'),('touch','C','short_touch_hold')])
@@ -123,10 +123,10 @@ def test_chain_handoff_and_pruning_lock(timing,geometry):
 
 def test_boundary_queries_and_active_history(timing,geometry):
     s=PhysicalState(timing,geometry,audio_end_seconds=20)
-    s.accept(End(0),window_end=96);s.accept(Moment(0));s.accept(Note.make('hold','A1'));s.accept(HoldDuration(480))
+    s.inject_boundary(Moment(0), start_tick=0, window_end=96);s.accept(Note.make('hold','A1'));s.accept(HoldDuration(480))
     s.accept(Note.make('hold','A2'));s.accept(HoldDuration(480))
     assert s.query(Moment(1000)).allowed  # closes window even if no NOTE can fit
-    s.accept(Moment(1000));s.accept(End(96),window_end=192)
+    s.accept(Moment(1000));s.inject_boundary(Moment(1000), start_tick=96, window_end=192)
     assert len(s.actions)==2
     assert not s.query(Moment(0)).allowed
 
@@ -152,7 +152,7 @@ def test_kind_and_position_queries_keep_touch_repeat_local(timing,geometry):
 def test_censored_window_keeps_active_actions(timing,geometry):
     from maidata.chart import TimeTarget
     s=PhysicalState(timing,geometry,audio_end_seconds=10)
-    s.accept(End(0),window_end=96);s.accept(Moment(0));s.accept(Note.make('hold','A1'));s.accept(HoldDuration(192))
+    s.inject_boundary(Moment(0), start_tick=0, window_end=96);s.accept(Note.make('hold','A1'));s.accept(HoldDuration(192))
     before=s.snapshot()
     s.close_window(TimeTarget(timing.delta_ms(0,100.5),100.5,True,True))
     assert s.actions==before.actions and s.grammar.state.last_real_tick==0
@@ -184,7 +184,7 @@ def test_retained_single_segment_oracle(real_resources):
     actions,reference=[],[]
     for owner,(kind,pad,tick,dur,route) in enumerate(specs):
         if route is not None:
-            c=Completion(owner,owner,tick,Note.make(kind,pad),track=Track((route,),0,dur),track_index=0)
+            c=Completion(owner,owner,tick,Note.make('slide',pad),track=Track((route,),0,dur),track_index=0)
             row=dict(event='NOTE',kind=kind,start_pad=pad,branch_duration_tick=dur)
         else:
             c=Completion(owner,owner,tick,Note.make(kind,pad),duration_tick=dur)

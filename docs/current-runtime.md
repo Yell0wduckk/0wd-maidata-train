@@ -28,6 +28,7 @@ Encoder 合成验证见[入口文档](maidata-entry.md#cpu-合成验证)。独�
 全曲原谱离线编排和读取入口为 `maidata.chart_cache`，见[缓存说明](chart-cache.md)。
 它复用当前官谱音频 variant 和既有几何，保存完整 token/时间/归属/Physical 动作，
 通过显式 `accept_source` 保留违规GT；不改变正常候选拒绝，不生成镜像或训练窗口。
+原谱v2采用外部边界MOMENT、严格正生成delta及slide/Route-70统一WiFi；`chart_cache.migrate`另生产teacher条件的训练Physical候选mask与非单调时间区间，模型概率和loss仍未接入。
 全量实际完成情况以产物的 `production-summary.json` 为准，清单覆盖不等于全部成功。
 
 当前来源路线为：外部冻结 native 音频 → 一拍音频草稿 → 用户选定兼容草稿 checkpoint → 干净 token 缓存 → A。源实验采用 draft60/A90；该旧配方不是新 encoder 的训练安排。

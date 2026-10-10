@@ -98,7 +98,12 @@ def build_record(ir, row):
     token_map, actions, decisions = [], [], []
     source_note, segment, track = None, -1, 0
     for i, token in enumerate(encoded.tokens):
-        c, decision = state.accept_source(token)
+        if i == 0:
+            from maidata.physical.state import Decision
+            state.inject_boundary(token, start_tick=encoded.start_tick)
+            c, decision = None, Decision()
+        else:
+            c, decision = state.accept_source(token)
         s = state.grammar.state
         if isinstance(token, Note):
             source_note = source_notes[s.owner]
@@ -111,6 +116,8 @@ def build_record(ir, row):
         location = None if isinstance(token, Moment) or source_note is None else dict(
             moment_index=source_note[0], group_index=source_note[1], note_index=source_note[2],
             note_id=source_note[3]['id'], source=source_note[3].get('source'))
+        if location is not None and 'original_location' in source_note[3]:
+            location = source_note[3]['original_location']
         token_map.append(dict(token_index=i, tick=s.cursor, second=actual.second(s.cursor),
                               moment=s.moment, owner=None if location is None else s.owner,
                               track_index=track if isinstance(token, Route) or token.type == 'SLIDE_DURATION' else None,
@@ -124,7 +131,7 @@ def build_record(ir, row):
     if state.grammar.state.owner+1 != len(source_notes):
         raise ValueError('source note count changed')
     return dict(schema=SCHEMA, view='original', source=row, metadata=encoded.metadata,
-                tokens=[token_to_dict(t) for t in encoded.tokens], token_map=token_map,
+                start_tick=encoded.start_tick, tokens=[token_to_dict(t) for t in encoded.tokens], token_map=token_map,
                 actions=actions, decisions=decisions, note_count=len(source_notes),
                 physical_categories=dict(Counter(p for d in decisions for p in d['physical'])),
                 basic_errors=dict(Counter(p for d in decisions for p in d['basic_errors'])))

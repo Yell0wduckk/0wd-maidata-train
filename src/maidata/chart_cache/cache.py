@@ -9,7 +9,7 @@ from pathlib import Path
 from maidata.chart.codec import EncodedChart, token_from_dict
 from maidata.chart.grammar import Grammar
 
-SCHEMA = 'maidata.full-chart-original.v1'
+SCHEMA = 'maidata.full-chart-original.v2'
 
 
 def read_json(path):
@@ -32,11 +32,15 @@ def write_json(path, value):
 def validate(record):
     if record['schema'] != SCHEMA or record['view'] != 'original':
         raise ValueError('incompatible chart cache schema/view')
-    encoded = EncodedChart(tuple(token_from_dict(t) for t in record['tokens']), record['metadata'])
+    encoded = EncodedChart(tuple(token_from_dict(t) for t in record['tokens']), record['metadata'], record['start_tick'])
     grammar = Grammar(encoded.timing)
     completions = []
     for i, token in enumerate(encoded.tokens):
-        c = grammar.accept(token)
+        if i == 0:
+            grammar.inject_boundary(token, start_tick=encoded.start_tick)
+            c = None
+        else:
+            c = grammar.accept(token)
         mapping = record['token_map'][i]
         if mapping['token_index'] != i or mapping['tick'] != grammar.state.cursor:
             raise ValueError('token time/index mapping mismatch')
