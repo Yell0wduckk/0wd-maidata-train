@@ -7,6 +7,7 @@ class GenerationOptions:
     temperature: float = 1.
     seed: int = 20261010
     max_tokens_per_window: int = 512
+    max_tokens_per_moment: int = 20
     max_backtracks_per_window: int = 128
     rollback_tokens: int = 16
     physical_hard_mask: bool = True

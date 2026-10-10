@@ -53,8 +53,14 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
             oracle = InferencePhysicalState(timing, session.rules.geometry,
                 audio_end_seconds=session.rules.audio_end_seconds)
             oracle.restore(session.rules.snapshot())
+        count = 0
+        for previous in reversed(accepted):
+            if isinstance(previous, Moment):
+                break
+            count += 1
         return (snapshot, len(accepted), len(bypass), sampler.choices(decoder, routed, oracle, timing,
-            distributions, end_tick=end_tick, cap_tick=cap_tick))
+            distributions, end_tick=end_tick, cap_tick=cap_tick,
+            moment_remaining=options.max_tokens_per_moment-count))
 
     frames.append(frame(boundary))
     while frames:
@@ -118,7 +124,8 @@ def chart_from_groups(groups, timing, metadata):
 @torch.inference_mode()
 def generate(decoder, conditions, timing, geometry, config, metadata, duration, *, device, options=None, progress=None):
     options = options or GenerationOptions()
-    if options.max_tokens_per_window < 1 or options.rollback_tokens < 1 or options.max_backtracks_per_window < 0:
+    if (options.max_tokens_per_window < 1 or options.max_tokens_per_moment < 1
+            or options.rollback_tokens < 1 or options.max_backtracks_per_window < 0):
         raise ValueError('invalid generation limits')
     if config.get('target_stride_beats', config['target_beats']) != config['target_beats']:
         raise ValueError('full-song generation requires contiguous non-overlapping target windows: stride == target_beats')

@@ -36,11 +36,19 @@ class Sampler:
         d = evaluation.raw.decision() if hasattr(evaluation, 'raw') else evaluation
         return not d.basic_errors and (not self.physical_hard_mask or not d.physical)
 
-    def contents(self, decoder, h, kind, oracle, timing, distributions, *, end_tick, cap_tick):
+    def contents(self, decoder, h, kind, oracle, timing, distributions, *, end_tick, cap_tick,
+                 moment_remaining=None):
         heads, device = decoder.heads, h.device
         if kind == 'NOTE':
             kinds = oracle.query_kinds()
-            for k in self.order(heads.kind(h), [self.allowed(kinds[n]) for n in KINDS]):
+            # Reserve the mandatory duration (and first route for slides), so
+            # the hard onset cap never leaves a partially emitted action.
+            def fits(name):
+                needed = 3 if name == 'slide' else 1
+                if name in ('hold', 'touch_hold'):
+                    needed = 2  # Short holds are encoded as tap/touch flags.
+                return moment_remaining is None or needed <= moment_remaining
+            for k in self.order(heads.kind(h), [fits(n) and self.allowed(kinds[n]) for n in KINDS]):
                 name, kt = KINDS[k], torch.tensor(k, device=device)
                 pads = TOUCH_PADS if name in ('touch', 'touch_hold') else BUTTON_PADS
                 positions = oracle.query_positions(name)
@@ -52,7 +60,11 @@ class Sampler:
                     # Flags are independent Bernoulli heads. Enumerating their tiny
                     # joint support also excludes a short hold beyond audio_end.
                     scores = torch.stack([sum(logits[FLAGS.index(f), getattr(n, f)] for f in applicable) for n in options])
-                    for f in self.order(scores, [self.allowed(oracle.query(n)) for n in options]):
+                    def note_fits(n):
+                        needed = (3 if n.kind == 'slide' else
+                                  2 if n.kind in ('hold', 'touch_hold') else 1)
+                        return moment_remaining is None or needed <= moment_remaining
+                    for f in self.order(scores, [note_fits(n) and self.allowed(oracle.query(n)) for n in options]):
                         yield options[f]
         elif kind == 'ROUTE':
             first = oracle.physical.grammar.state.phase in ('route', 'track_done')
@@ -83,12 +95,19 @@ class Sampler:
                 else:
                     yield (HoldDuration if kind == 'HOLD_DURATION' else SlideDuration)(tick)
 
-    def choices(self, decoder, routed, oracle, timing, distributions, *, end_tick, cap_tick):
+    def choices(self, decoder, routed, oracle, timing, distributions, *, end_tick, cap_tick,
+                moment_remaining=None):
         types = oracle.query_types()
         allowed = [name in types and self.allowed(types[name]) for name in GENERATED_TYPES]
+        if moment_remaining is not None:
+            required = {'MOMENT': 0, 'NOTE': 1, 'ROUTE': 2,
+                        'HOLD_DURATION': 1, 'SLIDE_DURATION': 1}
+            allowed = [ok and required[name] <= moment_remaining
+                       for name, ok in zip(GENERATED_TYPES, allowed)]
         for index in self.order(routed.logits[0, -1], allowed):
             target_type = torch.full_like(routed.valid, index, dtype=torch.long)
             result = decoder.complete(routed, target_type)
             for token in self.contents(decoder, result.hidden[0, -1], GENERATED_TYPES[index], oracle,
-                                       timing, distributions, end_tick=end_tick, cap_tick=cap_tick):
+                                       timing, distributions, end_tick=end_tick, cap_tick=cap_tick,
+                                       moment_remaining=moment_remaining):
                 yield token, result.cache

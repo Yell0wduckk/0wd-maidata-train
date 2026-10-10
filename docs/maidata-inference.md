@@ -62,6 +62,7 @@ python -m maidata.inference.materialize \
 | `--seed` | 20261010；独立 CPU sampling generator，重试不重复同一候选 |
 | `--encoder-window-batch` | 8；控制 E 分块大小，不改变全曲 P0/Z 或 AR 目标窗 |
 | `--max-tokens-per-window` | 512；当前新字段 token 数上限，不是旧行数或历史截断预算 |
+| `--max-tokens-per-moment` | 20；单一起音内容token硬上限，不含MOMENT本身；为NOTE/ROUTE预留必需duration，达到上限后强制选择下一MOMENT或合法窗末终端，不删除已接受动作 |
 | `--max-backtracks-per-window` | 128；合法补全搜索的回退次数上限 |
 | `--rollback-tokens` | 16；保留的搜索回退深度，不限制音符链表示或模型输入历史长度 |
 | `--physical-hard-mask` | 开启；使用原始 Physical 拒绝位，完整动作提交时再次判定 |

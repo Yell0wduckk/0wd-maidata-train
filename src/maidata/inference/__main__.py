@@ -34,6 +34,8 @@ def parser():
     p.add_argument('--seed', type=int, default=defaults.seed)
     p.add_argument('--encoder-window-batch', type=int, default=8)
     p.add_argument('--max-tokens-per-window', type=int, default=defaults.max_tokens_per_window)
+    p.add_argument('--max-tokens-per-moment', type=int, default=defaults.max_tokens_per_moment,
+                   help='Hard content-token cap per onset; reserve mandatory action completion, then advance MOMENT')
     p.add_argument('--max-backtracks-per-window', type=int, default=defaults.max_backtracks_per_window)
     p.add_argument('--rollback-tokens', type=int, default=defaults.rollback_tokens, help='Search frontier, never a history token limit')
     p.add_argument('--physical-hard-mask', action=argparse.BooleanOptionalAction, default=defaults.physical_hard_mask)
@@ -92,7 +94,8 @@ def main(argv=None):
     with stage(progress, 'geometry'):
         geometry = Geometry.from_resources(args.geometry, args.slide_data)
     options = GenerationOptions(temperature=args.temperature, seed=args.seed,
-        max_tokens_per_window=args.max_tokens_per_window, max_backtracks_per_window=args.max_backtracks_per_window,
+        max_tokens_per_window=args.max_tokens_per_window, max_tokens_per_moment=args.max_tokens_per_moment,
+        max_backtracks_per_window=args.max_backtracks_per_window,
         rollback_tokens=args.rollback_tokens, physical_hard_mask=args.physical_hard_mask, trace=args.trace)
     metadata = ir_metadata(timing, duration)
     output.mkdir(parents=True, exist_ok=True)

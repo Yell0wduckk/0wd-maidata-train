@@ -100,7 +100,8 @@ def test_new_fields_history_empty_windows_and_cross_window_actions(config, geome
              Moment(timing.delta_ms(16*96,20*96)),Note.make('tap','A4')],
     }
     cursors = {start:0 for start in prepared.starts}
-    def scripted(self, model, routed, oracle, clock, distributions, *, end_tick, cap_tick):
+    def scripted(self, model, routed, oracle, clock, distributions, *, end_tick, cap_tick,
+                 moment_remaining=None):
         start = end_tick//96-16
         if cursors[start]==0:
             active.append((start,tuple(oracle.physical.actions)))
@@ -252,3 +253,54 @@ def test_limit_fails_without_silent_truncation(config,geometry):
     with patch.object(Sampler,'choices',endless), pytest.raises(GenerationError,match='token limit'):
         generate(model,prepared,timing,geometry,config,ir_metadata(timing,1),1.,device='cpu',
             options=GenerationOptions(max_tokens_per_window=1,physical_hard_mask=False))
+
+
+def test_moment_cap_forces_advance_and_reserves_action_completion(config, geometry):
+    model = build_decoder(config).eval()
+    timing = TimingMap([(0,120)])
+    prepared = conditions(config,timing,2.)
+    memory = model.prepare_memory(model.prepare_audio(prepared.audio),torch.tensor([0]),
+        prepared.z,prepared.plans[:1],prepared.plan_valid[:1])
+    physical = PhysicalState(timing,geometry,audio_end_seconds=2.)
+    physical.inject_boundary(Moment(0),start_tick=0,window_end=288)
+    oracle = AttributionState(physical)
+    sampler = Sampler(temperature=0,physical_hard_mask=False)
+    specs = decoder_time_distributions(config)
+    h = torch.zeros(config['decoder_dim'])
+    with torch.inference_mode():
+        # A single remaining slot cannot begin a multi-token action.
+        notes = list(sampler.contents(model,h,'NOTE',oracle,timing,specs,
+            end_tick=288,cap_tick=384,moment_remaining=1))
+        assert notes and all(n.kind in ('tap','touch') for n in notes)
+        routed = model.begin(pack_tokens([[Moment(0)]],[[0.]],device='cpu'),memory)
+        token,_ = next(sampler.choices(model,routed,oracle,timing,specs,
+            end_tick=288,cap_tick=384,moment_remaining=0))
+        assert isinstance(token,(Moment,TimeTarget))
+        # A chain must finish with duration instead of appending another route.
+        physical.accept(Note.make('slide','A1'))
+        physical.accept(Route(0,0))
+        token,_ = next(sampler.choices(model,routed,oracle,timing,specs,
+            end_tick=288,cap_tick=384,moment_remaining=1))
+        assert isinstance(token,SlideDuration)
+
+
+def test_generation_caps_repeated_notes_at_one_onset(config, geometry):
+    model = build_decoder(config).eval()
+    timing = TimingMap([(0,120)])
+    prepared = conditions(config,timing,1.)
+    with torch.no_grad():
+        model.type_head.weight.zero_()
+        model.type_head.bias.fill_(-100)
+        model.type_head.bias[GENERATED_TYPES.index('NOTE')] = 100
+        model.heads.kind.weight.zero_()
+        model.heads.kind.bias.fill_(-100)
+        model.heads.kind.bias[0] = 100
+        head = model.heads.times['MOMENT']
+        head.weight.zero_()
+        head.bias.reshape(-1,3)[:,1] = 100
+    result,windows = generate(model,prepared,timing,geometry,config,ir_metadata(timing,1.),1.,
+        device='cpu',options=GenerationOptions(temperature=0,max_tokens_per_moment=3,
+                                              physical_hard_mask=False))
+    groups = real_onsets(result.tokens,timing,sequence_start_tick=result.start_tick)
+    assert groups and all(len(g.content) <= 3 for g in groups)
+    assert any(len(g.content) == 3 for g in groups)
