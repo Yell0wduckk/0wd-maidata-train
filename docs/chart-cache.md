@@ -96,10 +96,13 @@ Physical 计数和逐谱结果。这些是生产证据，不新增训练启动�
 ```bash
 PYTHONPATH=src python3 -m maidata.chart_cache.migrate \
   --source /root/autodl-tmp/chart-cache-all-official-original-20261010 \
-  --output /root/autodl-tmp/chart-cache-original-v2-20261010 \
-  --physical-output /root/autodl-tmp/training-physical-original-20261010 \
+  --output /root/autodl-tmp/chart-cache-original-v2-master-remaster-20261010 \
+  --physical-output /root/autodl-tmp/training-physical-original-master-remaster-20261010 \
   --geometry /root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/physical/path-catalog \
-  --slide-data /root/autodl-tmp/0wd-v3-physical-20261010/resources/slide_data.json --workers 12
+  --slide-data /root/autodl-tmp/0wd-v3-physical-master-remaster-20261010/resources/slide_data.json --workers 12 --master-remaster-no-six-digit
 ```
 
 这里12是独立离线生产进程数；训练DataLoader workers默认也保持12。新产物首次写入压缩读回、结构验收及SHA记录一次。状态绑定生产代码与输入身份，同身份续跑复用已有结果；不增加旧音频/几何验收凭据。
+
+
+2026-10-10用户更新范围：先排除六位数song ID（128份谱面、106个ID），再仅选Master(inote_5)/Re:Master(inote_6)。实际候选为1868份（1697/171），其余难度不计算本次Physical。`selection.json`记录排除项，catalog仅列本次候选；`quarantine.json`记录剩余不可表示谱及原因/位置，`training-index.json`只列实际成功产物，不把隔离谱计入训练。旧包和已停止的不完整产物保留。WiFi仅禁止连续链，允许独立普通/WiFi并行分支；是否违规由完整Physical动作独立判定，不因违规删除GT。负first偏移的MOMENT支持显式包含音频0秒边界，避免将音频前候选误标合法。

@@ -50,12 +50,12 @@ def test_unified_wifi_and_route_masks(geometry):
     s.accept(Note.make('slide','A1'))
     assert s.query(Route(70,0)).allowed and s.query(Route(0,0)).allowed
     s.accept(Route(70,0));s.accept(SlideDuration(96))
-    assert s.actions[-1].wifi and s.grammar.allowed_types() == ('NOTE','MOMENT')
+    assert s.actions[-1].wifi and s.grammar.allowed_types() == ('ROUTE','NOTE','MOMENT')
     with pytest.raises(ChartError): Note.make('wifi','A1')
     s.accept(Note.make('slide','A3'));s.accept(Route(0,0))
     assert not s.query(Route(70)).allowed
     s.accept_source(SlideDuration(96))
-    assert not s.query(Route(70,0)).allowed
+    assert not s.query(Route(70,0)).basic_errors
 
 
 def test_nonmonotone_partition_matches_every_tick(geometry):
@@ -118,3 +118,42 @@ def test_training_readback_causal_prefix_and_window_tail(tmp_path,geometry,monke
     assert time_decision(a['stages'][2],144.25,censored=True).allowed
     # An exact outside query and a censored empty-audio tail never require NOTE.
     assert time_decision(a['stages'][-1],1536,window_end=1152).allowed
+
+
+def test_moment_support_negative_audio_anchor(geometry):
+    timing=TimingMap([(0,60)],-1.)
+    s=PhysicalState(timing,geometry,audio_end_seconds=10)
+    s.inject_boundary(Moment(0),start_tick=0)
+    support=moment_support(s)
+    for tick in range(1,200):
+        assert interval_decision(support,tick) == s.query(Moment(timing.delta_ms(0,tick)))
+
+
+@pytest.mark.parametrize('routes',[(70,0),(0,70),(70,70)])
+def test_wifi_parallel_branches_round_trip_and_teacher_retention(routes,geometry,monkeypatch):
+    monkeypatch.setattr(produce,'GEOMETRY',geometry)
+    metadata=dict(schema='maimai.chart_ir.v1',tick_rate=180,first_seconds=0,
+                  controls=[dict(kind='bpm',bpm=120,position_beats=dict(num=0,den=1))])
+    tokens=(Moment(0),Note.make('slide','A1'),Route(routes[0],0),SlideDuration(96),
+            Route(routes[1],1),SlideDuration(144))
+    encoded=EncodedChart(tokens,metadata)
+    ir=decode_chart(encoded,geometry)
+    from maidata.chart import encode_chart
+    assert encode_chart(ir).tokens == tokens
+    row=dict(chart_id='test:5',timing=dict(bpm=[[0,1,120]],first_seconds=0),audio_end_seconds=10)
+    record=produce.build_record(ir,row)
+    assert record['note_count']==1 and len(record['actions'])==2
+    assert [a['action']['kind'] for a in record['actions']] == ['wifi' if r==70 else 'slide' for r in routes]
+    assert all(not d['basic_errors'] for d in record['decisions'])
+    # Violations remain GT; branch syntax is separate from the two-hand rule.
+    assert 'multitouch' in record['decisions'][-1]['physical']
+
+
+def test_user_selection_excludes_six_digit_ids_before_difficulty():
+    from maidata.chart_cache.migrate import select_master_remaster
+    rows=[dict(chart_id=f'{s}:{d}',song_id=s,difficulty=d) for s,d in
+          [('123456','5'),('123456','2'),('12345','5'),('12345','6'),('12345','4'),('12','7')]]
+    selected,report=select_master_remaster(dict(charts=rows))
+    assert [r['chart_id'] for r in selected] == ['12345:5','12345:6']
+    assert report['excluded_counts'] == {'six_digit_song_id':2,'outside_master_remaster':2}
+    assert report['difficulties'] == {'5':1,'6':1}

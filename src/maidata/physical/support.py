@@ -100,16 +100,18 @@ def moment_support(state):
     s, timing = state.grammar.state, state.timing
     lower = s.cursor+1
     raw_end = timing.second_to_beat(state.audio_end_seconds)*96
-    upper = math.ceil(raw_end-1e-8)-1
+    upper = math.ceil(raw_end)-1
+    while timing.second(upper) >= state.audio_end_seconds:
+        upper -= 1
     if upper < lower:
         return dict(domain=[lower,upper], intervals=[], outside_basic='onset_outside_audio')
-    times = _times(state.actions)
+    times = _times(state.actions) | {0.}
     roots = []
     for t in times:
         tick = timing.second_to_beat(t)*96
         roots.extend((tick,tick-2))
     # Beyond the last surviving action all real-onset candidates are equivalent.
-    end = max((history_end(a) for a in state.actions), default=timing.second(lower))
+    end = max(0., max((history_end(a) for a in state.actions), default=timing.second(lower)))
     active_upper = min(upper, math.ceil(timing.second_to_beat(end)*96)+3)
     rows = _partition(roots, lower, max(lower-1,active_upper),
                       lambda n: state.query(Moment(timing.delta_ms(s.cursor,n))))

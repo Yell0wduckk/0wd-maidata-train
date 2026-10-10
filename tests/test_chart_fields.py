@@ -146,7 +146,8 @@ def test_wifi_and_unbounded_data_chains(timing):
         g.accept(t)
     with pytest.raises(ChartError): g.accept(Route(0))
     g.accept(SlideDuration(96))
-    with pytest.raises(ChartError): g.accept(Route(0,0))
+    g.accept(Route(0,0)); g.accept(SlideDuration(96))
+    g.accept(Route(70,0)); g.accept(SlideDuration(96))
     g.accept(Note.make('slide','A3'))
     # Field syntax does not impose the Physical two-track limit or a chain cap.
     for branch in range(4):

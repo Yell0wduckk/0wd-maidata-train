@@ -58,7 +58,7 @@ class Grammar:
             'note': ('NOTE',), 'hold': ('HOLD_DURATION',), 'route': ('ROUTE',),
             'chain': ('SLIDE_DURATION',) if s.routes == (70,) else ('ROUTE', 'SLIDE_DURATION'),
             'done': ('NOTE', 'MOMENT'),
-            'track_done': ('NOTE', 'MOMENT') if s.routes == (70,) else ('ROUTE', 'NOTE', 'MOMENT'),
+            'track_done': ('ROUTE', 'NOTE', 'MOMENT'),
         }[s.phase]
 
     def accept(self, token, *, window_end=None):
@@ -90,8 +90,8 @@ class Grammar:
             first = s.phase in ('route', 'track_done')
             if (token.track_break is None) == first:
                 raise ChartError('only the first ROUTE of a track carries track_break')
-            if token.route_id == 70 and (not first or s.track_count):
-                raise ChartError('WiFi is allowed only as the first track and sole segment')
+            if token.route_id == 70 and not first:
+                raise ChartError('WiFi must be the sole segment of its track')
             routes = (token.route_id,) if first else s.routes+(token.route_id,)
             chain_paths(s.note.pad, routes)
             updates.update(phase='chain', routes=routes,

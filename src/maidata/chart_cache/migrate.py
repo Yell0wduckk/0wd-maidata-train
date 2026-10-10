@@ -10,6 +10,7 @@ import gzip
 import hashlib
 import json
 from pathlib import Path
+import re
 import time
 
 from maidata.chart import EncodedChart, decode_chart, token_from_dict
@@ -17,6 +18,27 @@ from maidata.chart.types import ChartError
 from . import produce
 from .cache import SCHEMA, digest, read_json, write_json, save_chart
 from .training import build_supports, save_supports, SCHEMA as TRAINING_SCHEMA
+
+
+def select_master_remaster(cat):
+    """User scope: remove six-digit song IDs before difficulty selection."""
+    rows, excluded = [], []
+    for row in cat['charts']:
+        if re.fullmatch(r'[0-9]{6}', row['song_id']):
+            reason = 'six_digit_song_id'
+        elif row['difficulty'] not in ('5','6'):
+            reason = 'outside_master_remaster'
+        else:
+            rows.append(row)
+            continue
+        excluded.append(dict(chart_id=row['chart_id'],song_id=row['song_id'],
+                             difficulty=row['difficulty'],reason=reason))
+    report = dict(source_charts=len(cat['charts']),selected_charts=len(rows),
+                  selected_songs=len({r['song_id'] for r in rows}),
+                  difficulties=dict(Counter(r['difficulty'] for r in rows)),
+                  excluded_counts=dict(Counter(r['reason'] for r in excluded)),
+                  excluded=excluded,selected=[r['chart_id'] for r in rows],views=['original'])
+    return rows,report
 
 
 def convert(old, geometry):
@@ -67,7 +89,8 @@ def one(row, old_status, source, output, physical, recipe):
         else:
             failure = source/'failures'/f"{row['song_id']}-{row['difficulty']}.ir.json.gz"
             if not failure.exists():
-                result.update(status='unrepresentable',reason=old_status['reason'])
+                result.update(status='unrepresentable',reason=old_status['reason'],
+                              **{k:old_status[k] for k in ('parser_exit','source_path','source_header_line') if k in old_status})
             else:
                 with gzip.open(failure,'rt',encoding='utf-8') as stream:
                     ir = json.load(stream)
@@ -104,21 +127,33 @@ def main():
         p.add_argument('--'+name,type=Path,required=True)
     p.add_argument('--workers',type=int,default=12)
     p.add_argument('--limit',type=int)
+    p.add_argument('--master-remaster-no-six-digit',action='store_true')
     args = p.parse_args()
     cat = read_json(args.source/'catalog.json')
     summary = read_json(args.source/'production-summary.json')
     statuses = {r['chart_id']:r for r in summary['results']}
+    if args.master_remaster_no_six_digit:
+        rows,selection = select_master_remaster(cat)
+    else:
+        rows = cat['charts']
+        selection = dict(source_charts=len(rows),selected_charts=len(rows),
+                         selected_songs=len({r['song_id'] for r in rows}),views=['original'])
+    if args.limit is not None:
+        rows = rows[:args.limit]
     paths = [p for package in ('chart_cache','chart','time','physical')
              for p in (Path(__file__).parents[1]/package).rglob('*.py')]
     recipe = digest({str(p.relative_to(Path(__file__).parents[1])):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(paths)})
     for root,schema in ((args.output,SCHEMA),(args.physical_output,TRAINING_SCHEMA)):
-        value = dict(cat,schema=schema,producer_recipe=recipe,source_cache=str(args.source.resolve()),
+        value = dict(cat,schema=schema,charts=rows,chart_count=len(rows),
+                     song_count=len({r['song_id'] for r in rows}),audio_only=[],
+                     versions=dict(Counter(r['version'] for r in rows)),
+                     selection=selection,producer_recipe=recipe,source_cache=str(args.source.resolve()),
                      geometry_root=str(args.geometry.resolve()),slide_data=str(args.slide_data.resolve()))
         dest = root/'catalog.json'
         if dest.exists() and read_json(dest) != value:
             raise ValueError('existing output catalog identity mismatch')
         write_json(dest,value)
-    rows = cat['charts'][:args.limit] if args.limit else cat['charts']
+        write_json(root/'selection.json',selection)
     started,results = time.monotonic(),[]
     with ProcessPoolExecutor(max_workers=args.workers,initializer=produce.initialize,
                              initargs=(str(args.geometry),str(args.slide_data))) as pool:
@@ -128,13 +163,21 @@ def main():
             results.append(r)
             if len(results)%25 == 0 or r['status'] == 'failed':
                 print(json.dumps(dict(completed=len(results),expected=len(rows),counts=dict(Counter(r['status'] for r in results)),latest=r['chart_id'])),flush=True)
+    quarantined = [r for r in results if r['status'] == 'unrepresentable']
+    quarantine = dict(count=len(quarantined),reasons=dict(Counter(r['reason'] for r in quarantined)),
+                      charts=sorted(quarantined,key=lambda r:r['chart_id']))
     final = dict(expected=len(rows),source_chart_count=cat['chart_count'],views=['original'],recipe=recipe,
+                 selection=selection,quarantined=len(quarantined),
                  seconds=time.monotonic()-started,counts=dict(Counter(r['status'] for r in results)),
                  totals={k:sum(r.get(k,0) for r in results) for k in ('tokens','notes','actions','stages','time_intervals','bytes')},
                  results=sorted(results,key=lambda r:r['chart_id']))
     write_json(args.output/'production-summary.json',dict(final,schema=SCHEMA))
     write_json(args.physical_output/'production-summary.json',dict(final,schema=TRAINING_SCHEMA))
-    print(json.dumps({k:v for k,v in final.items() if k != 'results'}),flush=True)
+    for root in (args.output,args.physical_output):
+        write_json(root/'quarantine.json',quarantine)
+        write_json(root/'training-index.json',dict(views=['original'],
+                   charts=[dict(chart_id=r['chart_id'],path=r['path']) for r in final['results'] if r['status']=='success']))
+    print(json.dumps({k:v for k,v in final.items() if k not in ('results','selection')}),flush=True)
     return int(bool(final['counts'].get('failed')))
 
 

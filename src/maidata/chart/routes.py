@@ -31,6 +31,8 @@ def route_for(path):
 
 
 def chain_paths(start_pad, routes):
+    if 70 in routes and len(routes) != 1:
+        raise ChartError('WiFi cannot be a segment of a continuous chain')
     result = []
     for route in routes:
         path = path_for(start_pad, route)

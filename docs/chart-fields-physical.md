@@ -16,10 +16,10 @@
 
 - 仅五种 token；没有 END。外部调用 `inject_boundary(Moment(delta), start_tick=a, history_present=..., window_end=b)` 注入边界；有历史时 delta 从最后真实起音计算，无历史或历史 dropout 时为0，绝对锚仍是a。边界角色由运行时指定，不从数值零推断。生成 MOMENT 必须前进至少1 tick，直接 NOTE 才将边界登记为真实起音。连续空窗与终端查询不更新最后真实起音。
 - `Note.make(kind, pad, **flags)`将适用的未指定flags设为有效0，不适用字段保持None。按钮为A1..A8；Touch为A/B/D/E各8区加C。Python的`break_`在JSON中为`break`。
-- NOTE.kind只有tap、hold、touch、touch_hold、slide；WiFi由ROUTE=70恢复。首条轨道首段允许全部71类；普通链和额外分支排除70，WiFi后只接SLIDE_DURATION且无额外分支。
+- NOTE.kind只有tap、hold、touch、touch_hold、slide；WiFi由ROUTE=70恢复。每条轨道首段允许全部71类；普通链的连续段排除70，WiFi路线后只接SLIDE_DURATION；完成duration后允许普通/WiFi并行分支。
 - `Route(route_id, track_break)`沿用Route-71；0..69普通路线，70 WiFi。首段必须提供0/1，后续段必须None。新分支重新从head起点开始。
 - `HoldDuration(ticks)`最小2；`SlideDuration(ticks)`最小1。0..1 tick源hold转换为short flag，恢复为1 tick。时间token不改变起音游标。
-- 数据编码不设置链段或branch条数上限，也不进行Physical筛谱；WiFi保持单段且无附加分支。字段集合封闭，不存在OOV输出，非法输入报具体错误。
+- 数据编码不设置链段或branch条数上限，也不进行Physical筛谱；WiFi在各自轨道内保持单段，允许参与并行分支组合。字段集合封闭，不存在OOV输出，非法输入报具体错误。
 - `token_to_dict/token_from_dict`显式保存`type`与字段，NA为null，数字0保持有效。`mirror_tokens`对按钮、Touch和每个连续/分支路线分别变换，D/E与A/B使用各自镜像映射。
 
 `encode_chart(ir)`读取`maimai.chart_ir.v1`有理拍字段，返回`EncodedChart(tokens, metadata, start_tick)`。不使用IR的180 Hz投影tick当作拍坐标。IR头元数据与控制事件保留；NOTE顺序保留，同一MOMENT组装一个each组，each从实际NOTE数派生。只接受star head、默认一拍等待、末尾总时长链；不可表示输入不静默改写。`decode_chart(encoded, geometry)`重建IR及180 Hz投影，连续链按MiaCode samples折线长度分配秒数，后续段起点从前段终点继承。IR内的逐段duration为派生投影，不作为独立速度监督。
@@ -62,7 +62,7 @@ state.restore(saved)
 
 四类规则为multitouch、overlap、slide_too_fast、tap_on_slide，沿用Touch池、250ms重复限制、2 tick短按、22 tick释放、启动后70 tick保护与200ms路径经过保护。Touch重复只归责位置；flags不参与规则。短hold的1 tick音频范围检查单独返回`duration_outside_audio`，不冒充multitouch。
 
-连续链共享一次head、启动等待、占手和末尾释放；快滑逐段使用实际运动时间与旧覆盖/豁免。内部接点不生成新head或等待，也不调用独立轨道handoff。并行分支保持独立轨道占手，最多一个附加分支；WiFi两手且无附加分支。权重(1,1,4,1)与固定四类归约仅导出为后续loss常量，当前不计算模型损失或梯度。
+连续链共享一次head、启动等待、占手和末尾释放；快滑逐段使用实际运动时间与旧覆盖/豁免。内部接点不生成新head或等待，也不调用独立轨道handoff。并行分支保持独立轨道占手，最多一个附加分支；WiFi轨道按两手占用计算，包含WiFi的分支组合可编码；完整动作按原有Physical规则判断并保留违规GT。权重(1,1,4,1)与固定四类归约仅导出为后续loss常量，当前不计算模型损失或梯度。
 
 ## 验证
 
