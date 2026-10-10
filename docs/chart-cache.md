@@ -85,6 +85,16 @@ Physical 计数和逐谱结果。这些是生产证据，不新增训练启动�
 
 ## 最新设计迁移与训练 Physical 缓存
 
+仅重建原谱 v2 字段/动作缓存时使用独立入口：
+
+```bash
+PYTHONPATH=src python -m maidata.chart_cache.rebuild_fields \
+  --source <accepted-v1-cache> --output <new-v2-fields-cache> \
+  --geometry <existing-path-catalog> --slide-data <existing-slide-data.json> --workers 12
+```
+
+该入口固定排除六位数song ID，仅选Master/Re:Master，不生成镜像或训练Physical候选支持。成功的v1缓存经显式适配器迁移，旧失败IR重试v2编码；输出独立catalog、selection、production-summary、quarantine及只含成功谱的training-index。原有违规GT保留。新字段写入时沿用一次读回、结构校验及SHA记录，不遍历旧音频或重建几何。
+
 `python -m maidata.chart_cache.migrate` 读取已验收、已上传的原谱v1缓存；显式将旧END锚移入start_tick、将旧wifi NOTE转为slide/Route-70，然后重新生成v2动作与训练支持。不重算音频、几何，不生成镜像。不可表示源谱读取原有failure IR重试最新编码，仍不可表示的保留原因与IR，不能当成功谱。
 
 每个训练产物schema为 `maidata.training-physical-original.v1`，同样使用 `charts/<ID>/<difficulty>.json.gz`。`stages`与真实目标位置逐一对应，首枚输入边界不预测，另保留末尾时间查询支持。所有支持严格来自目标前的GT前缀：kind对位置作存在性投影，pad使用teacher kind，route使用既有连续段/branch，duration使用完整已选轨道。flags不参与Physical；ROUTE的语法错误与基础合法性独立于四类Physical mask。源码只产生候选支持，模型概率q、−log(1−q)、梯度及训练循环不在本次范围。

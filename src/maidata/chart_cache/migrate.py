@@ -17,7 +17,6 @@ from maidata.chart import EncodedChart, decode_chart, token_from_dict
 from maidata.chart.types import ChartError
 from . import produce
 from .cache import SCHEMA, digest, read_json, write_json, save_chart
-from .training import build_supports, save_supports, SCHEMA as TRAINING_SCHEMA
 
 
 def select_master_remaster(cat):
@@ -69,6 +68,7 @@ def convert(old, geometry):
 
 
 def one(row, old_status, source, output, physical, recipe):
+    from .training import build_supports, save_supports
     source,output,physical = Path(source),Path(output),Path(physical)
     status_path = physical/'status'/f"{row['song_id']}-{row['difficulty']}.json"
     identity = digest(dict(row=row,source_key=old_status['input_key'],recipe=recipe))
@@ -122,6 +122,7 @@ def one(row, old_status, source, output, physical, recipe):
 
 
 def main():
+    from .training import SCHEMA as TRAINING_SCHEMA
     p = argparse.ArgumentParser(description=__doc__)
     for name in ('source','output','physical-output','geometry','slide-data'):
         p.add_argument('--'+name,type=Path,required=True)
