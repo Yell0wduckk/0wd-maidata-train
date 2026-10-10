@@ -23,13 +23,19 @@ PYTHON_BIN=${PYTHON:-python}
 mkdir -p -- "$LOG_DIR"
 
 printf 'Starting predicted plan training: %s\n' "$PREDICTED_OUTPUT"
+predicted_status=0
 "$PYTHON_BIN" -u -m maidata.decoder_training \
   --config "$BASE_CONFIG" --plan-source predicted --output "$PREDICTED_OUTPUT" \
-  2>&1 | tee -a "$LOG_DIR/predicted.log"
+  2>&1 | tee -a "$LOG_DIR/predicted.log" || predicted_status=$?
 
 printf 'Starting GT plan training: %s\n' "$GT_OUTPUT"
+gt_status=0
 "$PYTHON_BIN" -u -m maidata.decoder_training \
   --config "$BASE_CONFIG" --plan-source gt --output "$GT_OUTPUT" \
-  2>&1 | tee -a "$LOG_DIR/gt.log"
+  2>&1 | tee -a "$LOG_DIR/gt.log" || gt_status=$?
 
-printf 'Both plan experiments completed. Logs: %s\n' "$LOG_DIR"
+printf 'Plan experiments finished: predicted=%s gt=%s. Logs: %s\n' "$predicted_status" "$gt_status" "$LOG_DIR"
+if (( predicted_status != 0 )); then
+  exit "$predicted_status"
+fi
+exit "$gt_status"

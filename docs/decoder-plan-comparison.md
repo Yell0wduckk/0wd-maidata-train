@@ -54,7 +54,7 @@ python -m maidata.decoder_training --config /path/to/base.json \
   --plan-source gt --gt-plan-cache /path/to/gt-plan-cache --output /path/to/gt-run
 ```
 
-串行launcher接同一base config和两个独立输出目录，先predicted、成功后再GT：
+串行launcher接同一base config和两个独立输出目录，先predicted、结束后再GT：
 
 ```bash
 PYTHON=/path/to/venv/bin/python bash scripts/run-decoder-plan-comparison.sh \
@@ -63,7 +63,7 @@ PYTHON=/path/to/venv/bin/python bash scripts/run-decoder-plan-comparison.sh \
 
 GT缓存路径从base config读取。第四个日志目录可省略，默认为`<PREDICTED_OUTPUT>.plan-comparison-logs`；两份日志分别为`predicted.log`和`gt.log`，以追加方式保存。建议使用绝对路径；相对路径从源码仓库根解析。`PYTHON`省略时使用`python`，脚本自动设置本仓库`src`的PYTHONPATH。
 
-脚本分别启动两个fresh Python进程，不传`--resume`，不复制第一项权重；同seed来自同一base config。第一项退出非0时立即终止，不启动第二项。脚本只负责训练调用和日志，不生产缓存、不做CUDA检查、不上传或改变workers/预算/验证频率。启动此脚本会执行正式训练；本次交付仅做shell mock验证，未运行真实训练。
+脚本分别启动两个fresh Python进程，不传`--resume`，不复制第一项权重；同seed来自同一base config。predicted退出非0也继续执行GT，分别记录两项退出码；两项结束后，只有均成功时整体返回0，任一失败则整体返回非0。脚本只负责训练调用和日志，不生产缓存、不做CUDA检查、不上传或改变workers/预算/验证频率。启动此脚本会执行正式训练；本次交付仅做shell mock验证，未运行真实训练。
 
 ## 记录与比较
 
