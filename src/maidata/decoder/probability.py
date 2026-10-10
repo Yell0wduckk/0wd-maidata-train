@@ -24,6 +24,7 @@ class TimeDistribution:
     def initialize(self, head):
         self.validate(head.out_features // 3)
         with torch.no_grad():
+            head.weight.zero_()
             bias = head.bias.reshape(-1, 3)
             centers = torch.tensor(self.initial_centers, dtype=torch.float64, device=bias.device)
             scales = torch.tensor(self.initial_scales, dtype=torch.float64, device=bias.device)

@@ -70,6 +70,8 @@ next_cache = completed.cache
 
 `ContentHeads`公开`kind`、`pad_logits`、`flag_logits`、`route`、`break_logits`和`time_parameters`。pad与flags阶段分别从同一个最终h出发，独立条件表不绑定输入embedding。flags按适用性调用/计损失；pad统一返回33槽，按钮行的后25槽为负无穷。几何距离不参与输入或路线分类权重。
 
+三个时间头沿用旧仓库的精度与初始化：readout显式关闭autocast，以FP32执行linear并输出FP32参数，随后按时间概率模块进行FP64积分。新建Decoder时将时间头weight清零，bias保留配置指定的混合权重、中心与scale先验；加载checkpoint正常恢复已训练权重，不再次清零。时间头及其输入保持可微，主干仍可使用BF16。
+
 对同一个`routed`改选类型会从原前缀重算后段K/V；此前返回的缓存不原位更改。`DecodeSession`可绑定PhysicalState或AttributionState，快照同时记录pending字段、模型阶段与规则自身的完整快照；回退不以token数推算动作数。进入新窗的`reset_attention`同时确认调用者pending为空、规则语法允许结束，再清模型缓存；未完成音符或链时失败且保留原缓存，持久规则动作和最后真实起音始终保留。
 
 ## 窗口、支持与损失

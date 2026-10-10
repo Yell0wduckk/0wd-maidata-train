@@ -54,4 +54,8 @@ class ContentHeads(nn.Module):
         return self.track_break(self.break_adapter(h, self.route_condition(route)))
 
     def time_parameters(self, h, kind):
-        return self.times[kind](h).reshape(*h.shape[:-1], self.components, 3)
+        head = self.times[kind]
+        # Match the original time readout: keep linear output precise under AMP.
+        with torch.autocast(device_type=h.device.type, enabled=False):
+            value = F.linear(h.float(), head.weight.float(), head.bias.float())
+        return value.reshape(*h.shape[:-1], self.components, 3)
