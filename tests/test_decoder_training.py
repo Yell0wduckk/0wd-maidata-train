@@ -1,0 +1,453 @@
+"""Stage-II cache, vectorized supervision, frozen producers and strict epoch resume."""
+from copy import deepcopy
+from dataclasses import replace
+import json
+import random
+from pathlib import Path
+from unittest.mock import patch
+import pytest
+import torch
+
+from maidata.chart import Moment,Note,Route,HoldDuration,SlideDuration,EncodedChart,decode_chart
+from maidata.chart_cache import produce
+from maidata.chart_cache.cache import save_chart
+from maidata.chart_cache.training import build_supports,save_supports
+from maidata.decoder.windows import build_window
+from maidata.decoder.supports import window_stages
+from maidata.decoder.batching import collate_windows
+from maidata.decoder.supervision import decoder_loss
+from maidata.decoder.losses import RouteGeometryLoss
+from maidata.model import build_decoder,decoder_time_distributions
+from maidata.time import TimingMap
+from maidata.decoder_training.support_cache import ChartSupports
+from maidata.decoder_training import supervision,checkpoint,recipe,runner
+from maidata.decoder_training.data import collate_audio,history_rng,DecoderDataset
+from maidata.decoder_training.network import DecoderTrainer
+from maidata.decoder_training.batching import window_chunks
+from test_decoder_supervision import geometry
+from test_decoder_network import config as decoder_config,inputs,prepare as memory
+from test_pretrain_runtime import config as encoder_config,item as audio_item
+
+
+@pytest.fixture(autouse=True)
+def cpu_threads():
+    torch.set_num_threads(1)
+
+
+@pytest.fixture
+def config(encoder_config):
+    c = dict(encoder_config)
+    c.update({k:v for k,v in decoder_config().items() if k.startswith('decoder_')})
+    c.update(target_stride_beats=3,decoder_z_before_beats=2,decoder_z_after_beats=1,
+        decoder_train_device='cpu',decoder_train_workers=0,decoder_train_precision='fp32',
+        decoder_train_learning_rate=1e-3,decoder_train_weight_decay=.01,decoder_train_gradient_clip=1.,
+        decoder_train_warmup_steps=1,decoder_train_scheduler_epochs=6,decoder_train_stop_after_epochs=2,
+        decoder_train_audio_groups_per_batch=2,decoder_train_gradient_accumulation_steps=1,
+        decoder_train_token_budget=24,decoder_train_physical_weight=.1,decoder_train_judge_weight=.2,
+        decoder_train_trajectory_weight=.3,decoder_history_dropout=.15)
+    return c
+
+
+def fields(monkeypatch,tokens,*,audio_end=1.2,bpm=120,key='0:5'):
+    geo = geometry()
+    monkeypatch.setattr(produce,'GEOMETRY',geo)
+    metadata = dict(schema='maimai.chart_ir.v1',tick_rate=180,first_seconds=0,
+        controls=[dict(kind='bpm',bpm=bpm,position_beats=dict(num=0,den=1))])
+    song,diff = key.split(':')
+    row = dict(chart_id=key,song_id=song,difficulty=diff,audio_variant=song,path=f'charts/{song}/{diff}.json.gz',
+        timing=dict(bpm=[[0,1,bpm]],first_seconds=0),audio_end_seconds=audio_end)
+    record = produce.build_record(decode_chart(EncodedChart(tuple(tokens),metadata),geo),row)
+    return record,build_supports(record,geo),geo
+
+
+def example(chart,start,end,*,drop=False,audio_end=1.2):
+    return build_window(chart.tokens,chart.timing,sequence_start_tick=chart.start_tick,start_tick=start,end_tick=end,
+        audio_after_beats=1,audio_end_seconds=audio_end,history_beats=4,history_dropout=float(drop),
+        training=True,rng=random.Random(0))
+
+
+def test_cached_prefix_rejoins_oracle_with_old_live_actions_chains_and_dropout(monkeypatch):
+    tokens = [Moment(0),Note.make('hold','A1'),HoldDuration(8*96),
+        Note.make('slide','A2'),Route(0,1),Route(1),SlideDuration(7*96),
+        Moment(6000),Note.make('tap','A1'),Note.make('hold','A1'),HoldDuration(96),
+        Moment(1000),Note.make('slide','A3'),Route(0,0),SlideDuration(96),
+        Route(1,0),Route(2),SlideDuration(96),Route(70,0),SlideDuration(96),
+        Moment(3000),Note.make('touch','C')]
+    record,supports,geo = fields(monkeypatch,tokens,audio_end=12.,bpm=60)
+    chart = ChartSupports(record,supports,geo)
+    total_reused = 0
+    for start in (0,4*96,6*96,8*96,12*96):
+        for drop in (False,True):
+            w = example(chart,start,start+2*96,drop=drop,audio_end=12.)
+            got,audit = chart.window(w)
+            chart.state.restore(chart.before_window(start))
+            want = window_stages(w,chart.state)
+            assert got == want
+            total_reused += audit['reused']
+            if start == 6*96:
+                assert chart.before_window(start).physical.actions
+                assert w.boundary_index == 0  # outside four-beat token history
+    assert total_reused > 5
+
+
+def test_vectorized_heads_match_scalar_totals_counts_and_gradients(monkeypatch):
+    tokens = [Moment(0),Note.make('tap','A1',short_hold=1),Note.make('hold','A2'),HoldDuration(2),
+        Moment(250),Note.make('touch','C',short_touch_hold=1),Note.make('touch_hold','B1'),HoldDuration(4),
+        Note.make('slide','A3'),Route(0,1),Route(1),SlideDuration(24),Route(70,0),SlideDuration(24)]
+    record,supports,geo = fields(monkeypatch,tokens)
+    chart = ChartSupports(record,supports,geo)
+    windows = []
+    for start in (0,96,288):
+        w = example(chart,start,start+96)
+        windows.append(dict(example=w,stages=chart.window(w)[0],timing=chart.timing,audio_end=1.2))
+    model = build_decoder(decoder_config())
+    model.eval()
+    examples = [r['example'] for r in windows]
+    tokens,types,_ = collate_windows(examples,device='cpu')
+    _,audio,z,plan = inputs(model)
+    # Test memory helper has two windows; explicitly expand one shared condition.
+    z = type(z)(z.values[:1].expand(3,-1,-1),z.beats[:1].expand(3,-1),z.valid[:1].expand(3,-1))
+    mem = model.prepare_memory(model.prepare_audio(audio),torch.zeros(3,dtype=torch.long),z,plan[:1].expand(3,-1),torch.ones(3,dtype=torch.bool))
+    out = model(tokens,types,mem)
+    distance = (torch.arange(71)[:,None]-torch.arange(71)[None,:]).abs().float()/70
+    geo = RouteGeometryLoss(distance,distance.square())
+    kwargs = dict(distributions=decoder_time_distributions(decoder_config()),geometry=geo)
+    reference = decoder_loss(model.heads,out,examples,[r['stages'] for r in windows],
+        [chart.timing]*3,[1.2]*3,**kwargs)
+    prepared = supervision.prepare(windows)
+    actual = supervision.loss(model.heads,out,prepared,**kwargs)
+    for key in supervision.KEYS:
+        a,b = getattr(actual,key),getattr(reference,key)
+        assert a.count == b.count
+        torch.testing.assert_close(a.total,b.total,atol=2e-5,rtol=2e-5)
+    params = tuple(model.parameters())
+    weights = dict(physical_weight=.1,judge_weight=.2,trajectory_weight=.3)
+    a = torch.autograd.grad(actual.objective(**weights),params,retain_graph=True,allow_unused=True)
+    b = torch.autograd.grad(reference.objective(**weights),params,retain_graph=True,allow_unused=True)
+    for x,y in zip(a,b):
+        if x is not None and y is not None:
+            torch.testing.assert_close(x,y,atol=3e-5,rtol=2e-4)
+        else:
+            assert x is y or (x if x is not None else y).count_nonzero()==0
+    flag_grads = torch.autograd.grad(actual.physical.total.sum(),tuple(model.heads.flags.parameters()),allow_unused=True)
+    assert all(g is None for g in flag_grads)
+
+
+def test_audio_grid_before_first_source_boundary_and_empty_chart(monkeypatch):
+    for tokens in ([Moment(0),Note.make('tap','A1')],[Moment(0)]):
+        record,supports,geo = fields(monkeypatch,tokens)
+        chart = ChartSupports(record,supports,geo)
+        for start,end in ((-96,96),(96,192),(288,384)):
+            w = example(chart,start,end)
+            got,_ = chart.window(w)
+            chart.state.restore(chart.before_window(start))
+            assert got==window_stages(w,chart.state)
+
+
+def training_item(index,c,monkeypatch,*,remaster=False,epoch=1,training=True):
+    item = audio_item(index,c,remaster)
+    windows = []
+    for key in item['conditions']:
+        tokens = [Moment(0),Note.make('slide','A2'),Route(0,1),SlideDuration(24),
+                  Moment(500),Note.make('tap','A1')]
+        record,supports,geo = fields(monkeypatch,tokens,key=key)
+        chart = ChartSupports(record,supports,geo)
+        for start in (0,3):
+            for occurrence in range(2 if start==0 else 1):
+                identity = f'{key}:{start}'
+                w = build_window(chart.tokens,chart.timing,sequence_start_tick=0,start_tick=start*96,end_tick=(start+3)*96,
+                    audio_after_beats=1,audio_end_seconds=1.2,history_beats=4,history_dropout=c['decoder_history_dropout'],
+                    training=training,rng=history_rng(c['decoder_train_seed'],epoch,identity,occurrence))
+                windows.append(dict(identity=(identity,occurrence),chart_id=key,start=start,example=w,
+                    stages=chart.window(w)[0],timing=chart.timing,audio_end=1.2))
+    return dict(item,windows=windows)
+
+
+def distances():
+    d = (torch.arange(71)[:,None]-torch.arange(71)[None,:]).abs().float()/70
+    return RouteGeometryLoss(d,d.square())
+
+
+def test_actual_frozen_update_reuses_producers_and_chunk_global_denominators(config,monkeypatch):
+    rows = [training_item(0,config,monkeypatch,remaster=True),training_item(1,config,monkeypatch)]
+    batches = [collate_audio([r],config=config) for r in rows]
+    together = collate_audio(rows,config=config)
+    model = DecoderTrainer(config)
+    other = deepcopy(model)
+    one = dict(config,decoder_train_token_budget=10000)
+    opts = [recipe.optimizer(m.decoder.parameters(),config) for m in (model,other)]
+    scheds = [recipe.scheduler(o,[1]*6,config) for o in opts]
+    with patch.object(model.encoder,'forward',wraps=model.encoder.forward) as enc, \
+         patch.object(model.draft,'forward',wraps=model.draft.forward) as draft, \
+         patch.object(model.planner,'forward',wraps=model.planner.forward) as planner, \
+         patch.object(model.decoder,'prepare_audio',wraps=model.decoder.prepare_audio) as project:
+        a,audit = runner.update(model,[together],opts[0],scheds[0],one,distances(),audit=True)
+    assert enc.call_count==draft.call_count==planner.call_count==project.call_count==1
+    b,_ = runner.update(other,batches,opts[1],scheds[1],config,distances(),audit=True)
+    assert audit['changed_parameter_tensors']['encoder']==audit['changed_parameter_tensors']['draft']==audit['changed_parameter_tensors']['planner']==0
+    assert not model.encoder.training and not model.draft.training and not model.planner.training
+    assert all(p.grad is None for module in (model.encoder,model.draft,model.planner) for p in module.parameters())
+    assert model.decoder.condition.z.weight.grad.abs().sum()>0
+    assert a.counts==b.counts
+    assert a.report(config)['loss']==pytest.approx(b.report(config)['loss'],rel=1e-5)
+    for x,y in zip(model.decoder.parameters(),other.decoder.parameters()):
+        torch.testing.assert_close(x,y,atol=2e-5,rtol=3e-4)
+    assert not hasattr(model,'reconstruction')
+
+
+def test_chunk_budget_never_crops_history_or_reorders_occurrences():
+    rows = [dict(example=type('W',(),{'inputs':tuple(range(n))})()) for n in (7,3,25,4)]
+    chunks = window_chunks(rows,16)
+    assert chunks==[[0,1],[2],[3]]
+    assert sum(chunks,[])==list(range(4))
+    values = [history_rng(99,2,'a',i).random() for i in range(6)]
+    assert values==[history_rng(99,2,'a',i).random() for i in range(6)]
+    assert len(set(values))==6
+    assert values!=[history_rng(99,3,'a',i).random() for i in range(6)]
+
+
+def write_plan(root,records,c,*,training):
+    from maidata.sampling.plan import chart_windows,make_occurrences,write_plan as save_plan,CONFIG_KEYS
+    windows = [w for r in records for w in chart_windows(r,config=c)]
+    # This fixture deliberately includes additional occurrences like the real plan.
+    for w in windows:
+        w['complex'] = not w['extra_tail']
+    multiplier = c['complex_rhythm_multiplier'] if training else 1
+    occurrences = make_occurrences(windows,multiplier=multiplier,seed=c['decoder_train_seed'],epoch=1)
+    groups = []
+    for variant in dict.fromkeys(o['audio_variant'] for o in occurrences):
+        local = [o for o in occurrences if o['audio_variant']==variant]
+        source = next(r['source'] for r in records if r['source']['audio_variant']==variant)
+        groups.append(dict(audio_variant=variant,audio_asset=variant,chart_ids=list(dict.fromkeys(o['chart_id'] for o in local)),
+            encoder_starts_beats=[0],draft_end_beat=2*c['target_beats'],audio_end_seconds=1.2,timing=source['timing'],
+            occurrences=len(local),occurrence_start=local[0]['sequence_index'],occurrence_stop=local[-1]['sequence_index']+1))
+    p = dict(schema='maidata.window-sampling-plan.v1',view='original',seed=c['decoder_train_seed'],epoch=1,
+        policy=dict(views=['original'],split='train' if training else 'validation'),
+        config=dict({k:c[k] for k in CONFIG_KEYS},complex_rhythm_multiplier=multiplier),
+        charts=[dict(chart_id=r['source']['chart_id'],audio_variant=r['source']['audio_variant'],
+                     song_id=r['source']['song_id'],chart_cache_path=f"charts/{r['source']['song_id']}/{r['source']['difficulty']}.json.gz") for r in records],
+        audio_groups=groups,windows=windows,occurrences=occurrences,totals=dict(base_windows=len(windows)),
+        sources=dict(chart_recipe='fields-v2'))
+    save_plan(p,root)
+
+
+def test_real_dataset_reads_fields_supports_and_plan_without_rebuilding(config,tmp_path,monkeypatch):
+    import numpy as np
+    from maidata.decoder_training.plan import DecoderPlan
+    tokens = [Moment(0),Note.make('tap','A1'),Moment(500),Note.make('hold','A2'),HoldDuration(2)]
+    records,hashes = [],{}
+    c = dict(config,decoder_train_chart_cache=str(tmp_path/'fields'),decoder_train_physical_cache=str(tmp_path/'physical'),
+        decoder_train_audio_cache=str(tmp_path/'audio'),decoder_train_source_root=str(tmp_path/'source'))
+    for i in (0,1):
+        r,s,g = fields(monkeypatch,tokens,key=f'{i}:5')
+        r['source']['level_text']='14.5'
+        records.append(r)
+        path = f'charts/{i}/5.json.gz'
+        hashes[f'{i}:5'] = save_chart(tmp_path/'fields'/path,r)['sha256']
+        s['source_sha256'] = hashes[f'{i}:5']
+        save_supports(tmp_path/'physical'/path,s)
+        (tmp_path/'audio/grids').mkdir(parents=True,exist_ok=True)
+        np.savez(tmp_path/f'audio/grids/{i}.npz',**audio_item(i,c)['grid'])
+    write_plan(tmp_path/'plan',records,c,training=True)
+    plan = DecoderPlan(tmp_path/'plan',c,training=True)
+    dataset = DecoderDataset(plan,c,hashes)
+    dataset.geometry = g
+    with patch('maidata.chart_cache.training.build_supports',side_effect=AssertionError('no cache rebuild')):
+        one = dataset[('0',2)]
+        again = dataset[('0',2)]
+    assert [w['identity'] for w in one['windows']]==[w['identity'] for w in again['windows']]
+    assert [w['example'] for w in one['windows']]==[w['example'] for w in again['windows']]
+    assert len(one['windows'])==3
+    batch = collate_audio([one,dataset[('1',2)]],config=c)
+    assert len(batch.windows)==6 and len(batch.audio_variants)==2
+    plan.occurrences(3)
+    assert sum(len(p) for step in plan.batches(3,c) for p in step)==2
+    bad = deepcopy(plan.manifest)
+    bad['config']['chart_history_beats']+=1
+    (tmp_path/'plan/plan.json').write_text(json.dumps(bad))
+    with pytest.raises(ValueError,match='config differs'):
+        DecoderPlan(tmp_path/'plan',c,training=True)
+
+
+class EpochDataset(torch.utils.data.Dataset):
+    def __init__(self,items,config,training):
+        self.items,self.config,self.training = items,config,training
+    def __len__(self):
+        return len(self.items)
+    def __getitem__(self,index):
+        variant,epoch = index
+        item = dict(self.items[int(variant)])
+        item['windows'] = []
+        c = self.config
+        tokens = (Moment(0),Note.make('slide','A2'),Route(0,1),SlideDuration(24),Moment(500),Note.make('tap','A1'))
+        for original in self.items[int(variant)]['windows']:
+            identity,occurrence = original['identity']
+            if not self.training and occurrence:
+                continue
+            old = original['example']
+            w = build_window(tokens,original['timing'],sequence_start_tick=0,start_tick=old.start_tick,end_tick=old.end_tick,
+                audio_after_beats=1,audio_end_seconds=1.2,history_beats=4,history_dropout=c['decoder_history_dropout'],
+                training=self.training,rng=history_rng(c['decoder_train_seed'],epoch,identity,occurrence))
+            item['windows'].append(dict(original,example=w,stages=(None,)*w.boundary_index+original['stages'][old.boundary_index:]))
+        return item
+
+
+def test_runner_exact_epoch_resume_dropout_validation_and_failure(config,tmp_path,monkeypatch):
+    from functools import partial
+    from torch.utils.data import DataLoader
+    from maidata.training.data import AudioBatchSampler
+    from maidata.decoder_training.recipe import PATH_KEYS
+    c = dict(config,decoder_dropout=.1,decoder_history_dropout=.5,decoder_train_stop_after_epochs=6)
+    c.update({k:str(tmp_path/k) for k in PATH_KEYS})
+    items = [training_item(i,c,monkeypatch) for i in range(2)]
+    class Plan:
+        def __init__(self,root,c,*,training):
+            self.groups={'0':{},'1':{}}
+            self.training=training
+            self.manifest={'epoch':1}
+        def batches(self,e,c):
+            order = ['1','0'] if e%2 else ['0','1']
+            return [[order]]
+        def occurrences(self,e):
+            return list(range(6 if self.training else 4))
+    def loader(p,c,hashes):
+        return DataLoader(EpochDataset(items,c,p.training),batch_sampler=AudioBatchSampler(p,c),
+            collate_fn=partial(collate_audio,config=c),generator=torch.Generator().manual_seed(71))
+    frozen = {name:deepcopy(getattr(DecoderTrainer(c),name).state_dict()) for name in ('encoder','draft','planner')}
+    def producer(model,c,binding):
+        for name,state in frozen.items():
+            getattr(model,name).load_state_dict(state)
+        return dict(sha256='fixed-producer')
+    monkeypatch.setattr(runner,'DecoderPlan',Plan)
+    monkeypatch.setattr(runner,'make_loader',loader)
+    monkeypatch.setattr(checkpoint,'data_binding',lambda *a:({'fixed':'inputs'},{}))
+    monkeypatch.setattr(checkpoint,'source_identity',lambda:{'fixed':'source'})
+    monkeypatch.setattr(checkpoint,'load_producer',producer)
+    monkeypatch.setattr(runner,'load_route_distances',lambda p:distances())
+    full = dict(c,decoder_train_output=str(tmp_path/'full'))
+    runner.run(full)
+    interrupted = dict(c,decoder_train_output=str(tmp_path/'interrupted'))
+    actual_update = runner.update
+    calls = 0
+    def fail(*args,**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls==3:
+            raise RuntimeError('interruption')
+        return actual_update(*args,**kwargs)
+    monkeypatch.setattr(runner,'update',fail)
+    with pytest.raises(RuntimeError,match='interruption'):
+        runner.run(interrupted)
+    path = tmp_path/'interrupted/checkpoints/last.ckpt'
+    assert torch.load(path,weights_only=False)['completed_epochs']==2
+    assert sorted(p.name for p in path.parent.iterdir())==['last.ckpt']
+    monkeypatch.setattr(runner,'update',actual_update)
+    runner.run(interrupted,resume=path)
+    a = torch.load(tmp_path/'full/checkpoints/last.ckpt',weights_only=False)
+    b = torch.load(path,weights_only=False)
+    for k in a['model_state']:
+        torch.testing.assert_close(a['model_state'][k],b['model_state'][k],rtol=0,atol=0)
+    assert a['scheduler_state']==b['scheduler_state']
+    assert a['step']==b['step']==6
+    assert torch.equal(a['rng']['torch'],b['rng']['torch'])
+    for x,y in zip(a['loader_rng'],b['loader_rng']):
+        assert torch.equal(x,y)
+    metrics = [json.loads(s) for s in (tmp_path/'interrupted/metrics.jsonl').read_text().splitlines()]
+    assert [m['epoch'] for m in metrics if 'validation' in m]==[5,6]
+    assert [m['epoch'] for m in metrics if 'diagnostics' in m.get('validation',{})]==[6]
+    assert metrics[-1]['validation']['diagnostics']['history_dropped']==0
+    assert runner.run(interrupted,resume=path)['step']==6
+    with pytest.raises(ValueError,match='binding changed'):
+        runner.run(dict(interrupted,decoder_history_dropout=.2),resume=path)
+
+
+def test_producer_load_is_paired_strict_and_stage_two_resume_is_separate(config,tmp_path,monkeypatch):
+    from maidata.training.network import Pretrainer
+    from maidata.training import checkpoint as pretrain
+    upstream = Pretrainer(config)
+    source = pretrain.source_identity()
+    binding = dict(pretrain_chart_cache={'catalog.json':'fields'},pretrain_audio_cache={'catalog.json':'audio'})
+    payload = dict(schema=pretrain.SCHEMA,recipe=pretrain.recipe(config),source=source,binding=binding,
+        completed_epochs=1,step=1,steps_by_epoch=[1]*6,scheduler_state={'last_epoch':1},model_state=upstream.state_dict())
+    path = tmp_path/'upstream.ckpt'
+    torch.save(payload,path)
+    c = dict(config,decoder_train_checkpoint=str(path))
+    model = DecoderTrainer(c)
+    identity = checkpoint.load_producer(model,c,binding)
+    assert identity['sha256']==checkpoint.digest_file(path)
+    for name in ('encoder','draft','planner'):
+        for a,b in zip(getattr(model,name).parameters(),getattr(upstream,name).parameters()):
+            torch.testing.assert_close(a,b,atol=0,rtol=0)
+    with pytest.raises(ValueError,match='architecture'):
+        checkpoint.load_producer(model,dict(c,draft_level_scale=8),binding)
+    with pytest.raises(ValueError,match='normalization'):
+        checkpoint.load_producer(model,c,dict(binding,pretrain_audio_cache={'catalog.json':'other'}))
+    payload['schema']=checkpoint.SCHEMA
+    torch.save(payload,path)
+    with pytest.raises(ValueError,match='stage-I'):
+        checkpoint.load_producer(model,c,binding)
+
+
+def test_binding_checks_selected_producers_without_opening_old_payloads(config,tmp_path):
+    from types import SimpleNamespace
+    from maidata.decoder_training.recipe import PATH_KEYS
+    c = dict(config,**{k:str(tmp_path/k) for k in PATH_KEYS})
+    def save(path,data):
+        path = Path(path)
+        path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_text(json.dumps(data),encoding='utf-8')
+    rows = [dict(chart_id=f'{i}:5',song_id=str(i),path=f'charts/{i}/5.json.gz',audio_variant=str(i)) for i in range(2)]
+    chart_root = Path(c['decoder_train_chart_cache'])
+    save(chart_root/'catalog.json',dict(schema='maidata.full-chart-original.v2',view='original',views=['original'],
+        producer_recipe='fields-v2',charts=rows))
+    save(chart_root/'production-summary.json',dict(results=[dict(chart_id=r['chart_id'],status='success',sha256=f'hash-{i}')
+                                                           for i,r in enumerate(rows)]))
+    save(Path(c['decoder_train_audio_cache'])/'catalog.json',dict(variants={str(i):dict(asset=str(i),timing={},
+        samples_per_beat=c['samples_per_beat']) for i in range(2)}))
+    save(Path(c['decoder_train_audio_cache'])/'production-summary.json',{})
+    physical_root = Path(c['decoder_train_physical_cache'])
+    save(physical_root/'catalog.json',dict(schema='maidata.training-physical-original.v2',views=['original'],
+        source_producer_recipe='fields-v2',producer_recipe='physical-v2',charts=rows))
+    results = [dict(chart_id=r['chart_id'],path=r['path'],status='success',source_sha256=f'hash-{i}') for i,r in enumerate(rows)]
+    save(physical_root/'production-summary.json',dict(recipe='physical-v2',results=results))
+    for name in ('paths.json','runtime-path-semantics.json','runtime-path-rules.json'):
+        save(Path(c['decoder_train_geometry'])/name,{})
+    for name in ('slide_data','route_distances'):
+        save(c['decoder_train_'+name],{})
+    plans = []
+    for i,r in enumerate(rows):
+        root = tmp_path/f'plan-{i}'
+        for name in ('plan.json','windows.jsonl','occurrences.jsonl'):
+            save(root/name,{})
+        plans.append(SimpleNamespace(root=root,manifest=dict(sources=dict(chart_recipe='fields-v2'),
+            files=dict(windows='windows.jsonl',occurrences='occurrences.jsonl')),
+            groups={str(i):dict(audio_asset=str(i),timing={})},charts={r['chart_id']:dict(r,chart_cache_path=r['path'])}))
+    binding,hashes = checkpoint.data_binding(plans,c)
+    assert hashes=={'0:5':'hash-0','1:5':'hash-1'}
+    assert binding['physical'] and binding['geometry']
+    assert not list(chart_root.glob('charts/*'))  # metadata-only binding, no payload scan
+    results[0]['source_sha256']='wrong-producer'
+    save(physical_root/'production-summary.json',dict(recipe='physical-v2',results=results))
+    with pytest.raises(ValueError,match='producer binding'):
+        checkpoint.data_binding(plans,c)
+
+
+def test_gt_targets_do_not_enter_frozen_producer(config,monkeypatch):
+    batch = collate_audio([training_item(0,config,monkeypatch)],config=config)
+    model = DecoderTrainer(config).train()
+    first = model.produce(batch)
+    # Neither current targets nor cropped GT histories are read by E/D/P.
+    changed = replace(batch,windows=[])
+    second = model.produce(changed)
+    torch.testing.assert_close(first.audio.values,second.audio.values,rtol=0,atol=0)
+    torch.testing.assert_close(first.z.values,second.z.values,rtol=0,atol=0)
+    torch.testing.assert_close(first.plan,second.plan,rtol=0,atol=0)
+    assert not first.plan.requires_grad
+
+
+def test_required_recipe_is_not_filled_from_pretraining_defaults(config):
+    from maidata.entry import CONFIG
+    assert CONFIG['decoder_train_workers']==12
+    assert CONFIG['decoder_train_learning_rate'] is None and CONFIG['decoder_train_checkpoint'] is None
+    with pytest.raises(ValueError,match='explicit Decoder training recipe'):
+        recipe.validate(CONFIG)

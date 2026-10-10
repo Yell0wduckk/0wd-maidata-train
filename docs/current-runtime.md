@@ -37,7 +37,9 @@ CPU验证覆盖默认/非默认容量、源字段/simai标签、复用与mask、
 
 `begin/complete`分开类型决策与后段计算，teacher forcing和窗内增量路径共用参数；跨窗全部self K/V重新prefill。独立窗口适配保留原始历史delta、4拍裁剪之外的最后真实起音与名义U尾部标签。独立支持适配读取首次归责记录，或在调用者提供的完整Physical状态上生成当前窗支持；网络不执行规则查询、不读缓存。
 
-CPU验证覆盖默认与非默认架构、并行/增量一致、目标类型隔离、plan位置与空mask、FP32/CPU BF16反向、真实字段/规则支持、非单调时间概率、独立归约、跨Encoder/D/P梯度与实际冻结、链/分支快照。完整训练循环、checkpoint和整曲生成调度不在本模块；未运行CUDA或重建缓存。
+CPU验证覆盖默认与非默认架构、并行/增量一致、目标类型隔离、plan位置与空mask、FP32/CPU BF16反向、真实字段/规则支持、非单调时间概率、独立归约、跨Encoder/D/P梯度与实际冻结、链/分支快照。训练循环和checkpoint位于独立的`maidata.decoder_training`；整曲生成调度另行实现，未运行CUDA或重建缓存。
+
+阶段二已接入原谱v2字段/Physical、既有Decoder occurrence计划、GT历史与确定性15% history dropout；保持仍有效的完整物理动作，按等价前缀复用训练支持。E/D/P固定eval/no_grad，只更新M及其接入参数，P始终提供预测plan12。实际M token分块与梯度累积按整个逻辑batch的独立分母归约；具备严格完整轮恢复、每5轮及末轮验证和显式原batch CUDA检查入口。未确定的训练配方保持None，见[阶段二训练](decoder-training.md)。
 
 ## 已复制的旧模型实现
 
@@ -78,11 +80,11 @@ CPU验证覆盖默认与非默认架构、并行/增量一致、目标类型隔�
 
 ## 新 Encoder 尚未衔接的部分
 
-新 Encoder 的全曲 G₀、每窗动态 S、局部 L、块内共享处理和三路局部输出已进入代码。Mel/aux32离线输入、公开P0全曲组合、新Draft D/R/P及辅助loss已实现；Decoder、Router/MMoE与主loss已独立实现，阶段一E/D/R/P训练循环与checkpoint已接入；主Decoder训练及整曲生成调度仍另行实现。
+新 Encoder 的全曲 G₀、每窗动态 S、局部 L、块内共享处理和三路局部输出已进入代码。Mel/aux32离线输入、公开P0全曲组合、新Draft D/R/P及辅助loss已实现；Decoder、Router/MMoE与主loss已独立实现，阶段一E/D/R/P训练循环与checkpoint已接入；主Decoder阶段二训练及checkpoint由独立`maidata.decoder_training`接入，整曲生成调度仍另行实现。
 
 aux32 采用全曲统一的18维声学量、4维节奏统计和10维时间上下文，L 的 `k/R` 网格与 G0 的 `j+0.5` 拍中心按位置取值。网络模块只消费准备好的张量，输入模块独立计算全曲声学源及派生网格。新隐藏表示不自动兼容现有 native cache；内容未变的原始音频/Mel 不因新源码失效。
 
-新Draft始终要求覆盖全曲的P0；只抽取部分监督窗口也不能省去其他音频中心。主Decoder按其[设计](../../0wd-v3-refactor-docs/new-decoder.md)消费全曲P0、局部Z及预测plan12，并在当前窗口条件下重新处理因果历史；其网络与小头/loss已独立实现，完整训练与整曲生成调度另行接入。
+新Draft始终要求覆盖全曲的P0；只抽取部分监督窗口也不能省去其他音频中心。主Decoder按其[设计](../../0wd-v3-refactor-docs/new-decoder.md)消费全曲P0、局部Z及预测plan12，并在当前窗口条件下重新处理因果历史；其网络、小头/loss及阶段二训练已独立实现，整曲生成调度另行接入。
 
 ## 独立副本的执行边界
 

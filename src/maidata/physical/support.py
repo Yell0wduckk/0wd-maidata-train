@@ -106,6 +106,10 @@ def moment_support(state, *, query=None, record=decision_record):
     if upper < lower:
         return dict(domain=[lower,upper], intervals=[], outside_basic='onset_outside_audio')
     times = _times(state.actions) | {0.}
+    # Window closure changes the decision independently of active action times.
+    # Isolate it before sampling intervals that may straddle the window end.
+    if s.window_end is not None:
+        times.add(timing.second(s.window_end))
     roots = []
     for t in times:
         tick = timing.second_to_beat(t)*96
