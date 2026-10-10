@@ -21,6 +21,7 @@ class WindowInputs:
     valid: Tensor
     target_start_beats: Tensor
     window_to_song: Tensor
+    layout: dict | None = None
 
 
 @dataclass

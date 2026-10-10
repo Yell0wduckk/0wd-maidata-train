@@ -22,20 +22,20 @@ class LocalPyramid(nn.Module):
         self.audio_before_beats = audio_before_beats
         self.projections = nn.ModuleList(nn.Linear(d_model, d_model) for _ in range(2))
 
-    def forward(self, stages: list[ScaleMemory], target_start_beats: Tensor) -> EncoderOutput:
+    def forward(self, stages: list[ScaleMemory], target_start_beats: Tensor, layout=None) -> EncoderOutput:
         if len(stages) != 3:
             raise ValueError("the local pyramid requires three fine-to-coarse stages")
         start = target_start_beats.float().unsqueeze(1) - self.audio_before_beats
         memories = []
-        for stage, rate, length in zip(stages, self.fpn_rates, self.lengths, strict=True):
+        for index, (stage, rate, length) in enumerate(zip(stages, self.fpn_rates, self.lengths, strict=True)):
             grid = start + (
                 torch.arange(length, device=start.device, dtype=torch.float32) + 0.5
             ) / rate
-            memories.append(interpolate(stage, grid))
+            memories.append(interpolate(stage, grid, layout=None if layout is None else layout["resample"][index]))
         result = list(memories)
         for index in (1, 0):
             target = memories[index]
-            up = masked_upsample(result[index + 1], target.beats)
+            up = masked_upsample(result[index + 1], target.beats, layout=None if layout is None else layout["upsample"][index])
             branch = mask_values(self.projections[index](up.values).to(target.values.dtype), up.valid)
             result[index] = ScaleMemory(
                 mask_values(target.values + branch, target.valid), target.beats, target.valid

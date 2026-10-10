@@ -35,7 +35,7 @@ cost = pretrain_audio_token_weight × A + pretrain_row_token_weight × R
 
 验证每5轮及显式末轮，重合一次；全字段准确率与预测示例仅末轮收集。`last.ckpt`每完整轮保存，`best.ckpt`只在轮末验证改善时保存，`epoch-NNN.ckpt`每5轮及末轮保存。best只是损失诊断，不是谱面质量判定。中途异常不保存、不伪造完整轮。
 
-checkpoint保存成套E/D/R/P、optimizer、scheduler、完整轮游标、全部Python/NumPy/Torch/CUDA RNG、两个DataLoader RNG及启用状态、各轮步数、源码和配方、缓存生产元数据及计划绑定。严格恢复，允许延长绝对停止轮但不改变调度合同；完成40轮从41轮继续，完成50轮不再更新。替换persistent workers后补偿额外base-seed消耗；CPU测试覆盖连续运行与中断恢复权重/RNG逐位一致。
+checkpoint保存成套E/D/R/P、optimizer、scheduler、完整轮游标、全部Python/NumPy/Torch/CUDA RNG、两个DataLoader RNG及启用状态、各轮步数、训练配方、缓存生产元数据及计划绑定。源码版本仅作为来源记录，不计算或校验源码文件哈希；修改实现后可直接从旧checkpoint续训，无需身份迁移。模型张量/形状、配方、输入与计划保持严格恢复检查，允许延长绝对停止轮但不改变调度合同；完成40轮从41轮继续，完成50轮不再更新。替换persistent workers后补偿额外base-seed消耗；CPU测试覆盖连续运行与中断恢复权重/RNG逐位一致。
 
 ## Linux 输入
 
@@ -54,3 +54,11 @@ checkpoint保存成套E/D/R/P、optimizer、scheduler、完整轮游标、全部
 新会话上传固定源码和新增输入包，只验证本次传输；已有缓存使用维护元数据与普通读取检查。`--cuda-check`从第1轮既定batch中选择加权cost最大的实际batch，以相同12 workers、bf16和完整组进行一次前向/反向/更新，记录峰值显存、耗时、各模块梯度和更新、调用次数。检查模型独立丢弃，正式训练仍scratch。
 
 CUDA验证交给训练会话；CPU通过不代表CUDA通过。若OOM，不自行缩小预算、组数或改累积，先报告实测。在正式训练准备启动时按确切命令和父子树停止当前远端Physical，保留产物和进度；不提前停止，不宽泛终止python。阶段一不等待Physical全部完成。实验进度只在训练会话报告，主会话交接后不主动轮询。
+
+## 批量计算与传输
+
+局部attention沿用原仓库矩形query块，各窗口的块合并为一次SDPA，每块合并局部L与全部S的key，保持联合softmax、绝对拍RoPE及精确半径mask。CPU按坐标准备候选邻域，device上每stage生成精确mask并复用；参数、窗口和采样密度仍由CONFIG决定。
+
+DataLoader worker准备插值/上采样端点及权重、G0槽索引、P0中心组合、R/P的Z窗口映射和Draft有效token索引。模型对值做批量gather/计算，梯度贯通E/D/R/P，不跨更新缓存可学习值。独立调用可省略layout，由公开坐标即时准备CPU几何。layout仅适用于准备它的坐标和mask，切片或更换输入时重新准备。Dense MoE保持原参数与专家定义，仅对有效token执行专家计算。
+
+训练batch按dtype打包为少量连续缓冲区，经IPC、pinned memory及非阻塞H2D后恢复公开张量对象；网络不依赖DataLoader或其他网络实例。批量化改变dropout随机数消费顺序，不改变概率、位置和可配置性。数值/梯度对照关闭dropout；真实速度对照使用原配置。

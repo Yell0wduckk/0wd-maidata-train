@@ -46,6 +46,7 @@ class AudioEncoder(nn.Module):
         if not math.isfinite(rope_base) or rope_base <= 0 or not math.isfinite(rope_position_scale):
             raise ValueError("RoPE requires a positive finite base and finite position scale")
 
+        self.stage_attention_radii = tuple(stage_attention_radii)
         self.mel_bins = mel_bins
         self.samples_per_beat = samples_per_beat
         self.context_beats = context
@@ -92,11 +93,15 @@ class AudioEncoder(nn.Module):
                 or inputs.target_start_beats.shape != mel.shape[:1]
                 or inputs.window_to_song.shape != mel.shape[:1]):
             raise ValueError("window tensors must align with C*R Mel positions, beats, valid and aux32")
-        if not torch.equal(inputs.target_start_beats, inputs.target_start_beats.round()):
-            raise ValueError("target window starts must be integer beats")
+        from .layout import prepare_encoder_layout, to_device, with_local_mask
+        layout = inputs.layout
+        if layout is None:
+            layout = to_device(prepare_encoder_layout(memory.g0.beats, memory.g0.valid, inputs,
+                radii=self.stage_attention_radii, rates=self.pyramid.fpn_rates,
+                before=self.audio_before_beats, context=self.context_beats), mel.device)
         slots = gather_slots(
             memory.g0, inputs.target_start_beats, inputs.window_to_song,
-            self.audio_before_beats, self.context_beats,
+            self.audio_before_beats, self.context_beats, layout=layout["slots"],
         )
         local = ScaleMemory(
             self.feature_fusion(self.spectral(mel, inputs.valid), inputs.aux32, inputs.valid),
@@ -106,19 +111,20 @@ class AudioEncoder(nn.Module):
         stages = []
         block_index = 0
         for stage_index, stage in enumerate(self.stages):
+            attention_layout = with_local_mask(layout["local"][stage_index], local.beats, self.stage_attention_radii[stage_index])
             for block in stage:
                 song_kv = memory.block_kv[block_index]
                 if song_kv is not None:
                     song_kv = tuple(value.index_select(0, inputs.window_to_song) for value in song_kv)
                 local, slots = block(
                     local, slots, song_kv, song_valid,
-                    update_slots=block_index < len(memory.block_kv) - 1,
+                    update_slots=block_index < len(memory.block_kv) - 1, attention_layout=attention_layout,
                 )
                 block_index += 1
             stages.append(local)
             if stage_index < 2:
                 local = self.transitions[stage_index](local)
-        return self.pyramid(stages, inputs.target_start_beats)
+        return self.pyramid(stages, inputs.target_start_beats, layout=layout)
 
     def forward(self, song_inputs: SongInputs, window_inputs: WindowInputs) -> EncoderOutput:
         return self.encode_windows(self.prepare_song(song_inputs), window_inputs)

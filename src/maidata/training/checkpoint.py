@@ -1,4 +1,4 @@
-"""Complete-epoch state, atomic writes and strict source/recipe/input binding."""
+"""Complete-epoch state, atomic writes and strict recipe/input binding; source is provenance only."""
 import hashlib
 import json
 from pathlib import Path
@@ -28,12 +28,19 @@ def recipe(config):
 
 
 def source_identity():
-    root = Path(__file__).resolve().parents[1]
-    files = [root / 'model.py', root / '__init__.py']
-    for directory in ('audio', 'draft', 'nn', 'chart', 'chart_cache', 'time', 'preparation', 'training'):
-        files.extend(sorted((root / directory).glob('*.py')))
-    files.extend(sorted((root / 'chart/assets').glob('*.json')))
-    return {p.relative_to(root).as_posix(): digest_file(p) for p in files}
+    """Optional version note only; never a checkpoint compatibility condition."""
+    import subprocess
+    root = Path(__file__).resolve().parents[3]
+    marker = root / 'SOURCE_COMMIT'
+    if marker.is_file():
+        return {'commit': marker.read_text(encoding='utf-8').strip()}
+    try:
+        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root,
+                                         stderr=subprocess.DEVNULL, text=True).strip()
+    except (OSError, subprocess.CalledProcessError):
+        commit = None
+    return {'commit': commit}
+
 
 
 def data_binding(plans, config):
@@ -119,11 +126,11 @@ def capture(model, optimizer, scheduler, *, completed_epochs, step, config, bind
 def restore(payload, model, optimizer, scheduler, *, config, binding, source, steps, loaders):
     current, saved = recipe(config), payload['recipe']
     stop = 'pretrain_stop_after_epochs'
-    if (payload.get('schema') != SCHEMA or payload['source'] != source
+    if (payload.get('schema') != SCHEMA
             or payload['binding'] != binding or payload['steps_by_epoch'] != steps
             or {k:v for k,v in current.items() if k != stop} != {k:v for k,v in saved.items() if k != stop}
             or current[stop] < saved[stop]):
-        raise ValueError('resume source, architecture, recipe, input or plan binding changed')
+        raise ValueError('resume architecture, recipe, input or plan binding changed')
     validate_cursor(payload, steps)
     if payload['completed_epochs'] > saved[stop]:
         raise ValueError('saved epoch exceeds the original absolute stop')

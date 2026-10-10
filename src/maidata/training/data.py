@@ -155,6 +155,7 @@ class Batch:
     planner: object
     window_ids: list
     audio_variants: list
+    layouts: dict | None = None
 
     def pin_memory(self):
         return map_tensors(self, lambda t: t.pin_memory())
@@ -163,7 +164,7 @@ class Batch:
         return map_tensors(self, lambda t: t.to(device, non_blocking=True))
 
 
-def collate_audio(items, *, config):
+def collate_audio(items, *, config, packed=False):
     grids, coverages = [i['grid'] for i in items], [i['coverage'] for i in items]
     variants = [i['variant'] for i in items]
     starts, mapping = audio_windows(coverages, device='cpu')
@@ -171,7 +172,7 @@ def collate_audio(items, *, config):
     draft, chart_groups = make_draft_inputs(list(conditions.values()), variants, coverages, device='cpu')
     ownership = dict(zip(conditions, chart_groups.tolist()))
     windows = [w for i in items for w in i['windows']]
-    return Batch(song_inputs(grids), window_inputs(grids, starts.numpy(), mapping.numpy(),
+    batch = Batch(song_inputs(grids), window_inputs(grids, starts.numpy(), mapping.numpy(),
         target_beats=config['target_beats'], before_beats=config['audio_before_beats'],
         after_beats=config['audio_after_beats']), coverages, draft,
         torch.tensor([ownership[w[1]] for w in windows], dtype=torch.long),
@@ -180,6 +181,24 @@ def collate_audio(items, *, config):
         collate_reconstruction([w[3] for w in windows], query_rows=config['reconstruction_query_rows'],
                                target_beats=config['target_beats'], device='cpu'),
         collate_planner([w[4] for w in windows], device='cpu'), [w[0] for w in windows], variants)
+    from maidata.audio.layout import prepare_encoder_layout
+    from maidata.draft.layout import prepare_p0, prepare_selection
+    layout = prepare_encoder_layout(batch.songs.beat_centers, batch.songs.sample_valid.any(-1),
+        batch.audio_windows, radii=config['stage_attention_radii'], rates=config['fpn_rates'],
+        before=config['audio_before_beats'], context=config['audio_before_beats']+config['target_beats']+config['audio_after_beats'])
+    batch.audio_windows.layout = layout
+    batch.draft_inputs.valid_indices = draft.draft_valid.flatten().nonzero().flatten()
+    batch.layouts = dict(p0=prepare_p0(layout['grids'][0], layout['resample'][0]['valid'],
+        starts, mapping, coverages, p0_rate=config['fpn_rates'][0]))
+    for name, before, after in (('reconstruction', config['reconstruction_before_beats'], config['reconstruction_after_beats']),
+                                ('planner', 0, 0)):
+        batch.layouts[name] = prepare_selection(draft.query_beats, draft.draft_valid, batch.groups,
+            batch.starts, batch.valid, target_beats=config['target_beats'], before_beats=before, after_beats=after)
+    if packed:
+        from .transport import pack_batch
+        return pack_batch(batch)
+    return batch
+
 
 
 class AudioBatchSampler(Sampler):
@@ -211,7 +230,7 @@ def make_loader(plan, config):
     generator = torch.Generator().manual_seed(config['pretrain_seed'])
     sampler = AudioBatchSampler(plan, config)
     return DataLoader(AudioDataset(plan, config), batch_sampler=sampler,
-        collate_fn=partial(collate_audio, config=config), num_workers=workers,
+        collate_fn=partial(collate_audio, config=config, packed=True), num_workers=workers,
         persistent_workers=workers > 0, worker_init_fn=worker_init, generator=generator,
         pin_memory=torch.device(config['pretrain_device']).type == 'cuda')
 

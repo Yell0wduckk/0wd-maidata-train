@@ -17,10 +17,16 @@ class DenseMoE(nn.Module):
         self.experts = nn.ModuleList(nn.Sequential(nn.Linear(width, hidden), nn.GELU(),
             nn.Dropout(dropout), nn.Linear(hidden, width)) for _ in range(experts))
 
-    def forward(self, x):
+    def forward(self, x, indices=None):
+        shape = x.shape
+        if indices is not None:
+            x = x.flatten(0, 1).index_select(0, indices)
         weights = self.gate(x).float().softmax(-1).to(x.dtype)
-        return (torch.stack([expert(x) for expert in self.experts], -2)
-                * weights[..., None]).sum(-2)
+        mixed = (torch.stack([expert(x) for expert in self.experts], -2)
+                 * weights[..., None]).sum(-2)
+        if indices is None:
+            return mixed
+        return mixed.new_zeros(shape[0]*shape[1], shape[2]).index_copy(0, indices, mixed).reshape(shape)
 
 
 class DraftBlock(nn.Module):
@@ -34,14 +40,14 @@ class DraftBlock(nn.Module):
         self.modulation = nn.Linear(width, 2 * width)
         self.experts = DenseMoE(width, experts, hidden, dropout)
 
-    def forward(self, x, beats, valid, condition, audio_kv, audio_valid):
+    def forward(self, x, beats, valid, condition, audio_kv, audio_valid, valid_indices=None):
         scale, shift = self.modulation(condition).chunk(2, -1)
         h = self.norms[0](x) * (1 + scale[:, None]) + shift[:, None]
         kv = self.self_attention.project_memory(h, beats, valid)
         x = (x + self.self_attention(h, beats, valid, kv, valid)).masked_fill(~valid[..., None], 0)
         x = (x + self.cross_attention(self.norms[1](x), beats, valid, audio_kv,
                                       audio_valid)).masked_fill(~valid[..., None], 0)
-        return (x + self.experts(self.norms[2](x))).masked_fill(~valid[..., None], 0)
+        return (x + self.experts(self.norms[2](x), valid_indices)).masked_fill(~valid[..., None], 0)
 
 
 class DraftGenerator(nn.Module):
@@ -103,9 +109,12 @@ class DraftGenerator(nn.Module):
                      + self.span(span[:, None].to(self.query) / self.span_scale))
         x = (self.query + sinusoidal(positions, self.dim, self.base, self.scale).to(condition))
         x = x.masked_fill(~valid[..., None], 0)
+        valid_indices = inputs.valid_indices
+        if valid_indices is None:
+            valid_indices = valid.detach().cpu().flatten().nonzero().flatten().to(valid.device)
         for block, kv in zip(self.blocks, audio.key_values):
             x = block(x, positions, valid, condition,
-                      tuple(value.index_select(0, mapping) for value in kv), av)
+                      tuple(value.index_select(0, mapping) for value in kv), av, valid_indices)
         # Explicit FP32 parameters also support an otherwise bf16 model.
         with torch.autocast(device_type=x.device.type, enabled=False):
             x = F.layer_norm(x.float(), self.output_norm.normalized_shape,

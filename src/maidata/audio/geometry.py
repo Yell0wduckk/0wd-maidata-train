@@ -39,35 +39,18 @@ def gather_slots(
     target_start_beats: Tensor,
     window_to_song: Tensor,
     audio_before_beats: int,
-    context_beats: int,
+    context_beats: int, layout=None,
 ) -> ScaleMemory:
     """Gather each window's integer-beat centers without treating index 0 as beat 0."""
-    targets = (
-        target_start_beats.float().unsqueeze(1) - audio_before_beats
-        + torch.arange(context_beats, device=g0.values.device, dtype=torch.float32) + 0.5
-    )
+    from .layout import prepare_slots, to_device
+    if layout is None:
+        layout = to_device(prepare_slots(g0.beats.detach().cpu(), g0.valid.cpu(),
+            target_start_beats.detach().cpu(), window_to_song.cpu(), audio_before_beats, context_beats),
+            g0.values.device)
     clean = mask_values(g0.values, g0.valid)
-    rows, masks = [], []
-    for window, song in enumerate(window_to_song.unbind()):
-        song_values, song_beats, song_valid = clean[song], g0.beats[song], g0.valid[song]
-        source_indices = torch.nonzero(song_valid, as_tuple=False).flatten()
-        if source_indices.numel() == 0:
-            rows.append(song_values.sum(0, keepdim=True).expand(context_beats, -1) * 0)
-            masks.append(torch.zeros(context_beats, device=g0.values.device, dtype=torch.bool))
-            continue
-        source_beats = song_beats[source_indices].float().contiguous()
-        positions = torch.searchsorted(source_beats, targets[window].contiguous())
-        chosen = positions.clamp(max=source_beats.numel() - 1)
-        valid = positions.lt(source_beats.numel()) & source_beats[chosen].eq(targets[window])
-        rows.append(mask_values(song_values[source_indices[chosen]], valid))
-        masks.append(valid)
-    if not rows:
-        return ScaleMemory(
-            g0.values.new_zeros((0, context_beats, g0.values.shape[-1])),
-            targets,
-            torch.zeros_like(targets, dtype=torch.bool),
-        )
-    return ScaleMemory(torch.stack(rows), targets, torch.stack(masks))
+    values = clean.flatten(0, 1)[layout['indices']]
+    return ScaleMemory(mask_values(values, layout['valid']), layout['beats'], layout['valid'])
+
 
 
 def local_neighbors(
@@ -102,67 +85,40 @@ def local_neighbors(
     return indices.masked_fill(~valid, 0), valid
 
 
-def _resample(source: ScaleMemory, targets: Tensor, *, valid_only: bool) -> ScaleMemory:
-    """Share coordinate search while keeping C coverage and FPN edge rules distinct."""
+def _resample(source: ScaleMemory, targets: Tensor, *, valid_only: bool, layout=None) -> ScaleMemory:
+    """Apply prepared endpoint geometry in one batched gather; keep feature gradients."""
+    from .layout import prepare_resample, to_device
     if targets.ndim != 2 or targets.shape[0] != source.values.shape[0]:
         raise ValueError("interpolation targets must align with source batch")
-    targets = targets.float()
+    if not len(targets):
+        return ScaleMemory(source.values.new_zeros((*targets.shape, source.values.shape[-1])),
+                           targets.float(), torch.zeros_like(targets, dtype=torch.bool))
+    if layout is None:
+        layout = to_device(prepare_resample(source.beats.detach().cpu(), source.valid.cpu(),
+            targets.detach().cpu(), valid_only=valid_only), source.values.device)
     clean = mask_values(source.values, source.valid)
-    rows, masks = [], []
-    with torch.autocast(device_type=source.values.device.type, enabled=False):
-        for batch, target in enumerate(targets.unbind()):
-            indices = (
-                torch.nonzero(source.valid[batch], as_tuple=False).flatten()
-                if valid_only else torch.arange(source.values.shape[1], device=source.values.device)
-            )
-            if indices.numel() == 0:
-                rows.append(clean[batch].sum(0, keepdim=True).expand(target.numel(), -1) * 0)
-                masks.append(torch.zeros_like(target, dtype=torch.bool))
-                continue
-            coordinates = source.beats[batch, indices].float().contiguous()
-            if coordinates.numel() == 1:
-                left = right = torch.zeros_like(target, dtype=torch.long)
-                weight = torch.zeros_like(target)
-            else:
-                right = torch.searchsorted(coordinates, target.contiguous()).clamp(1, coordinates.numel() - 1)
-                left = right - 1
-                denominator = (coordinates[right] - coordinates[left]).clamp_min(1e-8)
-                weight = ((target - coordinates[left]) / denominator).clamp(0, 1)
-            left, right = indices[left], indices[right]
-            left_weight = (1 - weight) * source.valid[batch, left].float()
-            right_weight = weight * source.valid[batch, right].float()
-            mass = left_weight + right_weight
-            valid = mass.gt(0)
-            if valid_only:
-                valid = valid & target.ge(coordinates[0]) & target.le(coordinates[-1])
-            value = (
-                clean[batch, left].float() * left_weight.unsqueeze(-1)
-                + clean[batch, right].float() * right_weight.unsqueeze(-1)
-            ) / mass.clamp_min(1e-12).unsqueeze(-1)
-            rows.append(mask_values(value.to(source.values.dtype), valid))
-            masks.append(valid)
-    if not rows:
-        return ScaleMemory(
-            source.values.new_zeros((*targets.shape, source.values.shape[-1])),
-            targets,
-            torch.zeros_like(targets, dtype=torch.bool),
-        )
-    return ScaleMemory(torch.stack(rows), targets, torch.stack(masks))
+    def gather(key):
+        return clean.gather(1, layout[key][..., None].expand(-1, -1, clean.shape[-1])).float()
+    with torch.autocast(device_type=clean.device.type, enabled=False):
+        a, b = layout['left_weight'], layout['right_weight']
+        values = (gather('left')*a[..., None] + gather('right')*b[..., None]) / (a+b).clamp_min(1e-12)[..., None]
+    return ScaleMemory(mask_values(values.to(clean.dtype), layout['valid']), targets.float(), layout['valid'])
 
 
-def interpolate(source: ScaleMemory, target_beats: Tensor) -> ScaleMemory:
+
+def interpolate(source: ScaleMemory, target_beats: Tensor, layout=None) -> ScaleMemory:
     """C-to-M interpolation over valid source coordinates, within their coverage.
 
     A single source covers only its own coordinate. At duplicate coordinates,
     left-sided search follows the first matching source, matching the reference.
     """
-    return _resample(source, target_beats, valid_only=True)
+    return _resample(source, target_beats, valid_only=True, layout=layout)
 
 
-def masked_upsample(source: ScaleMemory, target_beats: Tensor) -> ScaleMemory:
+def masked_upsample(source: ScaleMemory, target_beats: Tensor, layout=None) -> ScaleMemory:
     """FPN interpolation with valid endpoint weights renormalized in FP32.
 
     At grid boundaries, clamp to the nearest endpoint instead of extrapolating
     values. The caller retains its finer M validity mask after fusion.
     """
-    return _resample(source, target_beats, valid_only=False)
+    return _resample(source, target_beats, valid_only=False, layout=layout)

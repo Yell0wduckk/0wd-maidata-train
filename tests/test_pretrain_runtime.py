@@ -194,6 +194,7 @@ def test_complete_epoch_resume_is_exact_and_never_saves_failed_epoch(config,tmp_
     assert torch.load(ckpt,weights_only=False)['completed_epochs']==2
     assert sorted(p.name for p in ckpt.parent.iterdir())==['last.ckpt']
     monkeypatch.setattr(runner,'update',real_update)
+    monkeypatch.setattr(checkpoint,'source_identity',lambda: {'commit':'different-source-is-allowed'})
     runner.run(interrupted,resume=ckpt)
     a=torch.load(Path(full['pretrain_output'])/'checkpoints/last.ckpt',weights_only=False)
     b=torch.load(ckpt,weights_only=False)

@@ -4,46 +4,42 @@ import torch
 from torch import Tensor
 from torch.nn import functional as F
 
-from .geometry import local_neighbors
 from maidata.nn.position import apply_rope
 
 
 def local_joint_attention(
     q_l: Tensor, k_l: Tensor, v_l: Tensor, k_s: Tensor, v_s: Tensor,
     l_beats: Tensor, l_valid: Tensor, s_valid: Tensor,
-    radius: float, dropout_p: float,
+    radius: float, dropout_p: float, layout=None,
 ) -> Tensor:
     """Each L query reads only its beat-local L neighbors and all S keys.
 
-    Query chunks bound temporary gathers. No full L-by-L score or mask is built.
+    Rectangular query blocks share neighborhood K/V across all windows.
+    No full L-by-L score or mask is built.
     Projections and RoPE are supplied by the shared block.
     """
-    windows = []
-    for batch in range(q_l.shape[0]):
-        chunks = []
-        for start in range(0, q_l.shape[2], 64):
-            stop = min(start + 64, q_l.shape[2])
-            indices, neighbors_valid = local_neighbors(
-                l_beats[batch], l_valid[batch], l_beats[batch, start:stop], radius,
-            )
-            count = stop - start
-            keys = torch.cat((
-                k_l[batch, :, indices, :],
-                k_s[batch, :, None, :, :].expand(-1, count, -1, -1),
-            ), dim=-2)
-            values = torch.cat((
-                v_l[batch, :, indices, :],
-                v_s[batch, :, None, :, :].expand(-1, count, -1, -1),
-            ), dim=-2)
-            allowed = torch.cat((neighbors_valid, s_valid[batch].expand(count, -1)), dim=-1)
-            allowed = allowed & l_valid[batch, start:stop, None]
-            attended = F.scaled_dot_product_attention(
-                q_l[batch, :, start:stop, None, :], keys, values,
-                attn_mask=allowed[None, :, None, :], dropout_p=dropout_p,
-            ).squeeze(-2)
-            chunks.append(attended.masked_fill(~allowed.any(-1)[None, :, None], 0))
-        windows.append(torch.cat(chunks, dim=1))
-    return torch.stack(windows)
+    from .layout import prepare_local, to_device, with_local_mask
+    if layout is None:
+        layout = to_device(prepare_local(l_beats.detach().cpu(), l_valid.cpu(), radius), q_l.device)
+    if 'allowed' not in layout:
+        layout = with_local_mask(layout, l_beats, radius)
+    batch, heads, length, depth = q_l.shape
+    def gather(tensor, indices):
+        flat = tensor.transpose(1, 2).reshape(batch*length, heads, depth)
+        return flat[indices].transpose(1, 2)
+    if not layout['query'].shape[0]:
+        return q_l * 0 + (k_l.sum() + v_l.sum() + k_s.sum() + v_s.sum()) * 0
+    owners = layout['batch']
+    keys = torch.cat((gather(k_l, layout['key']), k_s.index_select(0, owners)), dim=2)
+    values = torch.cat((gather(v_l, layout['key']), v_s.index_select(0, owners)), dim=2)
+    slot_allowed = layout['valid'][..., None] & s_valid[owners, None, :]
+    allowed = torch.cat((layout['allowed'], slot_allowed), dim=-1)
+    attended = F.scaled_dot_product_attention(gather(q_l, layout['query']), keys, values,
+        attn_mask=allowed[:, None], dropout_p=dropout_p)
+    selected = attended.transpose(1, 2).reshape(-1, heads, depth).index_select(0, layout['selected'])
+    merged = q_l.new_zeros(batch*length, heads, depth).index_copy(0, layout['output'], selected)
+    return merged.reshape(batch, length, heads, depth).transpose(1, 2)
+
 
 
 def global_joint_attention(

@@ -18,7 +18,7 @@ def scales(output):
 
 
 def single_window(inputs, index):
-    return WindowInputs(**{field.name: getattr(inputs, field.name)[index:index + 1] for field in fields(inputs)})
+    return WindowInputs(**{field.name: getattr(inputs, field.name)[index:index + 1] for field in fields(inputs) if field.name != "layout"})
 
 
 def test_default_shapes_and_public_output():

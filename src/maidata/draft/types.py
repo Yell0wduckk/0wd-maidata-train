@@ -19,7 +19,7 @@ def validate_memory(memory, width=None):
             or (width is not None and x.shape[-1] != width)
             or b.device != x.device or v.device != x.device):
         raise ValueError('memory requires aligned values [N,L,D], beats/valid [N,L]')
-    if not x.is_floating_point() or not torch.isfinite(x[v]).all() or not torch.isfinite(b[v]).all():
+    if not x.is_floating_point() or not (torch.isfinite(x) | ~v[..., None]).all() or not (torch.isfinite(b) | ~v).all():
         raise ValueError('valid memory values and beats must be finite')
 
 
@@ -31,6 +31,7 @@ class DraftInputs:
     difficulty_id: Tensor
     level: Tensor
     span_beats: Tensor
+    valid_indices: Tensor | None = None
 
 
 @dataclass

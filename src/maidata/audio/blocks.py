@@ -116,7 +116,7 @@ class SharedConformerBlock(nn.Module):
         song_kv: tuple[Tensor, Tensor] | None,
         song_valid: Tensor | None,
         *,
-        update_slots: bool,
+        update_slots: bool, attention_layout=None,
     ) -> tuple[ScaleMemory, ScaleMemory]:
         local_input = mask_values(local.values, local.valid)
         slot_input = mask_values(slots.values, slots.valid)
@@ -132,7 +132,7 @@ class SharedConformerBlock(nn.Module):
         local_attended = local_joint_attention(
             q_local, k_local, v_local, k_slots, v_slots,
             local.beats.masked_fill(~local.valid, 0.0), local.valid, slots.valid,
-            self.attention_radius, dropout_p,
+            self.attention_radius, dropout_p, layout=attention_layout,
         )
         # Every valid local query has its own local key within the nonnegative radius.
         local_usable = local.valid

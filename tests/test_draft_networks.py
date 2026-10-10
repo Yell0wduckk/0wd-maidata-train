@@ -75,7 +75,7 @@ def test_project_once_shared_graph_matches_separate_conditions(config):
     probe = torch.randn_like(z.values)
     (z.values * probe).sum().backward()
     for i in range(3):
-        one = DraftInputs(*(getattr(condition, field)[i:i + 1] for field in condition.__dataclass_fields__))
+        one = DraftInputs(*(getattr(condition, field)[i:i + 1] for field in condition.__dataclass_fields__ if field != "valid_indices"))
         result = reference(other, one)
         torch.testing.assert_close(result.values[0], z.values[i], atol=3e-6, rtol=3e-5)
         (result.values * probe[i:i + 1]).sum().backward()

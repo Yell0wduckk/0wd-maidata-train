@@ -18,8 +18,8 @@ class Pretrainer(nn.Module):
     def forward(self, batch):
         local = self.encoder(batch.songs, batch.audio_windows)
         bank = assemble_full_p0(local.P0, batch.audio_windows.target_start_beats,
-            batch.audio_windows.window_to_song, batch.coverages, p0_rate=self.config['fpn_rates'][0])
+            batch.audio_windows.window_to_song, batch.coverages, p0_rate=self.config['fpn_rates'][0], layout=None if batch.layouts is None else batch.layouts['p0'])
         z = self.draft(bank, batch.draft_inputs)
         r, p = predict_auxiliary(z, batch.groups, batch.starts, batch.valid,
-                                self.reconstruction, self.planner, self.config)
+                                self.reconstruction, self.planner, self.config, layouts=batch.layouts)
         return auxiliary_losses(r, p, batch.reconstruction, batch.planner, self.config), (r, p, z)

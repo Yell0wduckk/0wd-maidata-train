@@ -40,7 +40,7 @@ def test_synchronous_reading_reuses_projected_inputs_and_skips_last_slot_update(
     song_kv = block.project_song(song)
     captured = {}
 
-    def local_attention(q, k_local, v_local, k_slots, v_slots, *_args):
+    def local_attention(q, k_local, v_local, k_slots, v_slots, *_args, **_kwargs):
         captured['local'] = k_local, v_local, k_slots, v_slots
         return v_slots.mean(-2, keepdim=True).expand_as(q)
 
