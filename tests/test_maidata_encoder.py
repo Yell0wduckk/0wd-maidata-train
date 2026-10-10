@@ -58,6 +58,26 @@ def test_nondefault_configuration_forward_backward(encoder_config, audio_inputs)
     assert model.stages[0][0].q.weight is not model.stages[0][1].q.weight
 
 
+def test_cpu_autocast_with_dropout_preserves_coordinates_masks_and_gradients(encoder_config, audio_inputs):
+    model = build_model(dict(encoder_config, dropout=.15, stage_attention_radii=(.5, 1.5, 3.),
+                             rope_base=317., rope_position_scale=.7)).train()
+    with torch.autocast('cpu', dtype=torch.bfloat16):
+        output = model(*audio_inputs)
+        loss = sum((scale.values.float() * torch.randn_like(scale.values).float()).sum()
+                   for scale in scales(output))
+    loss.backward()
+    for scale in scales(output):
+        assert scale.values.dtype == torch.bfloat16
+        assert scale.beats.dtype == torch.float32 and scale.valid.dtype == torch.bool
+        assert torch.isfinite(scale.values).all()
+        assert scale.values[~scale.valid].count_nonzero() == 0
+    for parameter in model.parameters():
+        if parameter.grad is not None:
+            assert torch.isfinite(parameter.grad).all()
+    assert model.song_tokenizer.project.weight.grad.abs().sum() > 0
+    assert model.spectral.stem.weight.grad.abs().sum() > 0
+
+
 def test_song_preparation_reused_with_matching_outputs_and_gradients(encoder_config, audio_inputs):
     torch.manual_seed(5)
     model = build_model(encoder_config).eval()

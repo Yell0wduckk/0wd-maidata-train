@@ -10,7 +10,7 @@ def main(argv=None):
     parser.add_argument('--chart', type=Path, required=True)
     parser.add_argument('--start-beat', type=int, action='append', required=True)
     parser.add_argument('--target-beats', type=int)
-    parser.add_argument('--source-end-beat', help='exact source final timing-grid beat when absent in metadata')
+    parser.add_argument('--source-end-beat', help='explicit end-beat override; otherwise use metadata or source timing')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args(argv)
     from maidata.entry import CONFIG
@@ -27,7 +27,7 @@ def main(argv=None):
         p = planner.window(start * 96, (start + target_beats) * 96)
         rows.append(dict(start_beat=start, target_beats=target_beats,
                          reconstruction=asdict(r), planner=asdict(p), query_rows_required=len(r.rows)))
-    result = dict(chart=str(args.chart), windows=rows,
+    result = dict(chart=str(args.chart), source_end_beat=str(planner.source_end_beat), windows=rows,
                   query_rows_required=required_query_rows([r['query_rows_required'] for r in rows]))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False) + '\n', encoding='utf-8')

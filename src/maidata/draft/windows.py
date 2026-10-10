@@ -66,17 +66,22 @@ def assemble_full_p0(local, starts, window_to_audio, coverages, *, p0_rate):
         expected_starts = starts.new_tensor(coverage.starts(include_tail=False))
         if not torch.equal(starts[order], expected_starts):
             raise ValueError('P0 coverage must include each target center exactly once')
-        count = coverage.target_beats * p0_rate
-        if not float(count).is_integer():
-            raise ValueError('P0 rate must give an integer center length')
         chunks, positions, masks = [], [], []
         for index in order:
             start = starts[index]
-            selected = (local.beats[index] >= start) & (local.beats[index] < start + coverage.target_beats)
-            expected = start + (torch.arange(int(count), device=start.device).float() + .5) / p0_rate
+            grid = local.beats[index].float()
+            # P0 is anchored at the audio window, not at the target start.
+            # Fractional rates need not put a half-cell at the target boundary,
+            # nor give an integer T*rate. Preserve the producer's lattice phase.
+            expected = grid[:1] + torch.arange(len(grid), device=grid.device).float() / p0_rate
+            tolerance = max(1e-5, float(grid.abs().max()) * torch.finfo(torch.float32).eps * 4)
+            if (not torch.isfinite(grid).all() or not (grid[1:] > grid[:-1]).all()
+                    or not torch.allclose(grid, expected, atol=tolerance, rtol=0)
+                    or grid[0] - .5 / p0_rate > start + tolerance
+                    or grid[-1] + .5 / p0_rate < start + coverage.target_beats - tolerance):
+                raise ValueError('P0 coordinates must cover the target on the configured rate grid')
+            selected = (grid >= start) & (grid < start + coverage.target_beats)
             actual = local.beats[index, selected]
-            if actual.shape != expected.shape or not torch.allclose(actual.float(), expected.float(), atol=1e-5, rtol=0):
-                raise ValueError('P0 target center coordinates do not match the configured rate')
             chunks.append(local.values[index, selected])
             positions.append(actual)
             masks.append(local.valid[index, selected])

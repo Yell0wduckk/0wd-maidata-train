@@ -147,6 +147,75 @@ def test_metadata_level_and_audio_span_are_separate_from_chart_end(tmp_path):
     assert from_record(missing, source_end_beat='17/2').source_end_beat == Fraction(17, 2)
 
 
+def test_planner_recovers_missing_end_from_selected_source_only(tmp_path):
+    from unittest.mock import patch
+    from pathlib import Path
+
+    path = tmp_path / 'maidata.txt'
+    path.write_text('&bpm=120\n&inote_4={1}1,,,E\n'
+                    '&inote_5=(120){4}1,2,,(240){8},\n&lv_5=14.6\n', encoding='utf-8-sig')
+    missing = record()
+    del missing['metadata']['render_end_beat']
+    missing['source'] = dict(source_path=str(path), difficulty='5')
+    with patch.object(Path, 'read_text', side_effect=AssertionError('R must not read the source')):
+        chart = from_record(missing)
+        assert len(reconstruction_target(chart, start_tick=0, target_beats=3).rows) == 14
+    # Three full cells and two half cells, including the trailing empty cell.
+    planner = MusicPlanTargets(chart)
+    assert planner.source_end_beat == 4
+    explicit = MusicPlanTargets(from_record(missing, source_end_beat=4))
+    assert planner.reference == pytest.approx(explicit.reference)
+    assert planner.window(0, 288) == explicit.window(0, 288)
+    path.unlink()
+    with pytest.raises(FileNotFoundError):
+        MusicPlanTargets(from_record(missing))
+    # Metadata or an explicit override takes precedence; neither reads the source.
+    assert MusicPlanTargets(from_record(dict(missing, metadata=record()['metadata']))).source_end_beat == 8
+    assert MusicPlanTargets(from_record(missing, source_end_beat='17/2')).source_end_beat == Fraction(17, 2)
+
+
+@pytest.mark.parametrize('body,end', [
+    ('(120){4}1,2,,,', Fraction(5)),
+    ('{4}1,2,,,E,1,1', Fraction(4)),
+    ('{3}1,,{7}E1,', Fraction(80, 21)),
+    ('||3/4 (120){4}1h[4:1],{8}E1', Fraction(3, 2)),
+    ('(120){#0.25}1,,', Fraction(3, 2)),
+    ('', Fraction(0)),
+])
+def test_source_end_uses_timing_cells_not_note_durations(body, end):
+    from maidata.draft.source_timing import inote_end_beat
+    assert inote_end_beat(body, initial_bpm=120) == end
+
+
+def test_source_end_matches_read_only_simai_timing_oracle():
+    import ast
+    import re
+    from pathlib import Path
+    from maidata.draft.source_timing import inote_end_beat
+    root = Path(__file__).resolve().parents[3] / 'repos-baiqieji/simai_transformer/src/maichart'
+    if not root.is_dir():
+        pytest.skip('read-only simai oracle is not available in this checkout')
+    names = {'_split_top_level_commas', '_parse_point_directives', '_skip_whitespace', 'tokenize_event_timing'}
+    functions = []
+    for filename in ('timing.py', 'event_timing.py'):
+        tree = ast.parse((root / filename).read_text(encoding='utf-8'))
+        functions.extend(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names)
+    namespace = dict(Fraction=Fraction, re=re, TimingDirective=lambda kind, raw, value:
+                     SimpleNamespace(directive_type=kind, raw=raw, value=value),
+                     EventTimingPoint=SimpleNamespace, normalize_note_text=lambda x: x,
+                     _finite_number=lambda value, *args, **kwargs: float(value),
+                     duration_to_ticks_or_none=lambda _: None)
+    module = ast.Module(body=[ast.ImportFrom(module='__future__', names=[ast.alias(name='annotations')], level=0),
+                              *functions], type_ignores=[])
+    exec(compile(ast.fix_missing_locations(module), str(root), 'exec'), namespace)
+    for body in ('(120){4}1,2,,,', '{4}1,2,,,E,1', '{3}1,,{7}E1,',
+                 '||3/4 (120){4}1h[4:1],{8}E1'):
+        last = namespace['tokenize_event_timing'](body)[-1]
+        expected = last.beat + (0 if any(d.directive_type == 'end' for d in last.directives)
+                                else Fraction(4, last.division))
+        assert inote_end_beat(body, initial_bpm=120) == expected
+
+
 def test_losses_support_na_empty_padding_and_independent_reduction():
     chart = from_record(record())
     real = reconstruction_target(chart, start_tick=0, target_beats=3)

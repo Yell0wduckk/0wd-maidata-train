@@ -7,6 +7,8 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 import math
 
+from .source_timing import read_source_end_beat
+
 
 @dataclass(frozen=True)
 class PlanTarget:
@@ -35,13 +37,17 @@ def statistics(notes, duration, span_ticks, start_tick):
 
 class MusicPlanTargets:
     def __init__(self, chart):
-        if chart.source_end_beat is None:
-            raise ValueError('source final timing-grid beat is required for Planner reference')
+        end = chart.source_end_beat
+        if end is None:
+            end = read_source_end_beat(chart.source_path, chart.difficulty)
+        if end <= 0:
+            raise ValueError('source end beat must be positive')
         self.chart = chart
+        self.source_end_beat = end
         self.notes = sorted(chart.notes, key=lambda n: n.tick)  # Stable within each onset.
         self.ticks = [n.tick for n in self.notes]
-        duration = chart.timing.beat_to_second(chart.source_end_beat) - chart.timing.beat_to_second(0)
-        _, self.reference = statistics(self.notes, duration, float(chart.source_end_beat * 96), 0)
+        duration = chart.timing.beat_to_second(end) - chart.timing.beat_to_second(0)
+        _, self.reference = statistics(self.notes, duration, float(end * 96), 0)
 
     def window(self, start_tick, end_tick):
         if end_tick <= start_tick:

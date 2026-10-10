@@ -84,6 +84,41 @@ def small_chain():
     return config, timing, coverage, song, window, e, d, p, r, inputs
 
 
+@pytest.mark.parametrize('target,after,rate', [(2, 1, 1.5), (3, 0, .75)])
+def test_fractional_encoder_grid_is_preserved_by_full_p0(target, after, rate):
+    config = dict(CONFIG, mel_bins=7, samples_per_beat=4, d_model=12, heads=3, ffn_dim=20,
+                  stage_depths=(1, 1, 1), temporal_kernel_size=3, stem_channels=4,
+                  frequency_dim=4, frequency_queries=2, target_beats=target,
+                  audio_before_beats=1, audio_after_beats=after,
+                  fpn_rates=(rate, 1., .5), dropout=0.)
+    encoder = build_model(config).eval()
+    coverage = song_coverage(TimingMap([(0, 120)]), float(target), first_beat=0, target_beats=target)
+    starts, mapping = audio_windows([coverage], device='cpu')
+    n = 2 * target
+    song = SongInputs(torch.randn(1, n, 4, 7), torch.ones(1, n, 4, dtype=torch.bool),
+                      torch.arange(n).float()[None] + .5, torch.randn(1, n, 32))
+    beats = starts[:, None] - 1 + torch.arange(16).float()[None] / 4
+    valid = (beats >= 0) & (beats < n)
+    windows = WindowInputs(torch.randn(2, 16, 7).masked_fill(~valid[..., None], 0),
+                          torch.randn(2, 16, 32).masked_fill(~valid[..., None], 0),
+                          beats, valid, starts, mapping)
+    p0 = encoder(song, windows).P0
+    p0.values.retain_grad()
+    bank = assemble_full_p0(p0, starts, mapping, [coverage], p0_rate=rate)
+    selected = (p0.beats >= starts[:, None]) & (p0.beats < starts[:, None] + target)
+    assert torch.equal(bank.beats[0], p0.beats[selected])
+    assert torch.equal(bank.valid[0], p0.valid[selected])
+    assert torch.equal(bank.values[0], p0.values[selected].masked_fill(~p0.valid[selected][:, None], 0))
+    assert (bank.beats[0, 1:] > bank.beats[0, :-1]).all()
+    bank.values.sum().backward()
+    assert torch.equal(p0.values.grad, (selected & p0.valid)[..., None].expand_as(p0.values).float())
+    assert encoder.spectral.stem.weight.grad.abs().sum() > 0
+    damaged = p0.beats.clone()
+    damaged[0, 1] += .1
+    with pytest.raises(ValueError, match='configured rate grid'):
+        assemble_full_p0(replace(p0, beats=damaged), starts, mapping, [coverage], p0_rate=rate)
+
+
 def test_trainable_chain_empty_tail_and_auxiliary_gradients():
     config, timing, coverage, song, window, e, d, p, r, inputs = small_chain()
     with patch.object(e, 'prepare_song', wraps=e.prepare_song) as prepare:

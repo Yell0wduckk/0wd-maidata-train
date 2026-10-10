@@ -26,6 +26,8 @@ class ChartData:
     notes: tuple[PlanNote, ...]
     timing: TimingMap
     source_end_beat: Fraction | None
+    source_path: str | None = None
+    difficulty: str | None = None
 
 
 def from_record(record, *, source_end_beat=None):
@@ -67,5 +69,7 @@ def from_record(record, *, source_end_beat=None):
         if owner is None or mapping['owner'] != owner or tick != onset:
             raise ValueError('ROUTE/duration must retain its NOTE owner and onset')
         groups[-1][1].append(token)
+    source = record.get('source', {})
     return ChartData(tuple(OnsetGroup(tick, tuple(tokens)) for tick, tokens in groups),
-                     tuple(notes), timing, source_end_beat)
+                     tuple(notes), timing, source_end_beat,
+                     source.get('source_path'), source.get('difficulty'))

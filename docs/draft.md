@@ -46,6 +46,8 @@ D 默认8层/256维/8头/4专家（每专家 FFN512），输出128维；难度 e
 
 全曲 P0 和 Z 只计算一次，再供本 step 的多个目标窗共用。整个图完成反传后更新参数；更新后不能继续复用旧图。条件键为 `(audio_variant, level, difficulty_id)`，只共享音频的不同等级不能共享 Z。
 
+P0 拼接按 `[s,s+T)` 选择 Encoder 原有坐标、特征和有效位，不重新生成网格。允许非整数采样率；网格相位沿用音频窗起点，中心数量由实际坐标决定，不要求 `T×rate` 为整数。
+
 ## 张量协议
 
 | 对象 | 字段 |
@@ -62,7 +64,7 @@ Decoder 消费公开全曲 P0、自己选取的 `WindowLatents.memory` 和预测
 
 `chart_data.from_record(record)` 消费当前原谱 v2 的 tokens、绝对 tick、owner映射及 TimingMap；保留连续 ROUTE 和并行轨道的原序列。真实 NOTE 起音在窗首时仍生成 R-MOMENT，外部边界和主 Decoder terminal不进入R。类型为五个公共类型加专用 `SEGMENT_END`；NOTE的button/touch pad头分别为8/33类，其他适用性复用公共规则。NA用loss忽略值表达，合法0保留。
 
-`reconstruction_target` 生成 R 标签；`MusicPlanTargets` 按真实 NOTE（含短hold语义还原）生成8连续值和整数类别。全谱 workload 分母使用 `metadata.render_end_beat`；缺失时接受显式 `source_end_beat`，不能替换为最后NOTE或音频终点。缺少该统计元数据只阻止Planner标签计算，不阻止独立R标签适配。空谱面窗为R结束标记＋逐拍count0，Planner连续值0＋single类；Z本身不回归零。
+`reconstruction_target` 生成 R 标签；`MusicPlanTargets` 按真实 NOTE（含短hold语义还原）生成8连续值和整数类别。全谱 workload 分母使用 `metadata.render_end_beat`；缺失时由独立 `source_timing` 标签适配器读取 `source.source_path` 中对应 `source.difficulty` 的原谱时间格，取首个 E 拍位或无 E 时最后时间格的结束拍。尾部空格仍计入，不能替换为最后NOTE或音频终点；源不可用时可显式传入 `source_end_beat`。补取仅在构建 Planner 标签时触发，R 标签适配不读源文件，不改写既有缓存。空谱面窗为R结束标记＋逐拍count0，Planner连续值0＋single类；Z本身不回归零。
 
 `collate_reconstruction` / `collate_planner` 用 `None` 表示batch占位窗。R的时间标签保持tick，loss中将MOMENT转为窗内绝对拍位、duration转为log1p(ticks/96)。`auxiliary_losses` 返回 `classification/time/count/planner_continuous/planner_category` 五个 `LossTerm(total,count)`，`.mean` 是各自归一化值；训练配方显式加权。全padding时是可反传的有限零。
 
