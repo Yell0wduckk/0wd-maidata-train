@@ -57,5 +57,7 @@ def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device):
                     source=payload.get('source'))
     return Models(*modules, config, dict(encoder_draft=describe(encoder_draft_checkpoint, producer),
                                         decoder=describe(decoder_checkpoint, consumer),
+                                        training_plan_source=consumer['recipe'].get('decoder_train_plan_source', 'predicted'),
+                                        inference_plan_source='predicted',
                                         decoder_audio_encoder='stage_ii' if decoder_encoder is not None else 'stage_i'),
                   decoder_encoder=decoder_encoder)

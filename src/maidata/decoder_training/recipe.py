@@ -6,13 +6,17 @@ import numpy as np
 import torch
 
 
-PATH_KEYS = tuple('decoder_train_'+k for k in ('checkpoint','p0_cache','dp_cache','window_cache','train_plan','validation_plan','chart_cache',
+PATH_KEYS = tuple('decoder_train_'+k for k in ('checkpoint','p0_cache','dp_cache','gt_plan_cache','window_cache','train_plan','validation_plan','chart_cache',
     'physical_cache','audio_cache','mel_root','source_root','geometry','slide_data','route_distances','output'))
 
 
 def validate(config):
     keys = [k for k in config if k.startswith('decoder_train_')]
+    if config['decoder_train_plan_source'] not in ('predicted','gt'):
+        raise ValueError('decoder_train_plan_source must be predicted or gt')
     export_only = {'decoder_train_checkpoint', 'decoder_train_p0_cache'}
+    if config['decoder_train_plan_source'] == 'predicted':
+        export_only.add('decoder_train_gt_plan_cache')
     missing = [k for k in keys if k not in export_only and config[k] is None]
     if missing:
         raise ValueError('set explicit Decoder training recipe: '+', '.join(missing))

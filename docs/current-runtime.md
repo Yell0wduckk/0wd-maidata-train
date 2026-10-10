@@ -39,13 +39,13 @@ CPU验证覆盖默认/非默认容量、源字段/simai标签、复用与mask、
 
 CPU验证覆盖默认与非默认架构、并行/增量一致、目标类型隔离、plan位置与空mask、FP32/CPU BF16反向、真实字段/规则支持、非单调时间概率、独立归约、跨Encoder/D/P梯度与实际冻结、链/分支快照。训练循环和checkpoint位于独立的`maidata.decoder_training`；整曲生成由独立`maidata.inference`调度，未运行CUDA或重建缓存。
 
-阶段二已接入原谱v2字段/Physical、全局打乱的既有Decoder occurrence、GT历史与确定性15% history dropout；保持仍有效的完整物理动作，训练读取离线窗口支持。当前重新随机初始化音频Encoder E_M与M并联合更新；每batch按audio_variant去重读取已验收Mel/aux32，由E_M在线覆盖整曲并拼接全曲P0。Z与预测plan12继续读取阶段一E_D/D/P的固定离线缓存，训练不构建或运行教师E_D/D/P/R，也不从阶段一权重初始化E_M。固定条件缺失不在线补算；导出与消费模块独立。
+阶段二已接入原谱v2字段/Physical、全局打乱的既有Decoder occurrence、GT历史与确定性15% history dropout；保持仍有效的完整物理动作，训练读取离线窗口支持。当前重新随机初始化音频Encoder E_M与M并联合更新；每batch按audio_variant去重读取已验收Mel/aux32，由E_M在线覆盖整曲并拼接全曲P0。Z始终读取阶段一E_D/D/P的固定离线缓存；plan12默认读取固定P预测，也可通过`--plan-source gt`切换到离线原谱统计小缓存，训练与validation使用相同来源。训练不构建或运行教师E_D/D/P/R，也不从阶段一权重初始化E_M。固定条件缺失不在线补算；导出与消费模块独立。GT缓存生产、两组独立fresh训练及远端串行launcher见[plan对照](decoder-plan-comparison.md)。
 
 默认row budget8192、累积1、warmup200，全部可配置，音频成本另行记录，本次不改变组批预算。M计算块使用整个逻辑update的独立分母；通过音频K/V梯度桥收集各块梯度，最后只反传真实E_M及音频投影一次，E_M/M共同裁剪和更新。worker准备Encoder/P0/M布局，训练不解压整谱或查询Physical，不重新验收旧输入、不哈希生产者checkpoint。联合训练checkpoint为`maidata.decoder-training.v2`，保存成套E_M/M、optimizer、scheduler、完整轮和全部RNG；只有M的旧v1不能作为其完整轮续训。源码/配方/budget/计划身份不作为额外恢复门禁。保留workers12、完整轮checkpoint、每5轮及末轮validation与原batch CUDA测量入口；CPU合成梯度/恢复测试已通过，CUDA原batch和正式训练未执行。其余未确定配方保持None，见[阶段二训练](decoder-training.md)。
 
 ## 当前整曲推理与物化
 
-`python -m maidata.inference`显式加载阶段一E_D/D/P与阶段二v2的E_M/M权重。固定E_D产生Draft的P0并计算全曲Z/预测plan；独立E_M产生M的全曲P0，参数与隐藏表示分开。读取配套grid或使用固定Mel统计提取音频，按新字段规则维护真实起音组、边界MOMENT、跨窗活动动作与完整规则快照。两套Encoder各自按曲复用准备结果，D/P及M音频投影整次生成复用；各窗重新prefill历史，始终覆盖音频及一个完整空尾窗。旧v1推理保留E_D的P0供M使用，但不构成新联合训练续训。Physical硬约束默认开启，trace默认关闭；路径、温度、种子与生成上限可配置。
+`python -m maidata.inference`显式加载阶段一E_D/D/P与阶段二v2的E_M/M权重。固定E_D产生Draft的P0并计算全曲Z/预测plan；独立E_M产生M的全曲P0，参数与隐藏表示分开。GT plan训练的M自由推理仍读取P预测，报告分别记录训练和推理plan来源。读取配套grid或使用固定Mel统计提取音频，按新字段规则维护真实起音组、边界MOMENT、跨窗活动动作与完整规则快照。两套Encoder各自按曲复用准备结果，D/P及M音频投影整次生成复用；各窗重新prefill历史，始终覆盖音频及一个完整空尾窗。旧v1推理保留E_D的P0供M使用，但不构成新联合训练续训。Physical硬约束默认开启，trace默认关闭；路径、温度、种子与生成上限可配置。
 
 `python -m maidata.inference.materialize`独立调用MiaCode render/dump，核对新字段与时间轴后输出`maidata.txt`和`track.<音频扩展名>`。两入口不导入旧模型包、不增加源码哈希门禁。小型真实E/D/P/M已完成CPU FP32/BF16到MiaCode的端到端测试；真实训练checkpoint的CUDA生成与谱面质量未验收。命令、跨窗合同和模块边界见[推理与物化](maidata-inference.md)。
 

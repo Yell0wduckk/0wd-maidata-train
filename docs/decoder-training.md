@@ -1,6 +1,6 @@
 # 主 Decoder 阶段二训练
 
-入口为 `python -m maidata.decoder_training`。本阶段**重新随机初始化音频 Encoder E_M 与主 Decoder M，联合更新两者**；固定读取阶段一 E_D/D/P 已产出的离线全曲 Z 和预测 plan12。训练与验证构建 E_M/M，不构建或运行教师 E_D/D/P/R，不加载阶段一权重初始化 E_M。E_M 在线消费已验收 Mel/aux32，M 的谱面损失经音频 K/V 正常反传至 E_M；固定 Z/plan 的坐标不会随 E_M 更新漂移。缺失的教师条件不回退在线生成。
+入口为 `python -m maidata.decoder_training`。本阶段**重新随机初始化音频 Encoder E_M 与主 Decoder M，联合更新两者**；始终读取阶段一 E_D/D/P 的固定离线全曲 Z。plan12默认读取P的预测，可显式切换成独立离线GT plan作对照。训练与验证构建E_M/M，不构建或运行教师E_D/D/P/R，不加载阶段一权重初始化E_M。E_M在线消费已验收Mel/aux32，M的谱面损失经音频K/V正常反传至E_M；固定Z/plan不会随E_M更新漂移，缺失条件不在线补算。
 
 ## 模块与数据流
 
@@ -8,6 +8,7 @@
 |---|---|
 | `decoder_training.plan/ordering` | 保留既有实例集合与 split，逐轮全局打乱窗口，从窗口缓存取得实际输入长度并按 row budget 组批 |
 | `decoder_training.frozen_cache/conditioning` | 读取固定 Z/plan 及来源，按窗口选择上下文，整理在线 P0 的坐标与有效位 |
+| `decoder_training.gt_plan_cache` | 一次离线复用原谱和MusicPlanTargets生产GT plan12；训练仅读取小型bank |
 | `decoder_training.data` | 按 batch 去重读取 Mel/aux32 和固定条件，准备完整音频覆盖、GT 历史与随机窗口顺序 |
 | `decoder_training.preparation/transport` | worker 内整理去重映射、padding 和分块；按 dtype 打包 IPC、pin memory 与分块 H2D |
 | `decoder_training.export_windows/support_cache` | 离线恢复真实动作与首次归责账本，准备窗首、窗内和终端支持 |
@@ -19,13 +20,34 @@
 | `decoder_training.supervision` | 离线整理支持与计数；训练执行批量小头及三组独立 loss 归约 |
 | `decoder_training.recipe/checkpoint/runner` | 配方、配套生产者身份、完整轮状态恢复、训练及验证 |
 
-每个输入 batch 内，相同 audio_variant 只读取一份音频输入，E_M 覆盖整曲有效音频并将各窗中心拼接成全曲 P0_M bank；只监督某些目标窗也不能省略其他音频覆盖窗。额外完整监督空尾窗不伪造音频覆盖。D/P 缓存保留按原难度/等级生产的全曲 Z，以及每个基础窗和空尾窗的预测 plan12。通过 chart_to_group、window_id、起点和音频标识对应选择，同 batch 的重复 occurrence 共享在线 P0 和固定条件。M 读取 P0_M、默认前4＋目标16＋后4拍的 Z，以及无位置编码的预测 plan12；不读取 GT Planner 或直接难度值。
+每个输入batch内，相同audio_variant只读取一份音频输入，E_M覆盖整曲有效音频并将各窗中心拼接成全曲P0_M；只监督某些目标窗也不能省略其他音频覆盖窗。额外完整监督空尾窗不伪造音频覆盖。D/P缓存保留按原难度/等级生产的全曲Z及各基础窗、空尾窗的预测plan12；GT模式仅替换plan12来源，不改变Z。通过chart_to_group、window_id、起点和音频标识选择，同batch重复occurrence共享在线P0和固定条件。M读取P0_M、默认前4＋目标16＋后4拍的Z及无位置编码的plan12，不直接读取难度值。
 
 离线教师 E_D/D/P 使用 `eval/no_grad`，Z/plan 不带梯度；E_M 与 M 的投影正常反传。全曲音频 K/V 在一个输入 batch 内按歌曲共享，只投影有效音频位置，再恢复公开bank形状。音频attention按歌曲聚合有效query，并按query数量和key跨度的二次幂档组成小批SDPA；所有query及歌曲K/V各收集一次后split，输出统一回填原窗口位置。内部无效key、空歌曲和不同歌曲之间仍严格隔离。
 
 真实 E_M 与各层音频 K/V 投影每 batch 前向一次。M 分块读取数值相同的可求导叶 K/V；每块反传后将叶梯度收集到 FP32 累加器，再释放该块 M 的图。最后把总 K/V 梯度统一传回真实投影与 E_M 图，避免为每个 M 块重复反传整曲 Encoder。这层梯度桥保留链式法则，并非切断音频监督。整个 update 的块和累积 batch 完成后，对 E_M/M 全部参数共同裁剪、执行一次 optimizer/scheduler 更新；更新后重新计算可学习隐藏表示。每个窗口并行 teacher forcing，重新计算包括历史在内的全部 self-attention，不跨窗携带 self K/V。
 
 固定条件由 `decoder_train_dp_cache` 显式提供，沿用 [D/P 导出](frozen-dp-cache.md)格式；在线音频使用 `decoder_train_audio_cache` 与 `decoder_train_mel_root` 的既有输入。`decoder_train_p0_cache` 仅保留为可选离线导出路径，阶段二训练不读取 P0 缓存。启动只读取所需索引与原生产者元数据，不重新验收旧资产，不读取或哈希生产者 checkpoint。配套输入由用户和训练会话选定，读取时不重复扫描 shape、dtype、有限值、拍坐标、mask 或归属。P0/Z 保持原始绝对位置，完整空尾 Z/plan 有效；不同歌曲的 batch padding 与 Z 上下文范围外的槽无效。
+
+## Plan 条件来源与对照
+
+`decoder_train_plan_source`默认`predicted`，可选`gt`；CLI的`--plan-source`覆盖JSON。所选来源同时用于训练和validation，不做逐batch混合，不改变Z、谱面监督、历史dropout、采样实例或E_M/M初始化。
+
+| 来源 | M接收的plan12 | 输入路径 |
+|---|---|---|
+| `predicted` | P输出的8维sigmoid连续值＋4类softmax概率 | 既有`decoder_train_dp_cache` |
+| `gt` | MusicPlanTargets的8维归一化统计＋4类one-hot | 独立`decoder_train_gt_plan_cache`；Z仍来自原D/P缓存 |
+
+GT缓存复用原谱，一次离线计算，与原字段/Physical、窗口监督和D/P缓存分开；训练不解压整谱或计算统计。缓存按audio_variant保存小型bank，使用window_id对应plan，重复occurrence共享同一行；空窗及完整尾窗也有效，为8个0和`single` one-hot。GT模式不重新生成Z，也不训练Planner。
+
+显式生产GT小缓存后再运行GT训练；此生产命令不由训练或串行launcher自动调用：
+
+```sh
+python -m maidata.decoder_training.gt_plan_cache --config decoder-stage2.json --output GT_PLAN_CACHE --workers 12
+python -m maidata.decoder_training --config decoder-stage2.json --plan-source predicted --output PREDICTED_OUTPUT
+python -m maidata.decoder_training --config decoder-stage2.json --plan-source gt --gt-plan-cache GT_PLAN_CACHE --output GT_OUTPUT
+```
+
+两种来源分别从同seed的新E_M/M、optimizer和scheduler开始。串行执行、12维字段顺序和比较口径见[Plan对照](decoder-plan-comparison.md)。GT validation同样使用真实统计条件，仅作oracle诊断；新曲自动推理仍由固定E_D/D/P提供预测plan，包括GT训练的checkpoint。GT训练用于比较准确统计条件的作用，不表示新曲自动取得真实谱面统计。
 
 ## 原谱、历史和 Physical
 
@@ -122,11 +144,13 @@ python -m maidata.decoder_training --config decoder-stage2.json --resume OUTPUT/
 python -m maidata.decoder_training --config decoder-stage2.json --cuda-check --check-step 0
 ```
 
-报告标明 `conditioning=online_audio_fixed_draft_plan`、`encoder_initialization=scratch`、构建 E_M/M，D/P 调用数为0，并包含两模块更新范围、各输入 batch 的音频/谱面 padding 成本与超限标志、各 M 块成本、数据等待耗时、更新耗时和显存。`check-step` 为零基索引。该入口不启动后续训练，也不设置性能或质量通过阈值。
+报告标明`conditioning=online_audio_fixed_draft_plan`、`encoder_initialization=scratch`及实际`plan_source`，构建E_M/M，D/P调用数为0，并包含两模块更新范围、各输入batch的音频/谱面padding成本与超限标志、各M块成本、数据等待耗时、更新耗时和显存。`check-step`为零基索引。该入口不启动后续训练，也不设置性能或质量通过阈值。
 
 ## Checkpoint 与验证
 
 阶段二联合训练使用 schema `maidata.decoder-training.v2`，`model_state`同时保存`encoder.*`（E_M）和`decoder.*`（M）。训练读取D/P manifest中的原始生产者信息，`decoder_train_checkpoint`可缺省，不哈希checkpoint或加载教师权重。新训练从随机初始化的E_M/M开始；`--resume`恢复v2完整轮的两套权重、全部optimizer参数槽、scheduler、完整轮/step、所有RNG与DataLoader generator，同时记录教师来源、所选manifest、配置和输入来源。
+
+checkpoint的recipe记录`decoder_train_plan_source`，GT缓存路径作为输入来源记录；恢复不因plan来源变化新增硬门禁。两种fresh对照应各自使用独立输出目录，不将第一项checkpoint用作第二项初始化或续训。
 
 旧`maidata.decoder-training.v1`只有M，缺少训练后的E_M及其optimizer状态，明确拒绝作为本方案完整轮续训；阶段一权重也不能作为v2续训输入。该区别属于真实模型/训练状态差异，不新增源码哈希、旧资产扫描或审批门禁。
 

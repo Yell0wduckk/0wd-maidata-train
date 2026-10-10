@@ -160,6 +160,8 @@ def run(config, *, resume=None, cuda_check=False, check_step=0):
     producer = checkpoint.cache_producer(cache.producer,config,binding)
     binding['frozen_conditions'] = cache.binding
     binding['window_tensors'] = windows.binding
+    if config['decoder_train_plan_source'] == 'gt':
+        binding['gt_plan'] = str(Path(config['decoder_train_gt_plan_cache'])/'manifest.json')
     source = checkpoint.source_identity()
     loaders = [make_loader(p,config,hashes,cache,windows) for p in plans]
     steps = [len(plans[0].batches(e,config)) for e in range(1,config['decoder_train_scheduler_epochs']+1)]
@@ -198,6 +200,7 @@ def run(config, *, resume=None, cuda_check=False, check_step=0):
         torch.cuda.synchronize(device)
         report = dict(metrics=metrics.report(config),**audit,component_forward_calls=calls,
             conditioning='online_audio_fixed_draft_plan',encoder_initialization='scratch',
+            plan_source=config['decoder_train_plan_source'],
             constructed_components=list(dict(model.named_children())),
             data_wait_seconds=data_seconds,
             seconds=time.perf_counter()-start,peak_allocated=torch.cuda.max_memory_allocated(device),

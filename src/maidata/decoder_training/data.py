@@ -41,6 +41,10 @@ class DecoderDataset(Dataset):
     def __init__(self, plan, config, field_hashes, cache, windows):
         self.plan, self.config = plan, config
         self.cache, self.windows = cache, windows
+        self.gt_plan = None
+        if config['decoder_train_plan_source'] == 'gt':
+            from .gt_plan_cache import GTPlanCache
+            self.gt_plan = GTPlanCache(config['decoder_train_gt_plan_cache'])
 
     def __len__(self):
         return len(self.plan.groups)
@@ -63,7 +67,10 @@ class DecoderDataset(Dataset):
             tensors = select_window(loaded[identity], history_dropped(c, plan.training, epoch, row))
             windows.append(dict(identity=(identity, row['occurrence']), chart_id=key, start=row['start_beat'],
                 sequence_index=row['sequence_index'], **tensors))
-        return dict(variant=variant, grid=grid, coverage=coverage, dp=dp, windows=windows)
+        result = dict(variant=variant, grid=grid, coverage=coverage, dp=dp, windows=windows)
+        if self.gt_plan is not None:
+            result['gt_plan'] = self.gt_plan.read(variant)
+        return result
 
 
 @dataclass

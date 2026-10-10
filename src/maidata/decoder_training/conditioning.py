@@ -35,11 +35,13 @@ def collate_conditions(items, windows, config, *, audio):
             if key not in groups:
                 groups[key] = len(z_rows)
                 z_rows.append({k: dp['z'][k][group] for k in ('values', 'beats', 'valid')})
-            row = dp['window_index'][identity]
+            planner = item['gt_plan'] if config['decoder_train_plan_source'] == 'gt' else dp['planner']
+            lookup = item['gt_plan']['window_index'] if config['decoder_train_plan_source'] == 'gt' else dp['window_index']
+            row = lookup[identity]
             window_groups.append(groups[key])
             starts.append(window['start'])
-            plans.append(dp['planner']['plan_values'][row])
-            plan_valid.append(dp['planner']['valid'][row])
+            plans.append(planner['plan_values'][row])
+            plan_valid.append(planner['valid'][row])
             audio_mapping.append(songs[item['variant']])
         indices.append(unique[identity])
     z = BeatMemory(*(pad_sequence([r[k] for r in z_rows], batch_first=True) for k in ('values','beats','valid')))

@@ -108,6 +108,8 @@ CONFIG = {
     "decoder_train_checkpoint": None,  # Offline-export producer; optional in training, never initializes stage-II E.
     "decoder_train_p0_cache": None,  # Optional offline-export path; joint training does not read P0 caches.
     "decoder_train_dp_cache": None,  # Matching frozen Z and predicted plan12 export.
+    "decoder_train_plan_source": "predicted",  # predicted or gt; Z stays fixed in both modes.
+    "decoder_train_gt_plan_cache": None,  # Required only for gt; offline MusicPlanTargets export.
     "decoder_train_optimizer": "adamw",
     "decoder_train_fused_optimizer": True,  # CUDA backend; optimizer moments are preserved on resume.
     "decoder_train_learning_rate": None,
