@@ -77,7 +77,7 @@ def test_read_fixed_dp_and_select_interleaved_occurrences_without_stage_one_exec
     cond = raw.conditions
     for i,w in enumerate(expected):
         unique = cond.occurrence_mapping[i]
-        song = cond.audio_mapping[unique]
+        song = raw.online_audio.windows.window_to_song[cond.audio_mapping[unique]]
         item = selected[song]
         dp = item['dp']
         row = dp['window_index'][w['identity'][0]]

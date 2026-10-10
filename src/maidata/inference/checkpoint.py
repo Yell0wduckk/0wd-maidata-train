@@ -33,6 +33,7 @@ def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device):
             raise ValueError(f'Encoder/Draft and Decoder representation differs: {key}')
     config = dict(CONFIG, **producer['recipe'])
     config.update(consumer['recipe'])
+    config['decoder_train_audio_scope'] = consumer['recipe'].get('decoder_train_audio_scope', 'full_song')
     modules = [build_model(config), build_draft(config), build_planner(config), build_decoder(config)]
     for name, module in zip(('encoder', 'draft', 'planner'), modules):
         prefix = name + '.'
@@ -59,5 +60,6 @@ def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device):
                                         decoder=describe(decoder_checkpoint, consumer),
                                         training_plan_source=consumer['recipe'].get('decoder_train_plan_source', 'predicted'),
                                         inference_plan_source='predicted',
+                                        decoder_audio_scope=config['decoder_train_audio_scope'],
                                         decoder_audio_encoder='stage_ii' if decoder_encoder is not None else 'stage_i'),
                   decoder_encoder=decoder_encoder)

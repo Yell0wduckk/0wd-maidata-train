@@ -48,6 +48,7 @@ class Conditions:
     plan_valid: torch.Tensor
     starts: tuple
     coverage: object
+    audio_scope: str = 'full_song'
 
 
 @torch.inference_mode()
@@ -56,6 +57,7 @@ def prepare_conditions(encoder, draft, planner, config, grid, timing, duration, 
                        decoder_encoder=None):
     """Fixed E_D -> D/P; optional independent E_M -> Decoder audio, each encoded once."""
     c = config
+    local_decoder = decoder_encoder is not None and c.get('decoder_train_audio_scope', 'full_song') == 'window'
     coverage = song_coverage(timing, duration, first_beat=int(grid['first_beat']), target_beats=c['target_beats'])
     starts, mapping = audio_windows([coverage], device='cpu')
     with stage(progress, 'encoder_global'):
@@ -90,7 +92,19 @@ def prepare_conditions(encoder, draft, planner, config, grid, timing, duration, 
             local = BeatMemory(*(torch.cat([getattr(p, name) for p in parts]) for name in ('values', 'beats', 'valid')))
             return assemble_full_p0(local, device_starts, device_mapping, [coverage], p0_rate=c['fpn_rates'][0])
         audio = assemble(pieces)
-        decoder_audio = assemble(decoder_pieces) if decoder_encoder is not None else audio
+        if local_decoder:
+            # The complete supervised tail also has its own local audio context.
+            tail = window_inputs([grid], [coverage.starts(include_tail=True)[-1]], [0],
+                target_beats=c['target_beats'], before_beats=c['audio_before_beats'],
+                after_beats=c['audio_after_beats'], validate_input=False)
+            tail.layout = prepare_encoder_layout(host_song.beat_centers, host_song.sample_valid.any(-1), tail,
+                radii=c['stage_attention_radii'], rates=c['fpn_rates'], before=c['audio_before_beats'],
+                context=c['audio_before_beats']+c['target_beats']+c['audio_after_beats'])
+            decoder_pieces.append(decoder_encoder.encode_windows(decoder_song, to_device(tail, device)).P0)
+            decoder_audio = BeatMemory(*(torch.cat([getattr(p, name) for p in decoder_pieces])
+                                        for name in ('values', 'beats', 'valid')))
+        else:
+            decoder_audio = assemble(decoder_pieces) if decoder_encoder is not None else audio
     inputs, _ = make_draft_inputs([ChartCondition('inference', difficulty, level, str(level))],
         ['inference'], [coverage], device=device, validate_input=False)
     with stage(progress, 'draft'):
@@ -101,4 +115,5 @@ def prepare_conditions(encoder, draft, planner, config, grid, timing, duration, 
     windows = select_windows(z, groups, target_starts, valid, target_beats=c['target_beats'], before_beats=0, after_beats=0)
     with stage(progress, 'planner'):
         plans = planner(windows)
-    return Conditions(decoder_audio, z, plans.plan_values, plans.valid, all_starts, coverage)
+    return Conditions(decoder_audio, z, plans.plan_values, plans.valid, all_starts, coverage,
+                      'window' if local_decoder else 'full_song')

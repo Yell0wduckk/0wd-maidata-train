@@ -75,7 +75,7 @@ python -m maidata.inference.materialize \
 
 网络容量、RoPE、time mixture、音频余量、Z范围、谱面历史和目标窗口使用 checkpoint 保存的模型配方；没有第二套推理架构。目标 stride 必须等于目标长度，保证目标中心连续、无重复。旧配方没有 stride 字段时使用目标长度。换容量须使用相应训练权重，不能用 CLI 强行宽松加载。
 
-推理读取并准备一次音频输入，坐标、mask及无参数布局供两套Encoder共享。E_D与E_M分别计算自己的G0，各音频覆盖窗各编码一次，分别拼接P0_D与P0_M；可学习K/V和隐藏表示不共享。D仅从P0_D一次生成含额外完整尾窗的Z，P对各目标窗预测plan12；M仅从P0_M准备音频K/V。每窗选择固定Z上下文和plan12，窗口切换、内容重试、Physical回退均不重跑两套Encoder或D/P。旧v1路径只计算E_D并共用其P0。
+推理读取并准备一次音频输入，E_D与E_M分别计算自己的G0；可学习K/V和隐藏表示不共享。E_D按覆盖窗拼接全曲P0_D，D一次生成含完整空尾窗的Z，P预测各窗plan12。新checkpoint的E_M按需要生成的目标窗编码局部24拍P0_M，含完整空尾窗，M只读取当前窗的对应bank；历史checkpoint缺少`decoder_train_audio_scope`时保留整曲P0_M语义。每窗选择固定Z上下文和plan12，内容重试及Physical回退不重跑Encoder或D/P。旧v1路径只计算E_D并共用其P0。
 
 默认先使用Physical hard mask；窗口回退预算耗尽后，从当前因果前缀仅放宽Physical拒绝，继续强制补齐和生成。每窗`physical_fallback`记录触发点与原因，实际接受的违规逐条记录在`physical_bypass`；下一窗重新开启请求的hard mask。语法、音频范围和基本时值支持始终生效。显式`--no-physical-hard-mask`则从开始放宽Physical。放宽后仍无合法语法补全、非有限预测或超过生成上限时报错并写`generation-error.json`，不将截断谱面标为成功。
 

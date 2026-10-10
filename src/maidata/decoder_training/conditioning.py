@@ -18,10 +18,11 @@ class Conditions:
     audio_indices: torch.Tensor | None = None
 
 
-def collate_conditions(items, windows, config, *, audio):
+def collate_conditions(items, windows, config, *, audio, audio_keys=None):
     # Full audio geometry is shared by songs. Only selected frozen Z context and
     # plan tensors cross IPC; current Encoder values are supplied by the model.
     songs = {item['variant']: i for i, item in enumerate(items)}
+    local_audio = None if audio_keys is None else {key: i for i, key in enumerate(audio_keys)}
     chart_sources = {chart: (item, group) for item in items for chart, group in item['dp']['chart_to_group'].items()}
     groups, unique, indices = {}, {}, []
     z_rows, window_groups, starts, plans, plan_valid, audio_mapping = [], [], [], [], [], []
@@ -42,7 +43,8 @@ def collate_conditions(items, windows, config, *, audio):
             starts.append(window['start'])
             plans.append(planner['plan_values'][row])
             plan_valid.append(planner['valid'][row])
-            audio_mapping.append(songs[item['variant']])
+            audio_mapping.append(songs[item['variant']] if local_audio is None else
+                                 local_audio[(item['variant'], window['start'])])
         indices.append(unique[identity])
     z = BeatMemory(*(pad_sequence([r[k] for r in z_rows], batch_first=True) for k in ('values','beats','valid')))
     mapping = torch.tensor(window_groups, dtype=torch.long)

@@ -5,7 +5,6 @@ from torch import nn
 
 from maidata.model import build_model, build_decoder, decoder_time_distributions
 from maidata.decoder.types import Memory
-from maidata.draft.windows import assemble_full_p0
 
 
 class DecoderTrainer(nn.Module):
@@ -13,7 +12,6 @@ class DecoderTrainer(nn.Module):
         super().__init__()
         self.encoder = build_model(config)
         self.decoder = build_decoder(config)
-        self.p0_rate = config['fpn_rates'][0]
         self.distributions = decoder_time_distributions(config)
         for module in self.modules():
             if hasattr(module, 'validate_inputs'):
@@ -21,10 +19,9 @@ class DecoderTrainer(nn.Module):
 
     def conditions(self, batch):
         inputs = batch.online_audio
-        local = self.encoder(inputs.songs, inputs.windows)
-        audio = assemble_full_p0(local.P0, inputs.windows.target_start_beats,
-            inputs.windows.window_to_song, inputs.coverages, p0_rate=self.p0_rate,
-            layout=inputs.p0_layout)
+        local = self.encoder(inputs.songs, inputs.windows,
+                             window_chunks=inputs.windows.layout['training_chunks'])
+        audio = local.P0
         conditions = replace(batch.conditions, audio=Memory(audio.values, audio.beats, audio.valid))
         # Fixed D/P caches may have BF16 values while this run uses FP32.
         device = conditions.audio.values.device.type

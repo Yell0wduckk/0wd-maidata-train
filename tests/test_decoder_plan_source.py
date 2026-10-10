@@ -53,7 +53,7 @@ def test_gt_and_predicted_select_same_window_identity_and_leave_z_audio_labels_u
         assert torch.equal(a.tokens.types, b.tokens.types)
     for index, window in enumerate(expected):
         unique = gt.conditions.occurrence_mapping[index]
-        item = items[gt.conditions.audio_mapping[unique]]
+        item = items[gt.online_audio.windows.window_to_song[gt.conditions.audio_mapping[unique]]]
         cached = item['gt_plan']
         torch.testing.assert_close(gt.conditions.plan[unique],
             cached['plan_values'][cached['window_index'][window['identity'][0]]], rtol=0, atol=0)

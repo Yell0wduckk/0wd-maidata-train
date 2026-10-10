@@ -75,23 +75,18 @@ def test_dataset_reads_one_existing_grid_and_dp_per_selected_variant(config, tmp
     assert [w['identity'] for w in got['windows']] == [(rows[i]['window_id'], rows[i]['occurrence']) for i in selected]
 
 
-def test_online_placeholder_matches_exact_center_assembly_and_full_coverage(config, monkeypatch):
+def test_online_placeholder_encodes_only_selected_windows_and_deduplicates_charts(config, monkeypatch):
     items = [training_item(i, config, monkeypatch, remaster=i == 0) for i in range(2)]
-    # Extra chart/tail supervision cannot duplicate audio coverage or become E input.
     with patch('maidata.model.build_model', side_effect=AssertionError('worker cannot construct E')):
         online, placeholder = collate_online_audio(items, config)
     assert len(online.songs.mel_patches) == 2
-    assert online.windows.window_to_song.tolist() == [0, 1]
-    assert online.windows.target_start_beats.tolist() == [0., 0.]
-    assert all(c.starts(include_tail=True)[-1] == 3 for c in online.coverages)
-    assert placeholder.values.shape == (2, 9, 0)
+    assert online.windows.window_to_song.tolist() == [0, 0, 1, 1]
+    assert online.windows.target_start_beats.tolist() == [0., 3., 0., 3.]
+    assert online.audio_keys == [('0', 0), ('0', 3), ('1', 0), ('1', 3)]
+    assert placeholder.values.shape == (4, 18, 0)
     layout = online.windows.layout
-    local = ScaleMemory(torch.randn(*layout['grids'][0].shape, config['d_model']),
-                        layout['grids'][0], layout['resample'][0]['valid'])
-    expected = assemble_full_p0(local, online.windows.target_start_beats, online.windows.window_to_song,
-        online.coverages, p0_rate=config['fpn_rates'][0], layout=online.p0_layout)
-    torch.testing.assert_close(placeholder.beats, expected.beats, rtol=0, atol=0)
-    assert torch.equal(placeholder.valid, expected.valid)
+    torch.testing.assert_close(placeholder.beats, layout['grids'][0], rtol=0, atol=0)
+    assert torch.equal(placeholder.valid, layout['resample'][0]['valid'])
 
 
 def test_interleaved_occurrences_keep_order_and_fixed_dp_under_packed_transport(config, monkeypatch):
@@ -102,17 +97,17 @@ def test_interleaved_occurrences_keep_order_and_fixed_dp_under_packed_transport(
     expected = sorted([w for item in items for w in item['windows']], key=lambda w: w['sequence_index'])
     packet = collate_audio(items, config=config, packed=True)
     batch = packet.to('cpu')
-    assert batch.audio_variants == ['0', '1'] and batch.audio_lengths == [9, 9]
+    assert batch.audio_variants == ['0', '1'] and batch.audio_lengths == [36, 36]
     assert [w['identity'] for w in batch.windows] == [w['identity'] for w in expected]
     assert batch.conditions.audio.values.shape[-1] == 0
-    assert batch.online_audio.windows.layout and batch.online_audio.p0_layout
+    assert batch.online_audio.windows.layout['training_chunks']
     assert len(packet.context.buffers) <= 5
     assert batch.online_audio.songs.mel_patches.data_ptr() == packet.online_audio.songs.mel_patches.data_ptr()
     torch.testing.assert_close(batch.online_audio.songs.mel_patches[0], torch.from_numpy(items[0]['grid']['mel_patches']))
     conditions = batch.conditions
     for i, window in enumerate(expected):
         unique = conditions.occurrence_mapping[i]
-        item = items[conditions.audio_mapping[unique]]
+        item = items[batch.online_audio.windows.window_to_song[conditions.audio_mapping[unique]]]
         row = item['dp']['window_index'][window['identity'][0]]
         torch.testing.assert_close(conditions.plan[unique], item['dp']['planner']['plan_values'][row], rtol=0, atol=0)
     assert not conditions.decoder_z.values.requires_grad and not conditions.plan.requires_grad
@@ -138,27 +133,17 @@ def test_online_geometry_covers_unequal_songs_and_all_local_windows(config):
         mel[~valid], aux[~valid] = 0, 0
         grid = dict(first_beat=np.array(first), beat_centers=beats, sample_valid=valid,
                     mel_patches=mel, aux32_grid=aux, aux32_centers=aux.mean(1))
-        return dict(grid=grid, coverage=coverage)
+        return dict(variant=str(seed), grid=grid, coverage=coverage, windows=[dict(start=3. if seed == 0 else 0.)])
 
-    # Neither the shuffled target selection nor the extra supervised tail may
-    # crop a variant's complete bank; the long song has four real audio windows.
+    # The long song has four coverage windows, but this batch requests only one.
     items = [item(-3, 8.4, 0), item(0, 2.4, 1)]
     online, placeholder = collate_online_audio(items, config)
-    assert online.windows.target_start_beats.tolist() == [-3., 0., 3., 6., 0.]
-    assert online.windows.window_to_song.tolist() == [0, 0, 0, 0, 1]
-    assert placeholder.values.shape == (2, 36, 0)
-    layout = online.windows.layout
-    local = ScaleMemory(torch.randn(*layout['grids'][0].shape, config['d_model']),
-                        layout['grids'][0], layout['resample'][0]['valid'])
-    expected = assemble_full_p0(local, online.windows.target_start_beats, online.windows.window_to_song,
-        online.coverages, p0_rate=config['fpn_rates'][0], layout=online.p0_layout)
-    torch.testing.assert_close(placeholder.beats, expected.beats, rtol=0, atol=0)
-    assert torch.equal(placeholder.valid, expected.valid)
-    assert not placeholder.valid[0, :9].any()  # negative-beat real-song padding
-    assert not placeholder.valid[1, 9:].any()  # shorter-song batch padding
-    assert placeholder.beats[1, 9:].count_nonzero() == 0
-    assert placeholder.beats[0, 9:].count_nonzero() == 27
+    assert online.windows.target_start_beats.tolist() == [3., 0.]
+    assert online.windows.window_to_song.tolist() == [0, 1]
+    assert placeholder.values.shape == (2, 18, 0)
+    assert placeholder.beats[0, 0] == 1 + .5/3
     assert online.songs.sample_valid[1, 3:].count_nonzero() == 0
+    assert online.audio_keys == [('0', 3.), ('1', 0.)]
 
 
 def test_random_window_sampler_deduplicates_variants_without_reordering(config):

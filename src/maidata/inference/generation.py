@@ -156,7 +156,8 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
             torch.tensor([start], device=device, dtype=torch.float32), torch.tensor([True], device=device),
             target_beats=config['target_beats'], before_beats=config['decoder_z_before_beats'],
             after_beats=config['decoder_z_after_beats'])
-        memory = decoder.prepare_memory(audio_kv, torch.tensor([0], device=device), selected.memory,
+        audio_index = i if conditions.audio_scope == 'window' else 0
+        memory = decoder.prepare_memory(audio_kv, torch.tensor([audio_index], device=device), selected.memory,
                                         conditions.plans[i:i+1], conditions.plan_valid[i:i+1])
         session.reset_attention()
         boundary, session.cache, history_count = prefill(decoder, memory, groups, timing, start_tick,

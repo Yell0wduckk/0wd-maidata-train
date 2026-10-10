@@ -115,5 +115,9 @@ class AudioEncoder(nn.Module):
                 local = self.transitions[stage_index](local)
         return self.pyramid(stages, inputs.target_start_beats, layout=layout)
 
-    def forward(self, song_inputs: SongInputs, window_inputs: WindowInputs) -> EncoderOutput:
-        return self.encode_windows(self.prepare_song(song_inputs), window_inputs)
+    def forward(self, song_inputs: SongInputs, window_inputs: WindowInputs, *, window_chunks=None) -> EncoderOutput:
+        memory = self.prepare_song(song_inputs)
+        if window_chunks is not None:
+            from .chunking import encode_chunks
+            return encode_chunks(self, memory, window_inputs, window_chunks)
+        return self.encode_windows(memory, window_inputs)

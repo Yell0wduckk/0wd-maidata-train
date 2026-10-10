@@ -92,14 +92,17 @@ def test_two_audio_encoders_share_only_inputs_and_layouts_not_draft_features(con
     assert draft_song.call_count == decoder_song.call_count == draft_call.call_count == plan_call.call_count == 1
     assert draft_song.call_args.args[0] is decoder_song.call_args.args[0]
     expected = joint.coverage.audio_windows
-    assert draft_windows.call_count == decoder_windows.call_count == windows_input.call_count == layouts.call_count == expected
+    assert draft_windows.call_count == expected
+    assert decoder_windows.call_count == windows_input.call_count == layouts.call_count == expected + 1
     for first, second in zip(draft_windows.call_args_list, decoder_windows.call_args_list):
         assert first.args[0] is not second.args[0]  # independent G0 and projected song features
         assert first.args[1] is second.args[1] and first.args[1].layout is not None
     assert torch.equal(draft_call.call_args.args[0].values, teacher.audio.values)
     assert torch.equal(joint.z.values, teacher.z.values) and torch.equal(joint.plans, teacher.plans)
-    assert torch.equal(joint.audio.valid, teacher.audio.valid) and torch.equal(joint.audio.beats, teacher.audio.beats)
-    assert not torch.allclose(joint.audio.values, teacher.audio.values)
+    assert joint.audio_scope == 'window'
+    assert joint.audio.values.shape[:2] == (len(joint.starts), 18)
+    assert joint.audio.beats[0, 0] == -2 + .5/3
+    assert joint.audio.beats[-1, 0] == joint.starts[-1] - 2 + .5/3
     assert joint.starts == teacher.starts and joint.coverage == teacher.coverage
     assert {e['encoder'] for e in events if e['event'] == 'encoder_progress'} == {'draft', 'decoder'}
 

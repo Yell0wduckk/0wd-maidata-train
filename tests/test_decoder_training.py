@@ -356,8 +356,9 @@ def test_real_dataset_reads_fields_supports_and_plan_without_rebuilding(config,t
             length = target+(0 if w['history_dropped'] else history)
             assert length==w['length']
             lengths.append(length)
-        cost = batch_cost([len(plan.groups[v]['encoder_starts_beats'])*c['target_beats']*c['fpn_rates'][0]
-                           for v in batch.audio_variants],lengths,small)
+        context = c['audio_before_beats'] + c['target_beats'] + c['audio_after_beats']
+        cost = batch_cost([len({w['start'] for w in p['windows']})*context*c['fpn_rates'][0]
+                           for p in parts],lengths,small)
         assert cost==batch.budget_cost
     expected = [(r['window_id'],r['occurrence']) for r in plan.occurrences(3)]
     assert seen==expected

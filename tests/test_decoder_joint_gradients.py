@@ -64,10 +64,12 @@ def test_gradient_bridge_matches_direct_graph_and_updates_encoder_once_per_batch
     rows = [training_item(0, config, monkeypatch, remaster=True),
             training_item(1, config, monkeypatch)]
     c = dict(config, decoder_train_chunk_token_budget=12,
+             decoder_train_encoder_window_chunk_size=1,
              decoder_train_gradient_accumulation_steps=2 if accumulate else 1)
     batches = ([collate_audio([row], config=c, packed=True) for row in rows] if accumulate else
                [collate_audio(rows, config=c, packed=True)])
-    unchunked = dict(c, decoder_train_chunk_token_budget=10000)
+    unchunked = dict(c, decoder_train_chunk_token_budget=10000,
+                    decoder_train_encoder_window_chunk_size=10000)
     reference_batches = ([collate_audio([row], config=unchunked, packed=True) for row in rows] if accumulate else
                          [collate_audio(rows, config=unchunked, packed=True)])
     assert all(len(b.chunks) > 1 for b in batches)

@@ -11,6 +11,8 @@ PATH_KEYS = tuple('decoder_train_'+k for k in ('checkpoint','p0_cache','dp_cache
 
 
 def validate(config):
+    if config['decoder_train_audio_scope'] != 'window':
+        raise ValueError('stage II encodes only selected local audio windows')
     keys = [k for k in config if k.startswith('decoder_train_')]
     if config['decoder_train_plan_source'] not in ('predicted','gt'):
         raise ValueError('decoder_train_plan_source must be predicted or gt')
@@ -20,7 +22,7 @@ def validate(config):
     missing = [k for k in keys if k not in export_only and config[k] is None]
     if missing:
         raise ValueError('set explicit Decoder training recipe: '+', '.join(missing))
-    for key in ('gradient_accumulation_steps','row_budget','chunk_token_budget','scheduler_epochs','stop_after_epochs'):
+    for key in ('gradient_accumulation_steps','row_budget','chunk_token_budget','encoder_window_chunk_size','scheduler_epochs','stop_after_epochs'):
         if type(config['decoder_train_'+key]) is not int or config['decoder_train_'+key] < 1:
             raise ValueError(f'{key} must be a positive integer')
     for key in ('warmup_steps','workers'):

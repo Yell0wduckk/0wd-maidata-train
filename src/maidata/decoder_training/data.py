@@ -9,7 +9,7 @@ from torch.utils.data import Dataset, DataLoader
 
 from maidata.training.data import map_tensors, worker_init
 from maidata.preparation.cache import load_grid, song_inputs, window_inputs
-from maidata.draft.windows import song_coverage, audio_windows
+from maidata.draft.windows import song_coverage
 from maidata.time import TimingMap
 from .ordering import history_dropped
 from .conditioning import collate_conditions
@@ -75,11 +75,10 @@ class DecoderDataset(Dataset):
 
 @dataclass
 class OnlineAudio:
-    """One full coverage per unique batch variant; learned values are never cached."""
+    """Only selected local windows; song-level G0 inputs are shared by variant."""
     songs: object
     windows: object
-    coverages: list
-    p0_layout: dict
+    audio_keys: list
 
 
 @dataclass
@@ -106,12 +105,17 @@ class Batch:
 
 
 def collate_online_audio(items, config):
-    """Reuse stage-I worker layouts and the exact public center-P0 geometry."""
+    """Encode one 24-beat local bank per selected (variant, start), never all song windows."""
     from maidata.audio.layout import prepare_encoder_layout
-    from maidata.draft.layout import prepare_p0
     from maidata.decoder.types import Memory
-    grids, coverages = [item['grid'] for item in items], [item['coverage'] for item in items]
-    starts, mapping = audio_windows(coverages, device='cpu')
+    grids = [item['grid'] for item in items]
+    keys, owners = [], []
+    for song, item in enumerate(items):
+        for start in dict.fromkeys(w['start'] for w in item['windows']):
+            keys.append((item['variant'], start))
+            owners.append(song)
+    starts = torch.tensor([key[1] for key in keys], dtype=torch.float32)
+    mapping = torch.tensor(owners, dtype=torch.long)
     songs = song_inputs(grids, validate_input=False)
     windows = window_inputs(grids, starts.numpy(), mapping.numpy(), target_beats=config['target_beats'],
         before_beats=config['audio_before_beats'], after_beats=config['audio_after_beats'], validate_input=False)
@@ -119,15 +123,22 @@ def collate_online_audio(items, config):
         radii=config['stage_attention_radii'], rates=config['fpn_rates'], before=config['audio_before_beats'],
         context=config['audio_before_beats']+config['target_beats']+config['audio_after_beats'])
     windows.layout = layout
-    p0 = prepare_p0(layout['grids'][0], layout['resample'][0]['valid'], starts, mapping, coverages,
-                    p0_rate=config['fpn_rates'][0])
-    indices, present = p0['indices'], p0['present']
-    beats = layout['grids'][0].flatten()[indices].masked_fill(~present, 0)
-    valid = layout['resample'][0]['valid'].flatten()[indices] & present
+    from maidata.audio.chunking import slice_windows
+    size = config['decoder_train_encoder_window_chunk_size']
+    chunks = []
+    for start in range(0, len(starts), size):
+        stop = min(start + size, len(starts))
+        subset = slice_windows(windows, start, stop, None)
+        chunk_layout = prepare_encoder_layout(songs.beat_centers, songs.sample_valid.any(-1), subset,
+            radii=config['stage_attention_radii'], rates=config['fpn_rates'], before=config['audio_before_beats'],
+            context=config['audio_before_beats']+config['target_beats']+config['audio_after_beats'])
+        chunks.append((start, stop, chunk_layout))
+    layout['training_chunks'] = tuple(chunks)
+    beats, valid = layout['grids'][0], layout['resample'][0]['valid']
     # No dummy d_model-wide bank crosses IPC/H2D. The trainable Encoder replaces
     # these zero-width values before M prepares its audio K/V.
     placeholder = Memory(torch.empty((*beats.shape, 0), dtype=torch.float32), beats, valid)
-    return OnlineAudio(songs, windows, coverages, p0), placeholder
+    return OnlineAudio(songs, windows, keys), placeholder
 
 
 def collate_audio(items, *, config, packed=False):
@@ -136,8 +147,8 @@ def collate_audio(items, *, config, packed=False):
     if any('sequence_index' in w for w in windows):
         windows.sort(key=lambda w: w['sequence_index'])
     online, audio = collate_online_audio(items, config)
-    lengths = [coverage.audio_windows*coverage.target_beats*config['fpn_rates'][0] for coverage in online.coverages]
-    batch = Batch(collate_conditions(items, windows, config, audio=audio), windows, variants, lengths,
+    lengths = [sum(key[0] == variant for key in online.audio_keys)*audio.valid.shape[1] for variant in variants]
+    batch = Batch(collate_conditions(items, windows, config, audio=audio, audio_keys=online.audio_keys), windows, variants, lengths,
                   online_audio=online)
     from .preparation import prepare_batch
     prepare_batch(batch, config)
