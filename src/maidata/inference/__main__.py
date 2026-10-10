@@ -35,7 +35,7 @@ def parser():
     p.add_argument('--encoder-window-batch', type=int, default=8)
     p.add_argument('--max-tokens-per-window', type=int, default=defaults.max_tokens_per_window)
     p.add_argument('--max-tokens-per-moment', type=int, default=defaults.max_tokens_per_moment,
-                   help='Hard content-token cap per onset; reserve mandatory action completion, then advance MOMENT')
+                   help='Stop onset expansion at threshold; append required completion fields, then advance MOMENT')
     p.add_argument('--max-backtracks-per-window', type=int, default=defaults.max_backtracks_per_window)
     p.add_argument('--rollback-tokens', type=int, default=defaults.rollback_tokens, help='Search frontier, never a history token limit')
     p.add_argument('--physical-hard-mask', action=argparse.BooleanOptionalAction, default=defaults.physical_hard_mask)

@@ -255,7 +255,7 @@ def test_limit_fails_without_silent_truncation(config,geometry):
             options=GenerationOptions(max_tokens_per_window=1,physical_hard_mask=False))
 
 
-def test_moment_cap_forces_advance_and_reserves_action_completion(config, geometry):
+def test_moment_cap_forces_advance_and_appends_required_completion(config, geometry):
     model = build_decoder(config).eval()
     timing = TimingMap([(0,120)])
     prepared = conditions(config,timing,2.)
@@ -268,19 +268,18 @@ def test_moment_cap_forces_advance_and_reserves_action_completion(config, geomet
     specs = decoder_time_distributions(config)
     h = torch.zeros(config['decoder_dim'])
     with torch.inference_mode():
-        # A single remaining slot cannot begin a multi-token action.
-        notes = list(sampler.contents(model,h,'NOTE',oracle,timing,specs,
-            end_tick=288,cap_tick=384,moment_remaining=1))
-        assert notes and all(n.kind in ('tap','touch') for n in notes)
         routed = model.begin(pack_tokens([[Moment(0)]],[[0.]],device='cpu'),memory)
         token,_ = next(sampler.choices(model,routed,oracle,timing,specs,
             end_tick=288,cap_tick=384,moment_remaining=0))
         assert isinstance(token,(Moment,TimeTarget))
         # A chain must finish with duration instead of appending another route.
         physical.accept(Note.make('slide','A1'))
+        token,_ = next(sampler.choices(model,routed,oracle,timing,specs,
+            end_tick=288,cap_tick=384,moment_remaining=0))
+        assert isinstance(token,Route)
         physical.accept(Route(0,0))
         token,_ = next(sampler.choices(model,routed,oracle,timing,specs,
-            end_tick=288,cap_tick=384,moment_remaining=1))
+            end_tick=288,cap_tick=384,moment_remaining=0))
         assert isinstance(token,SlideDuration)
 
 
@@ -304,3 +303,4 @@ def test_generation_caps_repeated_notes_at_one_onset(config, geometry):
     groups = real_onsets(result.tokens,timing,sequence_start_tick=result.start_tick)
     assert groups and all(len(g.content) <= 3 for g in groups)
     assert any(len(g.content) == 3 for g in groups)
+

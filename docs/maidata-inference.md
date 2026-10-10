@@ -1,13 +1,14 @@
 # 当前模型整曲推理与 maidata 物化
 
-`python -m maidata.inference` 加载当前 `maidata` 的 Encoder、Draft D、Planner P 与 Decoder M，生成五类新字段和 Chart IR。`python -m maidata.inference.materialize` 独立把 IR 写成可播放的 `maidata.txt` 与配套音频。两者不导入旧 `maimai_*` Python 包，不读取旧模型版本表；旧仓库仅作为整曲调度、MiaCode 调用和 simai 排版的实现参考。
+`python -m maidata.inference` 加载当前 `maidata` 的两套独立音频 Encoder、Draft D、Planner P 与 Decoder M，生成五类新字段和 Chart IR。阶段一 E_D 服务固定 Draft/Planner，阶段二 E_M 服务 M 的直接音频输入。`python -m maidata.inference.materialize` 独立把 IR 写成可播放的 `maidata.txt` 与配套音频。两者不导入旧 `maimai_*` Python 包，不读取旧模型版本表；旧仓库仅作为整曲调度、MiaCode 调用和 simai 排版的实现参考。
 
 窗口与历史遵循 [推理设计](../../0wd-v3-refactor-docs/new-inference.md)、[Decoder 设计第5～6节](../../0wd-v3-refactor-docs/new-decoder.md)以及[当前字段接口](chart-fields-physical.md)。
 
 ## 推理输入
 
-- 显式指定两份权重：阶段一 `maidata.encoder-draft-training.v1` checkpoint 提供 E/D/P；阶段二 `maidata.decoder-training.v1` checkpoint 提供 M。R不构建、不运行。
-- 网络按 checkpoint 的 `recipe` 构建；E/D/P与M的表示参数须一致，权重严格加载。不比较源码哈希，不加载 optimizer、训练计划或训练缓存清单。
+- 显式指定两份权重：阶段一 `maidata.encoder-draft-training.v1` checkpoint 提供固定 E_D/D/P；阶段二 `maidata.decoder-training.v2` checkpoint 提供联合训练后的 E_M/M。R不构建、不运行。
+- 两套Encoder采用相同配置、独立参数；网络按checkpoint的`recipe`构建并严格加载，不把E_M替换成E_D，也不让D读取E_M的P0。当前加载器核对Encoder/Draft/Planner表示配置，不比较权重或源码哈希，不加载optimizer、训练计划或训练缓存清单。
+- 旧`maidata.decoder-training.v1`仍支持推理：它只有M，沿用E_D的P0作为M音频条件。报告以`decoder_audio_encoder=stage_i`区分；v2为`stage_ii`。旧v1推理兼容不代表可作为新E_M/M联合训练的完整轮续训。
 - 音频、完整 BPM/first 时间映射、目标 difficulty_id 与精确数值 level。无需源谱、真实 planner 或谱面结束时间。
 - 二选一：`--grid` 直接读取既有训练格式音频 NPZ，或者 `--mel-stats` 使用训练时固定的 Mel 统计从原音频提取 Mel128/全曲 aux32。引用旧 Mel 的 grid 可用 `--mel-root` 搬迁路径。已验收 grid 按指定输入直接读取，不全量扫描或重哈希。
 - `--geometry` 指向既有 Physical path-catalog；`--slide-data` 指向 MiaCode `slide_data.json`。只读资源，不重建几何。
@@ -60,9 +61,9 @@ python -m maidata.inference.materialize \
 | `--device / --precision` | cuda / bf16；CPU 可显式选择 cpu / fp32 |
 | `--temperature` | 1；0 为确定性 argmax，正值为温度采样 |
 | `--seed` | 20261010；独立 CPU sampling generator，重试不重复同一候选 |
-| `--encoder-window-batch` | 8；控制 E 分块大小，不改变全曲 P0/Z 或 AR 目标窗 |
+| `--encoder-window-batch` | 8；控制两套Encoder的局部窗口分块大小，不改变全曲P0/Z或AR目标窗 |
 | `--max-tokens-per-window` | 512；当前新字段 token 数上限，不是旧行数或历史截断预算 |
-| `--max-tokens-per-moment` | 20；单一起音内容token硬上限，不含MOMENT本身；为NOTE/ROUTE预留必需duration，达到上限后强制选择下一MOMENT或合法窗末终端，不删除已接受动作 |
+| `--max-tokens-per-moment` | 20；不含MOMENT本身；达到阈值后停止扩展，只补齐当前动作必需的ROUTE/时值，再推进MOMENT或合法窗末终端；必要收束字段允许超出阈值 |
 | `--max-backtracks-per-window` | 128；合法补全搜索的回退次数上限 |
 | `--rollback-tokens` | 16；保留的搜索回退深度，不限制音符链表示或模型输入历史长度 |
 | `--physical-hard-mask` | 开启；使用原始 Physical 拒绝位，完整动作提交时再次判定 |
@@ -73,7 +74,7 @@ python -m maidata.inference.materialize \
 
 网络容量、RoPE、time mixture、音频余量、Z范围、谱面历史和目标窗口使用 checkpoint 保存的模型配方；没有第二套推理架构。目标 stride 必须等于目标长度，保证目标中心连续、无重复。旧配方没有 stride 字段时使用目标长度。换容量须使用相应训练权重，不能用 CLI 强行宽松加载。
 
-推理仅计算一次全曲 G0；每个音频覆盖窗编码一次，提取中心 P0拼接成全曲bank；D一次生成含额外完整尾窗的Z，P对各目标窗预测plan12。M的音频投影按曲复用，每窗选择Z上下文和plan12。窗口切换、内容重试、Physical回退均不重跑E/D/P。
+推理读取并准备一次音频输入，坐标、mask及无参数布局供两套Encoder共享。E_D与E_M分别计算自己的G0，各音频覆盖窗各编码一次，分别拼接P0_D与P0_M；可学习K/V和隐藏表示不共享。D仅从P0_D一次生成含额外完整尾窗的Z，P对各目标窗预测plan12；M仅从P0_M准备音频K/V。每窗选择固定Z上下文和plan12，窗口切换、内容重试、Physical回退均不重跑两套Encoder或D/P。旧v1路径只计算E_D并共用其P0。
 
 若显式使用 `--no-physical-hard-mask`，语法和音频范围仍生效，实际接受的Physical违规记录在 `physical_bypass`，报告明确记录关闭状态。默认运行不存在自动关约束或静默接受违规的回退。搜索失败、非有限预测或超过生成上限报错并写 `generation-error.json`，不将截断谱面标为成功。
 
@@ -90,7 +91,7 @@ python -m maidata.inference.materialize \
 
 ## 进度输出
 
-CLI默认在stderr显示权重加载、音频输入、几何资源、Encoder全曲准备/局部窗口、Draft、Planner、自回归生成与产物写入的开始和完成。自回归逐窗显示窗口序号、拍范围，窗内每隔约2秒显示已接受token数、回退次数和当前拍；即使未达到输出间隔，窗口完成也立即显示。stdout仍只保留原有最终JSON，重定向结果或脚本解析时无需滤除进度。使用`--no-progress`静默，或用`--progress-interval 5`降低刷新频率；这些设置不改变采样、约束、模型条件或详细trace。
+CLI默认在stderr显示权重加载、音频输入、几何资源、Draft encoder与Decoder encoder各自的全曲准备/局部窗口、Draft、Planner、自回归生成与产物写入的开始和完成。自回归逐窗显示窗口序号、拍范围，窗内每隔约2秒显示已接受token数、回退次数和当前拍；即使未达到输出间隔，窗口完成也立即显示。stdout仍只保留原有最终JSON，重定向结果或脚本解析时无需滤除进度。使用`--no-progress`静默，或用`--progress-interval 5`降低刷新频率；这些设置不改变采样、约束、模型条件或详细trace。
 
 Python接口`prepare_conditions(..., progress=None)`与`generate(..., progress=None)`默认静默；可传入接收事件字典的callback。事件包括`stage_start/stage_done/stage_error`、`encoder_progress`、`window_start/window_progress/window_done`。CLI reporter只读取已有的Python计数和单调时钟，不为进度读取GPU标量或调用`torch.cuda.synchronize()`。输出的时间用于观察壁钟进度，不是逐阶段精确CUDA基准。
 
@@ -109,7 +110,7 @@ Python接口`prepare_conditions(..., progress=None)`与`generate(..., progress=N
 | 模块 | 职责 |
 |---|---|
 | `checkpoint` | 显式权重与模型配方加载 |
-| `conditioning` | 特征适配、一次性全曲E/D/P；不调用M或谱面标签 |
+| `conditioning` | 共享输入/布局，分别计算E_D与E_M全曲P0，再从E_D计算D/P；不调用M或谱面标签 |
 | `sampling` | Router/内容分层采样、时间cell积分、候选规则支持 |
 | `time_support` | 推理时间坐标缓存及向量化候选适配；不改变训练支持 |
 | `physical.inference` | 推理专用raw规则查询、局部字段支撑及前缀缓存 |
@@ -124,6 +125,6 @@ Python接口`prepare_conditions(..., progress=None)`与`generate(..., progress=N
 
 ## 验证范围
 
-小型真实E/D/P/M的CPU执行覆盖权重加载、全曲条件复用、E分块等价、预测plan12、增量/prefill一致、字段条件采样、回退、生成上限、跨窗完整动作及连续空窗。原生MiaCode覆盖复杂链/分支/WiFi、短hold、变BPM、负拍与空谱的完整导出回读。入口测试实际串联 checkpoint→grid→模型→IR→MiaCode→maidata与音频；原始音频提取另验证固定训练特征算法。
+小型真实模型的CPU执行覆盖权重加载、全曲条件复用、Encoder分块等价、预测plan12、增量/prefill一致、字段条件采样、回退、生成上限、跨窗完整动作及连续空窗。双Encoder测试覆盖v2严格成套加载、E_D/E_M参数独立、各自每曲只prepare一次，以及改变E_M后Z/plan仍与固定教师路径逐位一致；旧v1推理兼容另测。原生MiaCode覆盖复杂链/分支/WiFi、短hold、变BPM、负拍与空谱的完整导出回读。入口测试实际串联checkpoint→grid→模型→IR→MiaCode→maidata与音频；原始音频提取另验证固定训练特征算法。
 
 这些测试使用小模型/合成输入，不代表已对真实训练checkpoint完成CUDA整曲生成、速度或谱面质量验收。实际谱面质量以用户评谱为准。
