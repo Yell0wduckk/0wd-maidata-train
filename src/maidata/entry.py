@@ -47,13 +47,28 @@ CONFIG = {
     "reconstruction_ffn_dim": 512,
     "reconstruction_dropout": 0.1,
     "reconstruction_norm_eps": 1e-5,
-    "reconstruction_query_rows": None,  # Set from new-field lengths including SEGMENT_END.
+    "reconstruction_query_rows": 207,  # Per target window (pilot320), including SEGMENT_END.
     "reconstruction_before_beats": 16,
     "reconstruction_after_beats": 16,
     "reconstruction_position_base": 10000.0,
     "reconstruction_position_scale": 1.0,
     "reconstruction_label_smoothing": 0.05,
     "reconstruction_smooth_l1_beta": 1.0,
+    "reconstruction_classification_weight": 1.0,
+    "reconstruction_time_weight": 1.0,
+    "reconstruction_count_weight": 1.0,
+    "planner_continuous_weight": 1.0,
+    "planner_category_weight": 0.25,
+    "pretrain_optimizer": "adamw",
+    "pretrain_learning_rate": 2e-4,
+    "pretrain_weight_decay": 0.01,
+    "pretrain_gradient_clip": 1.0,
+    "pretrain_warmup_steps": 200,  # Optimizer updates, not microbatches or windows.
+    "pretrain_scheduler_epochs": 100,
+    "pretrain_stop_after_epochs": 50,  # Absolute completed epoch, including after resume.
+    "pretrain_precision": "bf16",
+    "pretrain_initialization": "scratch",
+    "pretrain_seed": 20261010,
 }
 
 

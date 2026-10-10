@@ -29,9 +29,31 @@ python -m maidata --component planner
 
 D 默认8层/256维/8头/4专家（每专家 FFN512），输出128维；难度 embedding8，level归一化(10,5)，span除以16；dropout0。P 默认128维/4头/MLP256/dropout0.1。R 默认2层/128维/4头/FFN512/dropout0.1，前16＋目标16＋后16拍；各宽度独立，不要求等于 Encoder。
 
-`reconstruction_query_rows=None` 表示尚未绑定数据容量。调用方用 `required_query_rows` 汇总所选训练/验证的新字段行数元数据（每窗包含 `SEGMENT_END`），写入配置后构建 R；不按每个样本实际长度改变查询数量。超容量明确报错。它不要求现在选择训练集，也不会自动扫描数据。
+D始终一拍生成一个Z token。默认16拍目标对应16个Z；R读取含邻窗的48个Z，输出该16拍目标窗的固定行序列。R的行容量不改变D的每拍token数量。
 
-`target_beats` 与音频余量、R余量分别配置；D/P 的 RoPE 共用 Encoder 的 base/scale。R 保留独立连续正弦表示，`reconstruction_position_base/scale` 默认10000/1。CE smoothing和SmoothL1 beta分别由配置传入，默认0.05/1；学习率、阶段长度、数据集和损失组合权重未设置。
+`reconstruction_query_rows` 默认207，来自pilot320所选343谱、8828个16拍基础窗口的真实R标签，包含 `SEGMENT_END`。训练侧最大207，验证侧最大138；全部窗口p50/p95/p99为61/99/119，空窗656个。最大窗为 `11847:5:17`（272–288拍），101行MOMENT＋105行NOTE＋1行结束标记。逐窗结果见[容量统计](../../artifacts/encoder-draft-capacity-pilot320-20261010/capacity.json)。容量不随当前GT长度变化；换数据或窗口布局时显式配置对应容量，超容量报错，不截断、不在模型构建时扫描数据。
+
+`target_beats` 与音频余量、R余量分别配置；D/P 的 RoPE 共用 Encoder 的 base/scale。R 保留独立连续正弦表示，`reconstruction_position_base/scale` 默认10000/1。CE smoothing和SmoothL1 beta分别由配置传入，默认0.05/1。
+
+### 阶段一训练默认值
+
+| 配置项 | 默认值 |
+|---|---|
+| R分类／时间／count权重 | `reconstruction_classification_weight/time_weight/count_weight` 均为1 |
+| Planner连续／类别权重 | `planner_continuous_weight=1`、`planner_category_weight=0.25` |
+| 优化器 | `pretrain_optimizer='adamw'`；所有可训练E/D/R/P参数同一参数组，标准AdamW betas/eps |
+| 学习率／weight decay／梯度裁剪 | `pretrain_learning_rate=2e-4`、`pretrain_weight_decay=0.01`、`pretrain_gradient_clip=1.0` |
+| 线性warmup | `pretrain_warmup_steps=200` 次optimizer update；不按窗口或累积小批次计数 |
+| 余弦调度／绝对停止 | `pretrain_scheduler_epochs=100`、`pretrain_stop_after_epochs=50` |
+| 精度／初始化／种子 | `pretrain_precision='bf16'`、`pretrain_initialization='scratch'`、`pretrain_seed=20261010` |
+| 数据 | [既有split](../../artifacts/pilot320-master-20261010/encoder-draft-split.json)：训练288首307谱，验证32首36谱；同曲及相同音频标识不跨侧 |
+| 监督实例 | [阶段一基础计划](../../artifacts/pilot320-encoder-draft-sampling-20261010/README.md)：训练7924窗、验证904窗，每个基础窗监督1次，无复杂节奏过采样 |
+
+以上数值均来自唯一 `entry.CONFIG`，可显式改动。独立的 `maidata.training.pretrain` 消费损失权重、optimizer、裁剪、seed、autocast和调度配置，不持有模型或数据。先为新建E/D/R/P设置随机种子，再从头构建；完整轮续训恢复RNG，不重新播种或重新初始化。CUDA沿用原仓库bf16 autocast，参数和优化器状态不整体转为bf16，损失仍按FP32计算；CPU使用普通精度。
+
+`make_scheduler` 接收完整100轮每轮的optimizer更新次数，按总和构造线性warmup＋余弦曲线；该次数须来自实际完整音频组batch与梯度累积安排。`epoch_range(completed_epochs, config)` 以已完成轮数生成后续轮：完成40轮则运行41–50，完成50轮则不再运行，不把恢复后的50理解为再跑50轮，也不将调度曲线缩为50轮。完整停止与原仓库 [audio_draft](../src/maimai_baseline/training/audio_draft.py)、[调度及autocast](../src/maimai_baseline/training/chart_encoder_pretrain.py) 一致。checkpoint、验证和诊断时机见[训练计划](../../0wd-v3-refactor-docs/training-plan.md#73-配置与执行约定)。
+
+逻辑batch、梯度累积和显存适配仍待确定；这些配方辅助函数不包含训练循环、数据迭代或checkpoint执行。
 
 ## 全曲计算与复用
 
@@ -45,6 +67,8 @@ D 默认8层/256维/8头/4专家（每专家 FFN512），输出128维；难度 e
 6. 用 `select_windows(z, window_groups, starts, window_valid, target_beats=..., before_beats=..., after_beats=...)` 分别选择 R、P、Decoder 上下文。P 前后余量均为0；R默认16/16；Decoder默认4/4由其消费者传入。占位窗通过 `window_valid=False` 表达，不把有效空窗变成padding。
 
 全曲 P0 和 Z 只计算一次，再供本 step 的多个目标窗共用。整个图完成反传后更新参数；更新后不能继续复用旧图。条件键为 `(audio_variant, level, difficulty_id)`，只共享音频的不同等级不能共享 Z。
+
+阶段一按完整音频组训练，全部基础窗、有效空窗及追加尾窗的R/P监督各计一次。复杂窗口2倍过采样只服务主Decoder，不通过重复R/P窗口或额外loss权重应用到Draft预训练。可选联合微调时，主Decoder重复实例与R/P基础窗监督分别归约，上游仍接收正常主任务梯度。
 
 P0 拼接按 `[s,s+T)` 选择 Encoder 原有坐标、特征和有效位，不重新生成网格。允许非整数采样率；网格相位沿用音频窗起点，中心数量由实际坐标决定，不要求 `T×rate` 为整数。
 
@@ -66,7 +90,7 @@ Decoder 消费公开全曲 P0、自己选取的 `WindowLatents.memory` 和预测
 
 `reconstruction_target` 生成 R 标签；`MusicPlanTargets` 按真实 NOTE（含短hold语义还原）生成8连续值和整数类别。全谱 workload 分母使用 `metadata.render_end_beat`；缺失时由独立 `source_timing` 标签适配器读取 `source.source_path` 中对应 `source.difficulty` 的原谱时间格，取首个 E 拍位或无 E 时最后时间格的结束拍。尾部空格仍计入，不能替换为最后NOTE或音频终点；源不可用时可显式传入 `source_end_beat`。补取仅在构建 Planner 标签时触发，R 标签适配不读源文件，不改写既有缓存。空谱面窗为R结束标记＋逐拍count0，Planner连续值0＋single类；Z本身不回归零。
 
-`collate_reconstruction` / `collate_planner` 用 `None` 表示batch占位窗。R的时间标签保持tick，loss中将MOMENT转为窗内绝对拍位、duration转为log1p(ticks/96)。`auxiliary_losses` 返回 `classification/time/count/planner_continuous/planner_category` 五个 `LossTerm(total,count)`，`.mean` 是各自归一化值；训练配方显式加权。全padding时是可反传的有限零。
+`collate_reconstruction` / `collate_planner` 用 `None` 表示batch占位窗。R的时间标签保持tick，loss中将MOMENT转为窗内绝对拍位、duration转为log1p(ticks/96)。`auxiliary_losses` 返回 `classification/time/count/planner_continuous/planner_category` 五个 `LossTerm(total,count)`。逻辑batch内先按分项汇总total与count，再由 `training.pretrain.weighted_loss` 对五项 `.mean` 显式加权；分块与累积不能先对窗口均值等权平均。全padding时是可反传的有限零。
 
 可以仅对指定缓存和指定窗口导出可复核标签，不做全量资产遍历：
 
@@ -76,14 +100,22 @@ python -m maidata.draft.export_targets --chart /path/to/charts/10/5.json.gz --st
 
 脚本复用普通缓存读取校验，不计算音频、神经表示或Physical。导出的 `query_rows_required` 仅覆盖本次显式选取的窗口，不自动成为完整训练容量。
 
+容量统计命令消费已选全量基础窗口计划及split，逐窗调用同一 `reconstruction_target`，重复抽样实例不重复统计；仅在需要重新确定容量时显式运行，不作为日常启动阶段：
+
+```powershell
+python -m maidata.draft.capacity --plan ../artifacts/pilot320-sampling-20261010/plan.json --split ../artifacts/pilot320-master-20261010/encoder-draft-split.json --output ../artifacts/encoder-draft-capacity-pilot320-20261010
+```
+
 ## 验证与执行边界
 
 ```powershell
 $env:TEMP = "$PWD/.test-temp"
 $env:TMP = $env:TEMP
-python -m pytest tests/test_draft_networks.py tests/test_draft_data.py tests/test_draft_integration.py tests/test_maidata_entry.py tests/test_maidata_attention.py tests/test_maidata_encoder.py --basetemp .test-temp/draft
+python -m pytest tests/test_draft_networks.py tests/test_draft_data.py tests/test_draft_integration.py tests/test_draft_capacity.py tests/test_pretrain_recipe.py tests/test_maidata_entry.py tests/test_maidata_attention.py tests/test_maidata_encoder.py --basetemp .test-temp/draft
 ```
 
 覆盖默认/非默认维度、全曲覆盖和负起点、唯一中心拼接、空尾窗/占位窗、NA/有效0、simai统计算法对照、变BPM、K/V复用的数值及梯度等价、D/R/P到E反传、外部消费者经Z和plan12分别回传、实际冻结、CPU bf16 autocast及无旧模块导入。simai源码对照仅在该只读仓库存在时执行，生产代码不依赖它。
+
+配方验证覆盖五项归一化加权及梯度、可训练参数选择与裁剪、原仓库调度数值对照、绝对停止轮、optimizer/scheduler恢复后下一次更新一致性、固定种子及autocast选择；容量验证包含新字段展开、空窗结束行和验证侧最大值。它们不等于完整训练循环或CUDA执行验收。
 
 已对既有原谱v2的 `10:5` 三个显式窗口导出真实标签。当前环境是CPU Torch；未执行CUDA、真实训练batch成本测量、训练、上传或主Decoder AR生成。
