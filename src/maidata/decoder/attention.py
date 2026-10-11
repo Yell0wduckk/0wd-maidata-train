@@ -121,24 +121,30 @@ class Attention(nn.Module):
 
 
 class ConditionAdapter(nn.Module):
-    def __init__(self, latent_dim, dim):
+    def __init__(self, latent_dim, dim, z_cross_attention):
         super().__init__()
         self.validate_inputs = True
         self.latent_dim = latent_dim
+        self.z_cross_attention = z_cross_attention
         self.z = nn.Linear(latent_dim, dim)
         self.plan = nn.Sequential(nn.Linear(12, dim), nn.GELU(), nn.Linear(dim, dim))
         self.source = nn.Embedding(2, dim)
 
     def forward(self, z, plan, plan_valid):
-        if self.validate_inputs:
+        if self.validate_inputs and self.z_cross_attention:
             validate_memory(z, self.latent_dim)
         if (self.validate_inputs and (plan.shape != (len(z.values), 12) or plan_valid.shape != plan.shape[:1]
                 or plan_valid.dtype != torch.bool)):
             raise ValueError('plan requires [B,12] and independent validity [B]')
         if self.validate_inputs:
             require((torch.isfinite(plan) | ~plan_valid[:, None]).all(), 'valid plan values must be finite')
-        a = self.z(z.values.masked_fill(~z.valid[..., None], 0)) + self.source.weight[0]
         b = self.plan(plan.masked_fill(~plan_valid[:, None], 0)) + self.source.weight[1]
+        if self.z_cross_attention:
+            a = self.z(z.values.masked_fill(~z.valid[..., None], 0)) + self.source.weight[0]
+            beats, valid = z.beats, z.valid
+        else:
+            a = b.new_zeros((*z.valid.shape, b.shape[-1]))
+            beats, valid = torch.zeros_like(z.beats), torch.zeros_like(z.valid)
         return Memory(torch.cat((a, b[:, None]), 1),
-                      torch.cat((z.beats, z.beats.new_zeros((len(plan), 1))), 1),
-                      torch.cat((z.valid, plan_valid[:, None]), 1))
+                      torch.cat((beats, beats.new_zeros((len(plan), 1))), 1),
+                      torch.cat((valid, plan_valid[:, None]), 1))

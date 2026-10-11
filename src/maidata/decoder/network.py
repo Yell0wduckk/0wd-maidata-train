@@ -15,9 +15,11 @@ class Decoder(nn.Module):
     def __init__(self, *, dim, audio_dim, latent_dim, layers, router_layer, heads,
                  shared_ffn_dim, expert_ffn_dim, experts, readout_ffn_dim, dropout,
                  norm_eps, rope_base, rope_position_scale, note_dims, route_dims,
-                 time_base, time_scale, condition_gate_init):
+                 time_base, time_scale, condition_gate_init, z_cross_attention):
         super().__init__()
         self.validate_inputs = True
+        if type(z_cross_attention) is not bool:
+            raise ValueError('z_cross_attention must be boolean')
         integers = (dim, audio_dim, latent_dim, layers, router_layer, heads, shared_ffn_dim,
                     expert_ffn_dim, experts, readout_ffn_dim)
         if any(type(v) is not int or v <= 0 for v in integers):
@@ -30,7 +32,7 @@ class Decoder(nn.Module):
             raise ValueError('invalid Decoder numerical configuration')
         self.dim, self.audio_dim, self.router_layer = dim, audio_dim, router_layer
         self.embedding = TokenEmbedding(dim, note_dims, route_dims, time_base, time_scale)
-        self.condition = ConditionAdapter(latent_dim, dim)
+        self.condition = ConditionAdapter(latent_dim, dim, z_cross_attention)
         self.target_type = nn.Embedding(5, dim)
         self.router_norm = nn.LayerNorm(dim, eps=norm_eps)
         self.type_head = nn.Linear(dim, 5)
@@ -41,7 +43,8 @@ class Decoder(nn.Module):
             rope_base=rope_base, rope_position_scale=rope_position_scale,
             condition_gate_init=condition_gate_init) for i in range(layers))
         self.heads = ContentHeads(dim, readout_ffn_dim, norm_eps)
-        self.field_reader = FieldReader(dim, heads, dropout, norm_eps, rope_base, rope_position_scale)
+        self.field_reader = FieldReader(dim, heads, dropout, norm_eps, rope_base, rope_position_scale,
+                                        z_cross_attention)
         self.architecture = 'maidata.decoder-field-query-tick384.v1'
 
     def prepare_audio(self, audio, *, indices=None):

@@ -23,7 +23,9 @@ def collate_conditions(items, windows, config, *, audio, audio_keys=None):
     # plan tensors cross IPC; current Encoder values are supplied by the model.
     songs = {item['variant']: i for i, item in enumerate(items)}
     local_audio = None if audio_keys is None else {key: i for i, key in enumerate(audio_keys)}
-    chart_sources = {chart: (item, group) for item in items for chart, group in item['dp']['chart_to_group'].items()}
+    use_z = config['decoder_z_cross_attention']
+    chart_sources = ({chart: (item, group) for item in items for chart, group in item['dp']['chart_to_group'].items()}
+                     if use_z else {w['chart_id']: (item, 0) for item in items for w in item['windows']})
     groups, unique, indices = {}, {}, []
     z_rows, window_groups, starts, plans, plan_valid, audio_mapping = [], [], [], [], [], []
     for window in windows:
@@ -33,19 +35,26 @@ def collate_conditions(items, windows, config, *, audio, audio_keys=None):
             item, group = chart_sources[window['chart_id']]
             dp = item['dp']
             key = (item['variant'], group)
-            if key not in groups:
+            if use_z and key not in groups:
                 groups[key] = len(z_rows)
                 z_rows.append({k: dp['z'][k][group] for k in ('values', 'beats', 'valid')})
             planner = item['gt_plan'] if config['decoder_train_plan_source'] == 'gt' else dp['planner']
             lookup = item['gt_plan']['window_index'] if config['decoder_train_plan_source'] == 'gt' else dp['window_index']
             row = lookup[identity]
-            window_groups.append(groups[key])
+            if use_z:
+                window_groups.append(groups[key])
             starts.append(window['start'])
             plans.append(planner['plan_values'][row])
             plan_valid.append(planner['valid'][row])
             audio_mapping.append(songs[item['variant']] if local_audio is None else
                                  local_audio[(item['variant'], window['start'])])
         indices.append(unique[identity])
+    if not use_z:
+        z = Memory(torch.empty((len(starts), 0, config['draft_latent_dim'])),
+                   torch.empty((len(starts), 0)), torch.empty((len(starts), 0), dtype=torch.bool))
+        return Conditions(audio, z, torch.stack(plans), torch.stack(plan_valid),
+            torch.tensor(indices, dtype=torch.long), torch.tensor(audio_mapping, dtype=torch.long),
+            audio.valid.flatten().nonzero().flatten())
     z = BeatMemory(*(pad_sequence([r[k] for r in z_rows], batch_first=True) for k in ('values','beats','valid')))
     mapping = torch.tensor(window_groups, dtype=torch.long)
     starts = torch.tensor(starts, dtype=torch.float32)

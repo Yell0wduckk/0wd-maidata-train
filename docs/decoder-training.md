@@ -4,6 +4,8 @@
 
 ## 模块与数据流
 
+`decoder_z_cross_attention` 默认 `true`。设为 `false` 时，主干条件 attention 仅保留 plan，字段查询跳过局部 Z attention；音频 attention、GT 历史、监督和损失不变。GT plan 模式下不读取 D/P 缓存，`decoder_train_dp_cache` 可为 `null`，不需要导出 Z。E_M/M 仍从头联合训练。开关写入 checkpoint recipe，并由同一模型构造入口用于训练和推理。
+
 | 模块 | 职责 |
 |---|---|
 | `decoder_training.plan/ordering` | 保留既有实例集合与 split，逐轮全局打乱窗口，从窗口缓存取得实际输入长度并按 row budget 组批 |

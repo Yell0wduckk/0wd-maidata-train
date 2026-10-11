@@ -17,6 +17,8 @@ def validate(config):
     if config['decoder_train_plan_source'] not in ('predicted','gt'):
         raise ValueError('decoder_train_plan_source must be predicted or gt')
     export_only = {'decoder_train_checkpoint', 'decoder_train_p0_cache'}
+    if not config['decoder_z_cross_attention'] and config['decoder_train_plan_source'] == 'gt':
+        export_only.add('decoder_train_dp_cache')
     if config['decoder_train_plan_source'] == 'predicted':
         export_only.add('decoder_train_gt_plan_cache')
     missing = [k for k in keys if k not in export_only and config[k] is None]

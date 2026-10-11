@@ -96,6 +96,7 @@ CONFIG = {
     "decoder_rope_base": 10000.0,
     "decoder_rope_position_scale": 1.0,
     "decoder_condition_gate_init": 1e-3,
+    "decoder_z_cross_attention": True,
     "decoder_note_dims": (64, 128, 16, 16, 16, 8, 8),
     "decoder_route_dims": (240, 16),
     "decoder_time_base": 10000.0,

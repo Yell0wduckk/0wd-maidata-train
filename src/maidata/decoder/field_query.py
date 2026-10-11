@@ -15,8 +15,9 @@ class QueryAttention(Attention):
 
 
 class FieldReader(nn.Module):
-    def __init__(self, dim, heads, dropout, eps, base, scale):
+    def __init__(self, dim, heads, dropout, eps, base, scale, z_cross_attention):
         super().__init__()
+        self.z_cross_attention = z_cross_attention
         self.role = nn.Embedding(5, dim)
         self.progress = nn.Sequential(nn.Linear(2, dim), nn.GELU(), nn.Linear(dim, dim))
         self.norms = nn.ModuleList(nn.LayerNorm(dim, eps=eps) for _ in range(3))
@@ -60,14 +61,15 @@ class FieldReader(nn.Module):
             y = y + self.audio(self.norms[0](y), q, valid, bank(audio, source))
             # Plan has already conditioned the main prefix. Field reads select
             # only local Z, with MOMENT's known-cursor forward four-beat range.
-            centers = memory.condition_beats[owner:owner+1]
-            slots, anchor = torch.floor(centers), torch.floor(q)
-            moment = roles[chosen, None] == 0
-            local = torch.where(moment, (slots >= anchor) & (slots <= torch.floor(q+4)),
-                                (slots >= anchor-1) & (slots <= anchor+1))
-            local[:, memory.plan_index:] = False
-            condition = bank(memory.condition[-1], indices.new_tensor([owner]), local)
-            y = y + self.z(self.norms[1](y), q, valid, condition)
+            if self.z_cross_attention:
+                centers = memory.condition_beats[owner:owner+1]
+                slots, anchor = torch.floor(centers), torch.floor(q)
+                moment = roles[chosen, None] == 0
+                local = torch.where(moment, (slots >= anchor) & (slots <= torch.floor(q+4)),
+                                    (slots >= anchor-1) & (slots <= anchor+1))
+                local[:, memory.plan_index:] = False
+                condition = bank(memory.condition[-1], indices.new_tensor([owner]), local)
+                y = y + self.z(self.norms[1](y), q, valid, condition)
             pieces.append(self.norms[2](y[:, 0]))
             positions.append(chosen)
         if not pieces:

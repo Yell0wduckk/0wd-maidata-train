@@ -50,7 +50,7 @@ def condition_attention(module, x, beats, valid, kv, plan_index, layout):
         sizes = [c*k for c, _, k in groups]
         keys, values = [t.transpose(1, 2).flatten(0, 1).index_select(0, layout['key_gather']).split(sizes)
                         for t in (key, value)]
-        masks = layout['key_valid'].split(sizes)
+        masks = (layout['key_valid'] & kv.valid.flatten().index_select(0, layout['key_gather'])).split(sizes)
     else:
         # Public callers may provide only a query layout. Preserve arbitrary key masks.
         sizes = [c for c, _, _ in groups]
