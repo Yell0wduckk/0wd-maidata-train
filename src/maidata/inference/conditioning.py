@@ -10,6 +10,7 @@ from maidata.audio.layout import prepare_encoder_layout
 from maidata.draft.conditions import ChartCondition, make_draft_inputs
 from maidata.draft.types import BeatMemory
 from maidata.draft.windows import song_coverage, audio_windows, assemble_full_p0, select_windows
+from .input_contract import check_shared_grid_config
 from .progress import emit, stage
 
 
@@ -117,6 +118,8 @@ def prepare_conditions(encoder, draft, planner, config, grid, timing, duration, 
                        decoder_encoder=None, teacher_config=None):
     """Fixed E_D -> D/P; optional independent E_M -> Decoder audio, each encoded once."""
     c = config if teacher_config is None else teacher_config
+    if decoder_encoder is not None:
+        check_shared_grid_config(c, config)
     local_decoder = decoder_encoder is not None and config.get('decoder_train_audio_scope', 'full_song') == 'window'
     separate_decoder = decoder_encoder is not None and any(c[k] != config[k] for k in ENCODER_KEYS)
     shared_decoder = None if separate_decoder else decoder_encoder

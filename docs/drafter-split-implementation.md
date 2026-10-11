@@ -51,3 +51,18 @@ python -m pytest tests/test_split_drafter_consumers.py::test_export_builds_teach
 CUDA原batch、正式训练、真实新教师缓存、速度和重建/谱面质量尚未验证。本次没有上传或轮询/干预其他实验。
 
 DP缓存升级`maidata.frozen-draft-planner.v2`，记录末层Z表示与宽度，P0格式保持v1。旧阶段一checkpoint不能恢复新完整训练；旧128维Z不能伪装新Z。既有实验继续使用绑定源码。原谱、音频、Physical、采样计划、GT plan和主M窗口缓存继续复用。
+
+## 复核修复：共享音频grid的输入规格
+
+独立复核发现，教师和M恢复不同Encoder配置后，在线推理仍只接收一份grid；教师每拍6个采样点、M每拍5个采样点的合法权重配对能通过加载，却在教师前向触发矩阵维度错误。当前单grid接口要求两侧`samples_per_beat`和`mel_bins`一致，现于checkpoint加载、网络构造之前明确报告不匹配字段及两侧值；直接调用`prepare_conditions`也使用同一规则。只比较配方中这两个输入维度，不扫描grid或旧资产，不将网络宽度、深度或音频余量重新绑成相同配置，也不自动插值或重建输入。该修复明确拒绝不兼容的单grid配对，未增加双grid推理功能。
+
+Z开启和仅预测plan都执行该检查；Z关闭且GT/无plan时继续只加载M，不读取或约束未使用的教师。原有不同隐藏维度/上下文范围的FP32、CPU BF16正向路径继续通过。
+
+定向CPU回归：**37 passed、1 deselected，7.81s**。新增4项参数化测试覆盖两个输入维度、Z开启/关闭的预测plan路径、加载前与直接前向前拒绝，以及无教师路径。唯一排除项仍为上述NumPy/Numba环境问题的原音频提取测试；本次未运行CUDA、训练或上传。
+
+```powershell
+$env:TEMP = Join-Path (Get-Location) '.test-temp'
+$env:TMP = $env:TEMP
+$env:PYTHONPATH = Join-Path (Get-Location) 'src'
+python -m pytest tests/test_split_drafter_consumers.py tests/test_inference_joint_encoder.py tests/test_inference.py tests/test_inference_plan_source.py tests/test_inference_cli.py --deselect tests/test_inference_cli.py::test_raw_audio_uses_training_features_and_partial_first_beat --basetemp .test-temp/shared-grid-config-fix -q -o addopts=''
+```

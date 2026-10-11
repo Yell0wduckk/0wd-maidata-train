@@ -34,7 +34,7 @@ R使用共享残差MLP，只索引所属拍Z，没有邻拍读取或查询间att
 
 `pretrain_batch_reference_rows=207`只保留原分批proxy，实际查询数量另记；pilot320组顺序及边界、workers12、BF16/scratch、学习率/调度、完整轮保存及每5轮/末轮验证不变。阶段一checkpoint为`maidata.encoder-draft-training.v3`，标签导出为`beat-local-tick96`。旧checkpoint不能完整续训，不隐式部分加载；旧128维Z不能补零扩维。原谱、音频、Physical、计划、GT plan及主M窗口缓存直接复用。
 
-新教师Z/plan生产消费接口支持256维，教师与主M各自构造配置；Z开启时M投影匹配教师宽度，Z关闭且GT/无plan时不加载教师。只完成代码及CPU合成验收，CUDA、正式训练、真实新教师缓存和质量未验证。接口见[Draft](draft.md)，实际测试见[实施记录](drafter-split-implementation.md)。
+新教师Z/plan生产消费接口支持256维，教师与主M各自构造配置；Z开启时M投影匹配教师宽度，Z关闭且GT/无plan时不加载教师。在线推理共用一份grid，加载时要求两侧每拍采样数和Mel频带数一致，网络隐藏维度和窗口音频余量仍可不同。只完成代码及CPU合成验收，CUDA、正式训练、真实新教师缓存和质量未验证。接口见[Draft](draft.md)，实际测试见[实施记录](drafter-split-implementation.md)。
 
 ## 新 Decoder：网络、窗口与监督
 
@@ -62,7 +62,7 @@ pilot320的320份Master及23份Re:Master已有8,828个基础窗和1,587个复杂
 
 ## 当前整曲推理与物化
 
-`python -m maidata.inference`加载阶段二v4的E_M/M；Z开启或使用预测plan时另加载阶段一v3的E_D/D/P，关闭Z且GT/无plan时不加载教师。两套配置独立恢复，M保持自己的架构，仅Z投影宽度须匹配教师。固定E_D产生Draft的P0并计算全曲Z/预测plan；独立E_M产生M的全曲P0，参数与隐藏表示分开。GT plan训练的M自由推理仍读取P预测，报告分别记录训练和推理plan来源。读取配套grid或使用固定Mel统计提取音频，按新字段规则维护真实起音组、边界MOMENT、跨窗活动动作与完整规则快照。两套Encoder各自按曲复用准备结果，D/P及M音频投影整次生成复用；各窗重新prefill历史，始终覆盖音频及一个完整空尾窗。旧连续时间头不兼容新385类架构。Physical硬约束默认开启，trace默认关闭；路径、温度、种子与生成上限可配置。
+`python -m maidata.inference`加载阶段二v4的E_M/M；Z开启或使用预测plan时另加载阶段一v3的E_D/D/P，关闭Z且GT/无plan时不加载教师。两套配置独立恢复，M保持自己的架构；共享grid要求每拍采样数和Mel频带数一致，目标窗长度一致，Z启用时投影宽度匹配教师。固定E_D产生Draft的P0并计算全曲Z/预测plan；独立E_M产生M的全曲P0，参数与隐藏表示分开。GT plan训练的M自由推理仍读取P预测，报告分别记录训练和推理plan来源。读取配套grid或使用固定Mel统计提取音频，按新字段规则维护真实起音组、边界MOMENT、跨窗活动动作与完整规则快照。两套Encoder各自按曲复用准备结果，D/P及M音频投影整次生成复用；各窗重新prefill历史，始终覆盖音频及一个完整空尾窗。旧连续时间头不兼容新385类架构。Physical硬约束默认开启，trace默认关闭；路径、温度、种子与生成上限可配置。
 
 `python -m maidata.inference.materialize`独立调用MiaCode render/dump，核对新字段与时间轴后输出`maidata.txt`和`track.<音频扩展名>`。两入口不导入旧模型包、不增加源码哈希门禁。小型真实E/D/P/M已完成CPU FP32/BF16到MiaCode的端到端测试；真实训练checkpoint的CUDA生成与谱面质量未验收。命令、跨窗合同和模块边界见[推理与物化](maidata-inference.md)。
 

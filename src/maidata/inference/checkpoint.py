@@ -6,6 +6,7 @@ import torch
 from maidata.entry import CONFIG
 from maidata.model import build_model, build_draft, build_planner, build_decoder
 from maidata.decoder_training.producer import teacher_configuration
+from .input_contract import check_shared_grid_config
 
 
 @dataclass
@@ -40,6 +41,7 @@ def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device, z_cross
     config = dict(CONFIG, **consumer['recipe'])
     config['decoder_train_audio_scope'] = consumer['recipe'].get('decoder_train_audio_scope', 'full_song')
     if teacher is not None:
+        check_shared_grid_config(teacher, config)
         if teacher['target_beats'] != config['target_beats']:
             raise ValueError('teacher Planner and M target-window spans differ')
         if actual_z and teacher['draft_latent_dim'] != config['draft_latent_dim']:

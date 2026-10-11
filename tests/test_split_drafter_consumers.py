@@ -21,11 +21,12 @@ from maidata.inference.conditioning import prepare_conditions
 from maidata.time import TimingMap
 
 
-def paired(config, tmp_path, *, use_z=True, consumer_width=30):
+def paired(config, tmp_path, *, use_z=True, consumer_width=30, teacher_overrides=None):
     # E_D has a different hidden size and local window from E_M. M's unused
     # draft settings intentionally differ, including its old no-Z width.
     teacher = dict(config, d_model=24, draft_dim=30, draft_latent_dim=30,
                    audio_before_beats=1, audio_after_beats=2)
+    teacher.update(teacher_overrides or {})
     consumer = dict(config, draft_latent_dim=consumer_width)
     consumer.update({k: v for k, v in decoder_config().items() if k.startswith('decoder_')})
     consumer['decoder_z_cross_attention'] = use_z
@@ -41,6 +42,35 @@ def paired(config, tmp_path, *, use_z=True, consumer_width=30):
     torch.save(payload, paths[0])
     torch.save(state, paths[1])
     return paths, teacher, consumer, payload, binding
+
+
+@pytest.mark.parametrize('key,value', [('samples_per_beat', 6), ('mel_bins', 8)])
+@pytest.mark.parametrize('use_z', [True, False])
+def test_incompatible_shared_grid_is_rejected_before_loading_or_encoding(config, tmp_path, key, value, use_z):
+    paths, teacher, consumer, _, _ = paired(config, tmp_path, use_z=use_z,
+                                          teacher_overrides={key: value})
+    expected = f'{key}: teacher={value}, M={consumer[key]}'
+    # These are valid, independently constructed checkpoints. Both Z and the
+    # predicted-plan-only path need E_D and therefore the same input format.
+    with patch('maidata.inference.checkpoint.build_model', side_effect=AssertionError('must reject before construction')):
+        with pytest.raises(ValueError, match=expected):
+            load_models(*paths, device='cpu', plan_source='predicted')
+    encoder, decoder_encoder = build_model(teacher), build_model(consumer)
+    with patch.object(encoder, 'prepare_song', side_effect=AssertionError('must reject before encoding')):
+        with pytest.raises(ValueError, match=expected):
+            prepare_conditions(encoder, build_draft(teacher), build_planner(teacher), consumer,
+                item(0, consumer)['grid'], TimingMap([(0, 120)]), 1.2, difficulty=5, level=14.5,
+                device='cpu', decoder_encoder=decoder_encoder, teacher_config=teacher)
+    if not use_z:
+        # An unused, incompatible teacher must not constrain Z-off GT/none.
+        actual_load = torch.load
+        def only_consumer(path, *args, **kwargs):
+            assert path == paths[1]
+            return actual_load(path, *args, **kwargs)
+        for source in ('gt', 'none'):
+            with patch('torch.load', side_effect=only_consumer):
+                loaded = load_models(paths[0], paths[1], device='cpu', plan_source=source)
+            assert loaded.teacher_config is None
 
 
 @pytest.mark.parametrize('precision', ['fp32', 'bf16'])
