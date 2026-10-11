@@ -7,6 +7,7 @@
 | [maidata-entry](maidata-entry.md) | `python -m maidata`、唯一 CONFIG、张量接口和 CPU 合成验证命令 |
 | [draft](draft.md) | 拆分D、末层256维Z、直接解析、拍内96类标签与分字段loss |
 | [drafter-split-implementation](drafter-split-implementation.md) | 拆分实施范围、CPU结果及checkpoint/缓存兼容性边界 |
+| [drafter-frozen-p0-training](drafter-frozen-p0-training.md) | 主M ckpt45冻结Encoder导出P0、cached/joint双入口及D/R/P 50/100轮交接 |
 | [decoder](decoder.md) | 独立Decoder、Router/MMoE、内容小头、时间概率、窗口与监督归约 |
 | [decoder-training](decoder-training.md) | 新 Encoder 与 Decoder 联训、固定 D/P 条件、窗口与 Physical 监督、完整轮恢复 |
 | [time384-cache-migration](time384-cache-migration.md) | 精确原谱v2/完整Physical到v3字段查询监督的增量迁移与从零生产 |

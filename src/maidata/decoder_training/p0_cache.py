@@ -55,12 +55,13 @@ class AudioPacket:
     p0_layout: dict
 
 
-def collate(items, *, config):
+def collate(items, *, config, validate_input=True):
     variants, grids, coverages = map(list, zip(*items))
     starts, mapping = audio_windows(coverages, device='cpu')
-    songs = song_inputs(grids)
+    songs = song_inputs(grids, validate_input=validate_input)
     windows = window_inputs(grids, starts.numpy(), mapping.numpy(), target_beats=config['target_beats'],
-                            before_beats=config['audio_before_beats'], after_beats=config['audio_after_beats'])
+                            before_beats=config['audio_before_beats'], after_beats=config['audio_after_beats'],
+                            validate_input=validate_input)
     layout = prepare_encoder_layout(songs.beat_centers, songs.sample_valid.any(-1), windows,
         radii=config['stage_attention_radii'], rates=config['fpn_rates'], before=config['audio_before_beats'],
         context=config['audio_before_beats']+config['target_beats']+config['audio_after_beats'])

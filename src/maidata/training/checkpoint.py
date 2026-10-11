@@ -13,7 +13,7 @@ from .data import read_json
 
 SCHEMA = 'maidata.encoder-draft-training.v3'
 PATH_KEYS = ('pretrain_train_plan', 'pretrain_validation_plan', 'pretrain_chart_cache',
-             'pretrain_audio_cache', 'pretrain_mel_root', 'pretrain_source_root', 'pretrain_output')
+             'pretrain_audio_cache', 'pretrain_mel_root', 'pretrain_source_root', 'pretrain_output', 'pretrain_p0_cache')
 
 
 def digest_file(path):
@@ -124,7 +124,7 @@ def capture(model, optimizer, scheduler, *, completed_epochs, step, config, bind
         recipe=recipe(config), binding=binding, source=source, steps_by_epoch=steps,
         rng=rng_state(), loader_rng=[loader.generator.get_state() for loader in loaders],
         loader_started=[loader._iterator is not None for loader in loaders],
-        best_validation_loss=best, metrics=metrics)
+        best_validation_loss=best, metrics=metrics, audio_producer=model.audio_producer)
     validate_cursor(payload, steps)
     return payload
 
@@ -132,7 +132,10 @@ def capture(model, optimizer, scheduler, *, completed_epochs, step, config, bind
 def restore(payload, model, optimizer, scheduler, *, config, binding, source, steps, loaders):
     if payload.get('schema') != SCHEMA:
         raise ValueError('resume architecture, recipe or scheduler steps changed: split Drafter requires v3 checkpoint')
-    current, saved = recipe(config), payload['recipe']
+    current, saved = recipe(config), dict(payload['recipe'])
+    saved.setdefault('pretrain_audio_mode', 'joint')
+    if payload.get('audio_producer') != model.audio_producer:
+        raise ValueError('resume frozen P0 producer changed')
     stop = 'pretrain_stop_after_epochs'
     if (payload['steps_by_epoch'] != steps
             or {k:v for k,v in current.items() if k != stop} != {k:v for k,v in saved.items() if k != stop}

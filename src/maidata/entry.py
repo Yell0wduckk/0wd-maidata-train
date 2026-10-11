@@ -67,6 +67,8 @@ CONFIG = {
     "pretrain_stop_after_epochs": 50,  # Absolute completed epoch, including after resume.
     "pretrain_precision": "bf16",
     "pretrain_initialization": "scratch",
+    "pretrain_audio_mode": "joint",  # joint: update E/D/R/P; cached: fixed P0, update D/R/P.
+    "pretrain_p0_cache": None,  # New public P0 export plus its frozen Encoder snapshot.
     "pretrain_seed": 20261010,
     "pretrain_audio_groups_per_batch": 2,
     "pretrain_gradient_accumulation_steps": 1,

@@ -14,6 +14,7 @@ from . import checkpoint
 from .batching import group_token_cost
 from .data import AudioPlan, make_loader, epoch_iterator
 from .network import Pretrainer
+from .frozen_p0 import resolve_audio_config
 from .pretrain import (LOSS_WEIGHT_KEYS, seed_scratch, make_optimizer, make_scheduler,
                        clip_gradients, autocast, epoch_range, weighted_loss)
 
@@ -82,8 +83,13 @@ def update(model, batches, optimizer, scheduler, config, *, audit=False):
     scheduler.step()
     changed = {k: sum(not torch.equal(a, b) for a,b in zip(before[k], m.parameters()))
                for k,m in model.named_children()} if audit else {}
-    if audit and (any(v <= 0 for v in gradients.values()) or any(v == 0 for v in changed.values())):
-        raise ValueError('E/D/R/P must all receive gradients and update in the CUDA batch check')
+    if audit:
+        for name, module in model.named_children():
+            trainable = any(p.requires_grad for p in module.parameters())
+            if trainable and (gradients[name] <= 0 or changed[name] == 0):
+                raise ValueError(f'{name} must receive gradients and update in the CUDA batch check')
+            if not trainable and (gradients[name] != 0 or changed[name] != 0):
+                raise ValueError(f'frozen {name} changed in the CUDA batch check')
     return metrics, dict(gradient_norm=float(norm), gradients=gradients, changed_parameter_tensors=changed)
 
 
@@ -188,6 +194,7 @@ def write_json(path, value):
 
 
 def run(config, *, resume=None, cuda_check=False):
+    config = resolve_audio_config(config)
     epoch_range(0, config)
     device = torch.device(config['pretrain_device'])
     if device.type == 'cuda' and (not torch.cuda.is_available()
@@ -252,7 +259,9 @@ def run(config, *, resume=None, cuda_check=False):
     output.mkdir(parents=True, exist_ok=True)
     write_json(output / ('resume.json' if resume else 'run.json'), dict(config=config, binding=binding,
         source=source, steps_by_epoch=steps, resume=str(resume) if resume else None,
-        starting_completed_epochs=completed, parameters=sum(p.numel() for p in model.parameters())))
+        starting_completed_epochs=completed, parameters=sum(p.numel() for p in model.parameters()),
+        trainable_parameters=sum(p.numel() for p in model.parameters() if p.requires_grad),
+        audio_producer=model.audio_producer))
     for epoch in remaining:
         started = time.perf_counter()
         model.train()

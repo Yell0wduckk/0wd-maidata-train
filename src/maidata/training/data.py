@@ -1,7 +1,7 @@
 """Whole-audio Dataset/Collator and deterministic, base-window epoch ordering.
 
 PyTorch loader lifecycle follows the original pretrainer. No historical model,
-Decoder sampler, Physical supports or frozen audio representations are read.
+Decoder sampler or Physical supports are read. Cached mode reads public P0 only.
 """
 from collections import defaultdict
 from dataclasses import dataclass, fields, is_dataclass
@@ -22,6 +22,7 @@ from maidata.draft.windows import song_coverage, audio_windows
 from maidata.preparation.cache import load_grid, song_inputs, window_inputs
 from maidata.time import TimingMap
 from .batching import optimizer_batches, group_token_cost
+from .frozen_p0 import FrozenP0, collate_banks
 
 
 def read_json(path):
@@ -59,6 +60,9 @@ class AudioPlan:
 class AudioDataset(Dataset):
     def __init__(self, plan, config):
         self.plan, self.config = plan, config
+        self.p0 = FrozenP0(config['pretrain_p0_cache']) if config['pretrain_audio_mode'] == 'cached' else None
+        if self.p0 is not None:
+            self.p0.check_plan(plan)
 
     def __len__(self):
         return len(self.plan.groups)
@@ -67,10 +71,14 @@ class AudioDataset(Dataset):
         variant, epoch = index
         c, plan = self.config, self.plan
         meta = plan.groups[variant]
-        grid = load_grid(Path(c['pretrain_audio_cache']) / 'grids' / f'{variant}.npz',
-                         mel_root=c['pretrain_mel_root'], validate_input=False)
-        coverage = song_coverage(TimingMap.from_audio_timing(meta['timing'], validate_input=False), meta['audio_end_seconds'],
-                                first_beat=int(grid['first_beat']), target_beats=c['target_beats'])
+        grid, p0 = None, None
+        if self.p0 is not None:
+            p0, coverage = self.p0.read(variant)
+        else:
+            grid = load_grid(Path(c['pretrain_audio_cache']) / 'grids' / f'{variant}.npz',
+                             mel_root=c['pretrain_mel_root'], validate_input=False)
+            coverage = song_coverage(TimingMap.from_audio_timing(meta['timing'], validate_input=False), meta['audio_end_seconds'],
+                                    first_beat=int(grid['first_beat']), target_beats=c['target_beats'])
         charts, conditions, plans = {}, {}, {}
         for chart_id in meta['chart_ids']:
             item = plan.charts[chart_id]
@@ -88,7 +96,7 @@ class AudioDataset(Dataset):
                 reconstruction_target(charts[key], start_tick=w['start_tick'], target_beats=c['target_beats'],
                     audio_after_beats=c['audio_after_beats'], audio_end_seconds=meta['audio_end_seconds'], validate_input=False),
                 plans[key].window(w['start_tick'], w['end_tick'])))
-        return dict(variant=variant, grid=grid, coverage=coverage, conditions=conditions, windows=windows)
+        return dict(variant=variant, grid=grid, p0=p0, coverage=coverage, conditions=conditions, windows=windows)
 
 
 def map_tensors(value, fn):
@@ -117,6 +125,7 @@ class Batch:
     window_ids: list
     audio_variants: list
     layouts: dict | None = None
+    p0: object = None
 
     def pin_memory(self):
         return map_tensors(self, lambda t: t.pin_memory())
@@ -126,14 +135,16 @@ class Batch:
 
 
 def collate_audio(items, *, config, packed=False):
-    grids, coverages = [i['grid'] for i in items], [i['coverage'] for i in items]
+    cached = config['pretrain_audio_mode'] == 'cached'
+    coverages = [i['coverage'] for i in items]
+    grids = None if cached else [i['grid'] for i in items]
     variants = [i['variant'] for i in items]
     starts, mapping = audio_windows(coverages, device='cpu')
     conditions = {k: v for i in items for k, v in i['conditions'].items()}
     draft, chart_groups = make_draft_inputs(list(conditions.values()), variants, coverages, device='cpu', validate_input=False)
     ownership = dict(zip(conditions, chart_groups.tolist()))
     windows = [w for i in items for w in i['windows']]
-    batch = Batch(song_inputs(grids, validate_input=False), window_inputs(grids, starts.numpy(), mapping.numpy(),
+    batch = Batch(None if cached else song_inputs(grids, validate_input=False), None if cached else window_inputs(grids, starts.numpy(), mapping.numpy(),
         target_beats=config['target_beats'], before_beats=config['audio_before_beats'],
         after_beats=config['audio_after_beats'], validate_input=False), coverages, draft,
         torch.tensor([ownership[w[1]] for w in windows], dtype=torch.long),
@@ -144,13 +155,17 @@ def collate_audio(items, *, config, packed=False):
         collate_planner([w[4] for w in windows], device='cpu', validate_input=False), [w[0] for w in windows], variants)
     from maidata.audio.layout import prepare_encoder_layout
     from maidata.draft.layout import prepare_p0, prepare_selection
-    layout = prepare_encoder_layout(batch.songs.beat_centers, batch.songs.sample_valid.any(-1),
-        batch.audio_windows, radii=config['stage_attention_radii'], rates=config['fpn_rates'],
-        before=config['audio_before_beats'], context=config['audio_before_beats']+config['target_beats']+config['audio_after_beats'])
-    batch.audio_windows.layout = layout
+    batch.layouts = {}
+    if cached:
+        batch.p0 = collate_banks(items)
+    else:
+        layout = prepare_encoder_layout(batch.songs.beat_centers, batch.songs.sample_valid.any(-1),
+            batch.audio_windows, radii=config['stage_attention_radii'], rates=config['fpn_rates'],
+            before=config['audio_before_beats'], context=config['audio_before_beats']+config['target_beats']+config['audio_after_beats'])
+        batch.audio_windows.layout = layout
+        batch.layouts['p0'] = prepare_p0(layout['grids'][0], layout['resample'][0]['valid'],
+            starts, mapping, coverages, p0_rate=config['fpn_rates'][0])
     batch.draft_inputs.valid_indices = draft.draft_valid.flatten().nonzero().flatten()
-    batch.layouts = dict(p0=prepare_p0(layout['grids'][0], layout['resample'][0]['valid'],
-        starts, mapping, coverages, p0_rate=config['fpn_rates'][0]))
     for name, before, after in (('reconstruction', 0, 0), ('planner', 0, 0)):
         batch.layouts[name] = prepare_selection(draft.query_beats, draft.draft_valid, batch.groups,
             batch.starts, batch.valid, target_beats=config['target_beats'], before_beats=before, after_beats=after)

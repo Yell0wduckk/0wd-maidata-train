@@ -38,6 +38,8 @@ R使用共享残差MLP，只索引所属拍Z，没有邻拍读取或查询间att
 
 ## 新 Decoder：网络、窗口与监督
 
+阶段一训练入口另支持`pretrain_audio_mode=joint/cached`：前者同步更新E/D/R/P；后者读取阶段二ckpt45的冻结Encoder所生产的公开全曲P0，仅更新D/R/P，E保持eval且不前向。缓存生产入口`maidata.training.p0_cache`保留Encoder快照，完成checkpoint自带E/D/R/P，原教师加载/导出继续可用。组批proxy和计划不随计算量缩小而改变，具体生产与50/100轮交接见[冻结P0训练](drafter-frozen-p0-training.md)。
+
 当前模型架构为 `maidata.decoder-causal-cont-tick384.v2`：plan MLP＋source embedding 后归一化，单有效条件 key 直接读取 V；checkpoint 容器保持 v4，旧 CONT v1 不作为完整续训输入。缓存、采样及裁剪不变。
 
 `maidata.decoder`独立实现五类目标与八类输入、前k层Router、后段dense MMoE、独立CONT输入、内容小头、三个385类时间头及主/Physical/几何loss，默认值只在`entry.CONFIG`维护。主M继续生成并监督type/kind/pad/flags/route；begin只读真实前缀，目标类型与Slide查询坐标不提前进入Router。CONT作为独立输入进入主self-KV，只有完整字段提交Physical；首次Slide仅调整后段音频/Z查询坐标。plan使用无位置评分，音频/Z使用绝对拍RoPE，双Encoder保持独立。接口见[Decoder模块](decoder.md)。

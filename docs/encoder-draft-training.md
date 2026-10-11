@@ -1,6 +1,6 @@
 # Encoder＋Draft 阶段一训练
 
-入口为 `python -m maidata.training`，仅训练可学习的 E/D/R/P；不构建主 Decoder，不消费训练 Physical 候选，不读取旧冻结音频隐藏表示。所有默认值统一来自 `entry.CONFIG`，`--config JSON`可覆盖现有键，路径也可覆盖；相对路径相对于命令工作目录。服务器配置见 [Linux配置](../configs/encoder-draft-pilot320-linux.json)，操作交接见 [训练交接](encoder-draft-training-handoff.md)。
+入口为 `python -m maidata.training`，默认`pretrain_audio_mode=joint`同步更新E/D/R/P；`cached`通过`pretrain_p0_cache`导入新公开P0，只更新D/R/P并保留冻结Encoder。也可用`--audio-mode`和`--p0-cache`覆盖。不构建主Decoder，不消费训练Physical候选，不读取旧native隐藏缓存。所有默认值统一来自`entry.CONFIG`，`--config JSON`可覆盖现有键和路径；相对路径相对于命令工作目录。同步更新配置见[Linux配置](../configs/encoder-draft-pilot320-linux.json)，历史操作见[训练交接](encoder-draft-training-handoff.md)；本次主M ckpt45冻结缓存和50/100轮训练见[新交接](drafter-frozen-p0-training.md)。
 
 ## 数据与计算
 
@@ -52,6 +52,8 @@ loss为L_fields＋L_moment96＋L_empty＋L_positive_count＋L_planner_continuous
 计划与320首源文本准备为 [新增输入包](../../artifacts/pilot320-encoder-draft-inputs-20261010)，约9.8MB，目标为 `/root/autodl-tmp/pilot320-encoder-draft-inputs-20261010`。源文本提供精确等级和必要时的源时间格，副本与既有source_sha256一致。消费端通过source_root和Mel根目录定位，不改写缓存的生产者身份，不重算Mel、aux32或原谱。
 
 ## 本次实施与后续实验
+
+2026-10-11用户追加授权主Decoder ckpt45的Encoder冻结导出P0后训练D/R/P 50轮、调度100轮，见[缓存模式交接](drafter-frozen-p0-training.md)。下述“仅CPU”描述原拆分实现的交付边界，不撤销本次新实验授权；新实验使用独立源码及输出目录。
 
 2026-10-11拆分实施仅完成源码和受影响CPU验收，不上传、不运行CUDA、不启动训练、不替换或干预既有实验绑定源码。历史Linux路径与已批准固定配方保留作来源记录，不因本文更新自动启动任务。
 

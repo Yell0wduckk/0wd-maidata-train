@@ -47,7 +47,7 @@ def weighted_loss(terms, config, *, denominators=None):
 def seed_scratch(config):
     """Call once before fresh model construction; resume must restore RNG instead."""
     if config['pretrain_initialization'] != 'scratch':
-        raise ValueError('fresh E/D/R/P construction requires scratch initialization')
+        raise ValueError('fresh trainable components require scratch initialization')
     seed = config['pretrain_seed']
     random.seed(seed)
     np.random.seed(seed)
