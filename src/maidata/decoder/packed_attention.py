@@ -38,6 +38,35 @@ def self_attention(module, x, beats, valid, layout):
     return result, cache
 
 
+def condition_multiples(valid, layout, masks):
+    """Bind the fast path to the actual projected mask, once per memory.
+
+    A public layout can outlive a Z switch or a changed condition mask. Its
+    bucket width alone therefore cannot certify two valid keys. All layers
+    share one validity tensor, so cache this small decision by identity and
+    mutation version rather than synchronizing for every layer/field query.
+    Inference tensors lack a version counter; keep their exact fallback.
+    """
+    if 'key_gather' not in layout or not masks:
+        return (False,)*len(masks)
+    try:
+        version = valid._version
+    except RuntimeError:
+        return (False,)*len(masks)
+    cached = layout.get('_condition_multiples')
+    if cached is not None and cached[0] is valid and cached[1] == version:
+        return cached[2]
+    counts = torch.cat([mask.reshape(count, -1).sum(-1)
+                        for mask, (count, _, _) in zip(masks, layout['groups'])]).cpu().tolist()
+    flags, offset = [], 0
+    for count, _, _ in layout['groups']:
+        flags.append(all(value > 1 for value in counts[offset:offset+count]))
+        offset += count
+    flags = tuple(flags)
+    layout['_condition_multiples'] = (valid, version, flags)
+    return flags
+
+
 def condition_attention(module, x, beats, valid, kv, plan_index, layout):
     raw = module.query(x).reshape(len(x), module.heads, module.dim//module.heads)
     query = torch.cat((rotate(module, raw, beats), raw), -1)
@@ -57,14 +86,15 @@ def condition_attention(module, x, beats, valid, kv, plan_index, layout):
         sizes = [c for c, _, _ in groups]
         keys, values = [t.transpose(1, 2).index_select(0, layout['windows']).split(sizes) for t in (key, value)]
         masks = kv.valid.index_select(0, layout['windows']).split(sizes)
+    multiples = condition_multiples(kv.valid, layout, masks)
     pieces = []
-    for q, k, v, mask, (count, width, key_width) in zip(queries, keys, values, masks, groups):
+    for q, k, v, mask, (count, width, key_width), all_multiple in zip(queries, keys, values, masks, groups, multiples):
         key_width = kv.valid.shape[1] if key_width is None else key_width
         q = q.reshape(count, width, module.heads, 2*module.dim//module.heads).transpose(1, 2)
         k, v = [t.reshape(count, key_width, module.heads, 2*module.dim//module.heads).transpose(1, 2) for t in (k, v)]
         y = attend_condition(q, k, v, mask.reshape(count, key_width),
             scale=1/math.sqrt(module.dim//module.heads), dropout_p=module.dropout if module.training else 0.,
-            all_multiple='key_gather' in layout and key_width > 1)
+            all_multiple=all_multiple)
         pieces.append(y[..., :module.dim//module.heads].transpose(1, 2).flatten(0, 1))
     selected = torch.cat(pieces).index_select(0, layout['restore']) if pieces else raw
     present = kv.valid.any(-1)[:, None].expand_as(valid).flatten().index_select(0, layout['indices'])

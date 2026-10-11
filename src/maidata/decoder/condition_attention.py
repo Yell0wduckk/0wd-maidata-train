@@ -20,7 +20,7 @@ def attend(query, key, value, valid, *, scale, dropout_p, all_multiple=False):
     if valid.shape[1] == 1:
         return single_value(value, valid, length, dropout_p)
     if all_multiple:
-        # Worker buckets with key width > 1 contain only 2+ valid keys.
+        # The caller certified 2+ actual valid keys, not just bucket width.
         return F.scaled_dot_product_attention(query, key, value,
             attn_mask=valid[:, None, None, :], scale=scale, dropout_p=dropout_p)
     counts = valid.sum(-1)

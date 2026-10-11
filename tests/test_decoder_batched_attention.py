@@ -13,6 +13,8 @@ from torch.nn import functional as F
 from maidata.decoder.attention import Attention
 from maidata.decoder.batching import audio_query_layout, audio_key_spans
 from maidata.decoder.types import KV, Memory
+from maidata.decoder.packed_attention import condition_attention
+from maidata.decoder.row_layout import window_layout
 from maidata.decoder_training import recipe
 from maidata.nn.position import apply_rope
 from maidata.model import build_decoder
@@ -117,6 +119,71 @@ def test_joint_sdpa_matches_original_single_softmax_and_gradients(z_valid, plan_
         expected = old_attention(module, x, beats, valid, kv, plan_index=4)
         actual = module(x, beats, valid, kv, plan_index=4)
     assert_gradients(actual, expected, (*module.parameters(), x, values), bf16=bf16)
+
+
+@pytest.mark.parametrize('inplace', [False, True])
+@pytest.mark.parametrize('dropout', [0., .35])
+def test_packed_condition_mask_changes_invalidate_multiple_cache_and_preserve_exact_single(inplace, dropout):
+    torch.manual_seed(81)
+    module = Attention(24, 24, 3, dropout, 10000., 1.)
+    valid = torch.ones(3, 4, dtype=torch.bool)
+    key_valid = torch.ones(3, 5, dtype=torch.bool)
+    layout = window_layout(valid, key_valid)
+    x = torch.randn(3, 4, 24, requires_grad=True)
+    beats = torch.randn(3, 4)
+    values = torch.randn(3, 5, 24, requires_grad=True)
+    kv = module.project(Memory(values, torch.randn(3, 5), key_valid), plan_index=4)
+    # Populate the original all-multiple decision before changing the same
+    # public layout's runtime bank to one, zero and two valid condition keys.
+    condition_attention(module, x.flatten(0, 1), beats.flatten(), valid, kv, 4, layout)
+    changed = torch.tensor([[False, False, False, False, True], [False]*5,
+                            [False, True, False, False, True]])
+    if inplace:
+        kv.valid.copy_(changed)
+    else:
+        kv = replace(kv, valid=changed)
+    rng = torch.get_rng_state()
+    expected = module(x, beats, valid, kv, plan_index=4).flatten(0, 1)
+    torch.set_rng_state(rng)
+    actual = condition_attention(module, x.flatten(0, 1), beats.flatten(), valid, kv, 4, layout)
+    torch.testing.assert_close(actual, expected, rtol=2e-5, atol=2e-6)
+    assert actual[4:8].count_nonzero() == 0
+    # One-key and empty rows must be exactly independent of Q/K even after a
+    # formerly wider bucket is reused. Dropout still applies once per head/query.
+    parameters = (*module.query.parameters(), *module.key.parameters())
+    gradients = torch.autograd.grad(actual[:8].square().sum(), parameters,
+                                    retain_graph=True, allow_unused=True)
+    assert all(gradient is None or gradient.count_nonzero() == 0 for gradient in gradients)
+    assert_gradients(actual, expected, (*module.parameters(), x, values))
+
+
+def test_packed_condition_stable_mask_reuses_decision_without_field_synchronization():
+    module = Attention(24, 24, 3, 0., 10000., 1.)
+    valid = torch.ones(2, 3, dtype=torch.bool)
+    memory = Memory(torch.randn(2, 5, 24), torch.randn(2, 5), torch.ones(2, 5, dtype=torch.bool))
+    kv = module.project(memory, plan_index=4)
+    layout = window_layout(valid, memory.valid)
+    x, beats = torch.randn(6, 24), torch.randn(6)
+    expected = condition_attention(module, x, beats, valid, kv, 4, layout)
+    with patch.object(torch.Tensor, 'cpu', side_effect=AssertionError('repeated condition mask synchronization')):
+        with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU]) as profiler:
+            actual = condition_attention(module, x, beats, valid, kv, 4, layout)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    assert 'aten::nonzero' not in {event.key for event in profiler.key_averages()}
+
+
+def test_packed_condition_inference_tensor_without_version_keeps_single_key_semantics():
+    module = Attention(24, 24, 3, 0., 10000., 1.)
+    valid = torch.ones(2, 3, dtype=torch.bool)
+    layout = window_layout(valid, torch.ones(2, 5, dtype=torch.bool))
+    with torch.inference_mode():
+        memory = Memory(torch.randn(2, 5, 24), torch.randn(2, 5),
+                        torch.tensor([[False]*4+[True], [False]*5]))
+        kv = module.project(memory, plan_index=4)
+        x, beats = torch.randn(2, 3, 24), torch.randn(2, 3)
+        actual = condition_attention(module, x.flatten(0, 1), beats.flatten(), valid, kv, 4, layout)
+        expected = module(x, beats, valid, kv, plan_index=4).flatten(0, 1)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
 def test_self_qkv_fusion_matches_original_parameters_causal_mask_and_gradients():

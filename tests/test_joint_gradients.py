@@ -9,6 +9,8 @@ from unittest.mock import patch
 import pytest
 import torch
 
+from maidata.audio.layout import prepare_encoder_layout
+from maidata.audio.types import WindowInputs
 from maidata.chart import Moment, Note, Route, SlideDuration
 from maidata.decoder.types import Memory
 from maidata.decoder.windows import build_window
@@ -164,9 +166,9 @@ def test_each_loss_reaches_its_producer_and_gt_plan_stays_constant(joint_config,
     assert reached(objective(m_terms, chunk.labels.counts, joint_config)) == {'encoder', 'decoder'}
 
 
-def aligned_item(index, config, monkeypatch):
+def aligned_item(index, config, monkeypatch, *, remaster=False):
     """Z4 and aligned targets, using exact source/Physical tensor windows."""
-    base = auxiliary_item(index, config)
+    base = auxiliary_item(index, config, remaster)
     coverage = song_coverage(TimingMap([(0, 120)]), 1.2, first_beat=0, target_beats=config['target_beats'])
     auxiliary, decoder, ids, plans = [], [], [], []
     for key in base['conditions']:
@@ -200,21 +202,39 @@ def aligned_item(index, config, monkeypatch):
 def test_z4_real_update_and_exact_original_24beat_local_p0(joint_config, monkeypatch, precision):
     config = dict(joint_config, target_beats=16, target_stride_beats=16, audio_before_beats=4, audio_after_beats=4,
                   draft_z_stride_beats=4, pretrain_precision=precision, decoder_train_chunk_token_budget=1)
-    item = aligned_item(0, config, monkeypatch)
+    item = aligned_item(0, config, monkeypatch, remaster=True)
     batch = collate_audio([item], config=config)
     assert batch.audio_windows.mel.shape[1] == 24*config['samples_per_beat']
-    model = JointTrainer(config)
+    model = JointTrainer(config).eval()
     with torch.no_grad():
-        _, conditions, (_, _, z, local) = model.forward_shared(batch)
-        assert conditions.audio.values is local.values
+        song = model.encoder.prepare_song(batch.songs)
+        # Both the joint batch and the independent single-window oracle read
+        # this same prepared G0; their local Encoder computations are distinct.
+        with patch.object(model.encoder, 'prepare_song', return_value=song):
+            _, conditions, (_, _, z, local) = model.forward_shared(batch)
         assert z.values.shape[1] == 8
         assert z.beats[0].tolist() == [2., 6., 10., 14., 18., 22., 26., 30.]
         # The M rows are the original local outputs, including left/right
         # context; no full-song-center crop is substituted for these tensors.
         assert conditions.audio.values.shape[1] == 24*config['fpn_rates'][0]
+        assert torch.bincount(conditions.audio_mapping).tolist() == [2, 2]
+        assert batch.audio_windows.target_start_beats.tolist() == [0., 16.]
+        assert batch.coverage_audio_indices.tolist() == [0]
+        independent = {}
+        for local_index in conditions.audio_mapping.unique().tolist():
+            single = WindowInputs(*(getattr(batch.audio_windows, name)[local_index:local_index+1].clone()
+                for name in ('mel', 'aux32', 'beats', 'valid', 'target_start_beats', 'window_to_song')))
+            single.layout = prepare_encoder_layout(batch.songs.beat_centers, batch.songs.sample_valid.any(-1),
+                single, radii=config['stage_attention_radii'], rates=config['fpn_rates'],
+                before=config['audio_before_beats'], context=24)
+            independent[local_index] = model.encoder.encode_windows(song, single).P0
         for unique, local_index in enumerate(conditions.audio_mapping.tolist()):
             assert batch.audio_windows.target_start_beats[local_index] == batch.decoder_starts[unique]
-            torch.testing.assert_close(conditions.audio.values[local_index], local.values[local_index], rtol=0, atol=0)
+            oracle = independent[local_index]
+            torch.testing.assert_close(conditions.audio.values[local_index:local_index+1], oracle.values,
+                                       rtol=2e-5, atol=2e-6)
+            torch.testing.assert_close(conditions.audio.beats[local_index:local_index+1], oracle.beats, rtol=0, atol=0)
+            assert torch.equal(conditions.audio.valid[local_index:local_index+1], oracle.valid)
     metrics, audit = updates.update(model, [batch], *optimizers(model), config, distances(), audit=True)
     assert torch.isfinite(torch.tensor(metrics.report(config)['loss']))
     assert all(value > 0 for value in audit['gradients'].values())
