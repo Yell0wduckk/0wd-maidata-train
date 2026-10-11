@@ -64,11 +64,12 @@ def data_binding(plans, config):
     return binding, {k:hashes[k] for k in wanted}
 
 
-def load_producer(model, config, binding):
+def load_producer(model, config, binding, *, payload=None):
     path = config['decoder_train_checkpoint']
-    payload = torch.load(path,map_location='cpu',weights_only=False)
-    if payload.get('schema') not in ('maidata.encoder-draft-training.v1', stage_one.SCHEMA):
-        raise ValueError('E/D/P component export requires a compatible stage-I v1/v2 checkpoint')
+    if payload is None:
+        payload = torch.load(path,map_location='cpu',weights_only=False)
+    from .producer import teacher_configuration
+    teacher_configuration(payload)
     validate_cursor(payload,payload['steps_by_epoch'])
     _validate_producer(payload, config, binding)
     for name in ('encoder','draft','planner'):
@@ -101,8 +102,12 @@ def _validate_producer(payload, config, binding):
     current = json.loads(json.dumps({k:config[k] for k in keys}))
     if current != {k:payload['recipe'].get(k) for k in keys}:
         raise ValueError('frozen producer architecture/representation differs')
+    # Current v3 training records selected paths, not input-content receipts.
+    # Reusing those accepted assets does not require reconstructing old hashes.
+    # Explicit legacy metadata, when supplied on both sides, remains comparable.
+    saved_binding = payload.get('binding', {})
     for key in ('pretrain_chart_cache','pretrain_audio_cache'):
-        if payload['binding'][key] != binding[key]:
+        if key in saved_binding and key in binding and saved_binding[key] != binding[key]:
             raise ValueError('producer field/audio normalization binding differs')
 
 

@@ -15,7 +15,7 @@
 | `decoder_training.preparation/transport` | worker 内整理去重映射、padding 和分块；按 dtype 打包 IPC、pin memory 与分块 H2D |
 | `decoder_training.export_windows/support_cache` | 离线恢复真实动作与首次归责账本，准备窗首、窗内和终端支持 |
 | `decoder_training.window_cache` | 读取已打包的输入与监督张量，执行历史 dropout、padding 和行索引平移 |
-| `time.discrete/distribution` | 与Draft/迁移/推理共用的精确tick编码、CONT完整合法域、删失集合NLL |
+| `time.discrete/distribution` | 主M/迁移/推理共用的精确tick编码、CONT完整合法域、删失集合NLL；Draft独立使用拍内96类 |
 | `decoder_training.migrate_windows` | 从既有精确原谱和完整整数支持接入统一新窗口编译器 |
 | `decoder_training.intervals/compact_windows` | 仅保留为旧连续分布消费者的等义压缩工具，不是新CE迁移器 |
 | `decoder_training.network` | 持有独立 E_M/M；只编码所选局部 P0，再接入固定 Z/plan |
@@ -172,3 +172,7 @@ checkpoint的recipe记录`decoder_train_plan_source`，GT缓存路径作为输�
 每5轮及末轮 validation，重合只执行一次；完整诊断仅末轮。每轮按保存的 occurrence 集合与随机顺序消费，去重歌曲数与音频读取实例数分别记录。`last` 每个完整轮保存，`best` 只在轮末验证改善时更新，编号 checkpoint 每5轮及末轮保存；异常和轮内不保存 checkpoint。验证 loss 用于诊断及 checkpoint 记录，谱面质量仍由实际生成结果评估。
 
 CPU验证覆盖既有字段/Physical监督、历史dropout、空尾窗和独立损失归约；联合训练另覆盖真实小E_M/M更新、禁止D/P/R构造、固定Z/plan不带梯度、音频与条件映射、packed传输及worker布局。单M块直接反传、多块梯度桥与直接真实计算图比较分块/未分块和累积batch的loss、E_M/M梯度及更新，检查每batch E_M只前向和反向一次、Encoder布局仅准备一份且不执行checkpoint重算。v4恢复使用非零dropout逐位核对两模块、optimizer、scheduler和全部RNG，并拒绝旧v1/v2。正式默认仍为12 workers；CPU测试不代表CUDA原batch、吞吐或正式训练已验证。
+
+## 拆分式新教师接口（2026-10-11）
+
+阶段一新教师为v3，Z直接取D最终LayerNorm隐藏，默认256维。新权重需另目录导出Z/预测plan；不补零扩展旧128维缓存。离线生产按教师自己的配置构建E_D/D/P，M保持独立配置；Z启用时输入投影匹配manifest宽度。关闭Z且GT/无plan的M路径不加载教师；预测plan仍使用独立教师配置。原谱v2、音频、Physical、既有计划、GT plan及主M窗口v5无需重建。主M的独立CONT/385类、loss及Physical均保持现有语义。本次接口只通过CPU合成验证，详见[实施记录](drafter-split-implementation.md)。

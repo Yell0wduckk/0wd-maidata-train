@@ -6,7 +6,7 @@ from .losses import reconstruction_loss, planner_loss
 def predict_auxiliary(z, groups, starts, valid, reconstruction, planner, config, layouts=None, queries=None):
     """Reuse a single full-song Z graph across selected windows and both heads."""
     r_windows = select_windows(z, groups, starts, valid, target_beats=config['target_beats'],
-        before_beats=config['reconstruction_before_beats'], after_beats=config['reconstruction_after_beats'], layout=None if layouts is None else layouts['reconstruction'])
+        before_beats=0, after_beats=0, layout=None if layouts is None else layouts['reconstruction'])
     p_windows = select_windows(z, groups, starts, valid, target_beats=config['target_beats'],
                                before_beats=0, after_beats=0, layout=None if layouts is None else layouts['planner'])
     return reconstruction(r_windows, queries), planner(p_windows)

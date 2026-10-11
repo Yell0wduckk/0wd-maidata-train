@@ -14,7 +14,7 @@
 
 - `maidata` 不导入旧模型或参考仓库。帮助和配置展示仅需标准库，实际构建时延迟导入Torch；默认命令构建`AudioEncoder`，阶段一/阶段二训练与整曲推理各有独立入口。
 - 新 Encoder 通过 `prepare_song`、`encode_windows`、`forward` 消费准备好的 Mel、aux32、绝对拍坐标和有效位，仅公开 P0/P1/P2 三路局部输出。独立输入生产与新Draft已实现；Decoder已作为独立消费方实现，完整训练与恢复系统仍另行接入。
-- Draft网络不持有Encoder或Decoder，D/R/P参数独立；公开张量组合保留计算图。R使用独立局部字段查询，GT只安排查询和监督索引，查询之间无self-attention，不输入总行数或完整未来类型表，不预测type/pad/空槽；逐拍count保留零类。主Decoder仍预测全部结构及pad，其Z/plan适配和条件attention归Decoder所有。
+- Draft网络不持有Encoder或Decoder，D/R/P参数独立；公开张量组合保留计算图。R使用直接索引所属拍Z的共享残差MLP，GT只安排有效查询和监督索引，不输入总行数、当前目标、pad或完整未来类型表，不预测type/pad/空槽；MOMENT为拍内96类，数量拆为空/非空与正计数两头。阶段一checkpoint v3，旧R及128维Z不兼容新结构；实现合同见同级设计目录drafter-split-execution-plan.md。主Decoder仍预测全部结构及pad，其Z/plan适配和条件attention归Decoder所有。
 - 复制来源是 `main-new-audio-draft-beat` 的一拍草稿/native 音频路线。当前 native 路径冻结保留的音频模块，训练步读取外部原生 22 拍 P0/C0/C1 缓存。
 - 旧 Decoder 仍读取全曲 P0 bank，旧草稿仍读取整曲 P0。新 Encoder 的可配置 24 拍默认窗口、S 工作槽和局部三尺度输出已实现，但尚未接入旧 Decoder 或草稿。
 - 新 Encoder 的 G₀ 可复用不等于冻结：tokenizer/encoder 可训练，同次前向按曲共享计算图，不能 detach 或跨参数更新缓存旧表示。

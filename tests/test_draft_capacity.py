@@ -44,14 +44,14 @@ def test_capacity_uses_selected_base_windows_and_validation_max(tmp_path, monkey
     monkeypatch.setattr(capacity, 'load_chart', load)
     report, rows = capacity.measure_capacity(plan, split)
     assert reads == ['a.json.gz', 'b.json.gz']
-    assert report['schema'] == 'maidata.draft-query-cost.v2'
-    assert report['max_query_substeps'] == 7
-    assert report['representation'] == 'relative-tick384-continue'
+    assert report['schema'] == 'maidata.draft-query-cost.v3'
+    assert report['max_query_rows'] == 9
+    assert report['representation'] == 'beat-local-tick96'
     assert report['splits']['train']['max'] == 3
-    assert report['splits']['validation']['max'] == 7
+    assert report['splits']['validation']['max'] == 9
     assert report['all']['windows'] == 4 and report['all']['empty_windows'] == 2
     assert report['max_windows'][0]['split'] == 'validation'
-    assert report['max_windows'][0]['query_roles'] == dict(MOMENT=2, NOTE=2, ROUTE=2, SLIDE_DURATION=1)
-    assert [row['query_rows'] for row in rows] == [3, 1, 7, 1]
-    assert [row['query_cost'] for row in rows] == [7, 5, 11, 5]
-    assert [row['original_time_fields'] for row in rows] == [2, 1, 3, 1]
+    assert report['max_windows'][0]['query_roles'] == dict(MOMENT=2, NOTE_KIND=2, NOTE_FLAGS=2, ROUTE_ID=2, TRACK_BREAK=1)
+    assert [row['query_rows'] for row in rows] == [3, 0, 9, 0]
+    assert [row['query_cost'] for row in rows] == [7, 4, 13, 4]
+    assert [row['moment_queries'] for row in rows] == [1, 0, 2, 0]

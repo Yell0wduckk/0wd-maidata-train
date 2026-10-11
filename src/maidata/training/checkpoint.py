@@ -11,7 +11,7 @@ from maidata.model import ENCODER_KEYS
 from .data import read_json
 
 
-SCHEMA = 'maidata.encoder-draft-training.v2'
+SCHEMA = 'maidata.encoder-draft-training.v3'
 PATH_KEYS = ('pretrain_train_plan', 'pretrain_validation_plan', 'pretrain_chart_cache',
              'pretrain_audio_cache', 'pretrain_mel_root', 'pretrain_source_root', 'pretrain_output')
 
@@ -130,10 +130,11 @@ def capture(model, optimizer, scheduler, *, completed_epochs, step, config, bind
 
 
 def restore(payload, model, optimizer, scheduler, *, config, binding, source, steps, loaders):
+    if payload.get('schema') != SCHEMA:
+        raise ValueError('resume architecture, recipe or scheduler steps changed: split Drafter requires v3 checkpoint')
     current, saved = recipe(config), payload['recipe']
     stop = 'pretrain_stop_after_epochs'
-    if (payload.get('schema') != SCHEMA
-            or payload['steps_by_epoch'] != steps
+    if (payload['steps_by_epoch'] != steps
             or {k:v for k,v in current.items() if k != stop} != {k:v for k,v in saved.items() if k != stop}
             or current[stop] < saved[stop]):
         raise ValueError('resume architecture, recipe or scheduler steps changed')

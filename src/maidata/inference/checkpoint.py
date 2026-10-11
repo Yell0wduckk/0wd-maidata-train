@@ -1,11 +1,11 @@
 """Load inference weights and architecture, without training plans or source guards."""
 from dataclasses import dataclass
-import json
 
 import torch
 
 from maidata.entry import CONFIG
-from maidata.model import ENCODER_KEYS, build_model, build_draft, build_planner, build_decoder
+from maidata.model import build_model, build_draft, build_planner, build_decoder
+from maidata.decoder_training.producer import teacher_configuration
 
 
 @dataclass
@@ -17,6 +17,7 @@ class Models:
     config: dict
     provenance: dict
     decoder_encoder: object = None
+    teacher_config: dict | None = None
 
 
 def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device, z_cross_attention=None, plan_source='predicted'):
@@ -35,18 +36,15 @@ def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device, z_cross
         if not encoder_draft_checkpoint:
             raise ValueError('Z or predicted plan requires an Encoder/Draft checkpoint')
         producer = torch.load(encoder_draft_checkpoint, map_location='cpu', weights_only=False)
-        if producer.get('schema') not in ('maidata.encoder-draft-training.v1','maidata.encoder-draft-training.v2'):
-            raise ValueError('expected an Encoder/Draft stage-I checkpoint')
-    # These are architecture/representation settings, not source or asset identities.
-    producer_recipe = producer['recipe'] if producer is not None else {}
-    keys = [k for k in producer_recipe if k in ENCODER_KEYS or k.startswith(('draft_', 'planner_'))]
-    for key in keys:
-        if key in consumer['recipe'] and json.dumps(producer['recipe'][key]) != json.dumps(consumer['recipe'][key]):
-            raise ValueError(f'Encoder/Draft and Decoder representation differs: {key}')
-    config = dict(CONFIG, **producer_recipe)
-    config.update(consumer['recipe'])
+    teacher = teacher_configuration(producer) if producer is not None else None
+    config = dict(CONFIG, **consumer['recipe'])
     config['decoder_train_audio_scope'] = consumer['recipe'].get('decoder_train_audio_scope', 'full_song')
-    modules = ([build_model(config), build_draft(config), build_planner(config)]
+    if teacher is not None:
+        if teacher['target_beats'] != config['target_beats']:
+            raise ValueError('teacher Planner and M target-window spans differ')
+        if actual_z and teacher['draft_latent_dim'] != config['draft_latent_dim']:
+            raise ValueError('teacher Z width differs from the trained M input projection; old Z cannot be expanded')
+    modules = ([build_model(teacher), build_draft(teacher), build_planner(teacher)]
                if producer is not None else [None, None, None]) + [build_decoder(config)]
     for name, module in zip(('encoder', 'draft', 'planner'), modules):
         if module is None:
@@ -80,4 +78,4 @@ def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device, z_cross
                                         inference_plan_source=plan_source, z_cross_attention=actual_z,
                                         decoder_audio_scope=config['decoder_train_audio_scope'],
                                         decoder_audio_encoder='stage_ii' if decoder_encoder is not None else 'stage_i'),
-                  decoder_encoder=decoder_encoder)
+                  decoder_encoder=decoder_encoder, teacher_config=teacher)

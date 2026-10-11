@@ -18,8 +18,7 @@ from maidata.time import TimingMap
 from maidata.training.data import worker_init
 from maidata.training.transport import pack_batch
 from maidata.training.checkpoint import digest_file
-from .checkpoint import load_producer
-from .producer import FrozenProducer
+from .producer import load_export_producer
 from .cache_schema import P0_SCHEMA as SCHEMA
 from .recipe import autocast
 from .runner import write_json
@@ -117,18 +116,17 @@ def export(config, output):
     binding = {key:{name:digest_file(Path(config[key.replace('pretrain_','decoder_train_')])/name)
                    for name in ('catalog.json','production-summary.json')}
                for key in ('pretrain_chart_cache','pretrain_audio_cache')}
-    model = FrozenProducer(config)
-    producer = load_producer(model, config, binding)
+    model, producer, teacher = load_export_producer(config, binding)
     # D/P/M are not run or transferred to GPU. Only public Encoder outputs are exported.
     encoder = model.encoder.to(device).eval()
     generator = torch.Generator().manual_seed(config['decoder_train_seed'])
     workers = config['decoder_train_workers']
-    loader = DataLoader(AudioOnly(list(groups.items()),config), batch_size=1,
-        collate_fn=partial(collate,config=config),num_workers=workers,persistent_workers=workers>0,
+    loader = DataLoader(AudioOnly(list(groups.items()),teacher), batch_size=1,
+        collate_fn=partial(collate,config=teacher),num_workers=workers,persistent_workers=workers>0,
         worker_init_fn=worker_init,pin_memory=True,generator=generator)
     output.mkdir(parents=True,exist_ok=True)
     report = dict(schema=SCHEMA,complete=False,producer=producer,normalization=binding,
-        precision=config['decoder_train_precision'],p0_rate=config['fpn_rates'][0],
+        precision=config['decoder_train_precision'],p0_rate=teacher['fpn_rates'][0],
         source_encoder=config.get('_export_source_commit'),splits=splits,groups={},
         workers=workers,center_ownership='unique target centers; audio padding remains invalid')
     write_json(output/'manifest.json',report)
@@ -139,11 +137,11 @@ def export(config, output):
         with autocast(device,config):
             local = encoder(batch.songs,batch.windows)
             bank = assemble_full_p0(local.P0,batch.windows.target_start_beats,batch.windows.window_to_song,
-                batch.coverages,p0_rate=config['fpn_rates'][0],layout=batch.p0_layout)
+                batch.coverages,p0_rate=teacher['fpn_rates'][0],layout=batch.p0_layout)
         for i,variant in enumerate(batch.variants):
             path = output/'banks'/f'{variant}.pt'
             row = save_bank(path,bank,i,batch.coverages[i],variant=variant,producer_sha256=producer['sha256'],
-                            p0_rate=config['fpn_rates'][0])
+                            p0_rate=teacher['fpn_rates'][0])
             row.update(path='banks/'+path.name,audio_asset=groups[variant]['audio_asset'],
                        timing=groups[variant]['timing'],audio_end_seconds=groups[variant]['audio_end_seconds'])
             if not report['groups']:

@@ -18,11 +18,10 @@ from maidata.draft.windows import SongCoverage, select_windows
 from maidata.training.data import worker_init
 from maidata.training.transport import pack_batch
 from maidata.training.checkpoint import digest_file
-from .checkpoint import load_producer
-from .producer import FrozenProducer
+from .producer import load_export_producer
 from .recipe import autocast
 from .runner import write_json
-from .cache_schema import P0_SCHEMA, DP_SCHEMA as SCHEMA
+from .cache_schema import P0_SCHEMA, DP_SCHEMA as SCHEMA, Z_REPRESENTATION
 
 
 class CachedP0Dataset(Dataset):
@@ -81,6 +80,7 @@ class CachedP0Dataset(Dataset):
 
 def save_outputs(path, batch, z, plan, producer_sha):
     payload = dict(schema=SCHEMA,audio_variant=batch['variant'],producer_sha256=producer_sha,
+        z_representation=Z_REPRESENTATION,z_width=z.values.shape[-1],
         chart_to_group=batch['chart_to_group'],conditions=batch['conditions'],
         z={k:getattr(z,k).detach().cpu() for k in ('values','beats','valid')},
         planner=dict(window_ids=batch['window_ids'],chart_ids=batch['chart_ids'],
@@ -122,19 +122,19 @@ def export(config, p0_root, output):
     binding = {key:{name:digest_file(Path(config[key.replace('pretrain_','decoder_train_')])/name)
                    for name in ('catalog.json','production-summary.json')}
                for key in ('pretrain_chart_cache','pretrain_audio_cache')}
-    model = FrozenProducer(config)
-    producer = load_producer(model,config,binding)
-    if producer != p0['producer'] or binding != p0['normalization'] or p0['p0_rate'] != config['fpn_rates'][0]:
+    model, producer, teacher = load_export_producer(config,binding)
+    if producer != p0['producer'] or binding != p0['normalization'] or p0['p0_rate'] != teacher['fpn_rates'][0]:
         raise ValueError('P0 producer or normalization differs')
     draft, planner = model.draft.to(device).eval(), model.planner.to(device).eval()
     # Encoder and Decoder stay on CPU and are never forwarded.
-    dataset = CachedP0Dataset(config,p0_root,p0,plans)
+    dataset = CachedP0Dataset(teacher,p0_root,p0,plans)
     workers = config['decoder_train_workers']
     loader = DataLoader(dataset,batch_size=None,num_workers=workers,persistent_workers=workers>0,
         worker_init_fn=worker_init,pin_memory=True,
         generator=torch.Generator().manual_seed(config['decoder_train_seed']))
     output.mkdir(parents=True,exist_ok=True)
     report = dict(schema=SCHEMA,complete=False,producer=producer,normalization=binding,
+        z_representation=Z_REPRESENTATION,z_width=teacher['draft_latent_dim'],
         p0_manifest_sha256=digest_file(p0_root/'manifest.json'),p0_root=str(p0_root),
         precision=config['decoder_train_precision'],workers=workers,splits=splits,groups={},
         plans={side:{name:digest_file(Path(config['decoder_train_'+side+'_plan'])/name)
@@ -149,7 +149,7 @@ def export(config, p0_root, output):
         with autocast(device,config):
             z = draft(batch['bank'],batch['inputs'])
             target = select_windows(z,batch['groups'],batch['starts'],batch['valid'],
-                target_beats=config['target_beats'],before_beats=0,after_beats=0,layout=batch['layout'])
+                target_beats=teacher['target_beats'],before_beats=0,after_beats=0,layout=batch['layout'])
             plan = planner(target)
         path = output/'banks'/f'{batch["variant"]}.pt'
         row = save_outputs(path,batch,z,plan,producer['sha256'])

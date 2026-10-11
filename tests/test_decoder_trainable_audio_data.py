@@ -10,6 +10,7 @@ from maidata.audio.types import ScaleMemory
 from maidata.decoder_training import data
 from maidata.decoder_training.data import DecoderDataset, WindowBatchSampler, collate_audio, collate_online_audio
 from maidata.decoder_training.frozen_cache import FrozenCache
+from maidata.decoder_training.cache_schema import DP_SCHEMA, Z_REPRESENTATION
 from maidata.draft.windows import assemble_full_p0, song_coverage
 from maidata.time import TimingMap
 from test_decoder_training import config, encoder_config, training_item
@@ -21,7 +22,8 @@ def test_fixed_cache_reads_only_dp_without_a_p0_root(config, tmp_path, monkeypat
     root.mkdir()
     torch.save(item['dp'], root/'0.pt')
     producer = {'sha256': 'fixed-stage-one'}
-    (root/'manifest.json').write_text(json.dumps(dict(producer=producer, groups={'0': {'path': '0.pt'}})))
+    (root/'manifest.json').write_text(json.dumps(dict(schema=DP_SCHEMA,z_representation=Z_REPRESENTATION,z_width=config['draft_latent_dim'],
+        producer=producer, groups={'0': {'path': '0.pt'}})))
     c = dict(config, decoder_train_dp_cache=str(root), decoder_train_p0_cache=None)
     with patch('torch.load', side_effect=AssertionError('startup must not read payloads')):
         cache = FrozenCache([], c, {})

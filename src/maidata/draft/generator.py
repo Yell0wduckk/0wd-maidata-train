@@ -59,6 +59,8 @@ class DraftGenerator(nn.Module):
                       experts=experts, expert_ffn_dim=expert_ffn_dim, latent_dim=latent_dim,
                       difficulty_vocab_size=difficulty_vocab_size)
         numerical_config(dropout, norm_eps, rope_base, rope_position_scale)
+        if latent_dim != dim:
+            raise ValueError('draft_latent_dim must equal draft_dim: Z is the final normalized hidden state')
         if not all(torch.isfinite(torch.tensor(v)) for v in (level_center, level_scale, span_scale)) or min(level_scale, span_scale) <= 0:
             raise ValueError('condition normalization must be finite with positive scales')
         self.audio_dim, self.dim = audio_dim, dim
@@ -71,8 +73,6 @@ class DraftGenerator(nn.Module):
         self.blocks = nn.ModuleList(DraftBlock(audio_dim, dim, heads, experts, expert_ffn_dim,
             dropout, norm_eps, rope_base, rope_position_scale) for _ in range(layers))
         self.output_norm = nn.LayerNorm(dim, eps=norm_eps)
-        self.output = nn.Linear(dim, latent_dim)
-        self.latent_norm = nn.LayerNorm(latent_dim, eps=norm_eps, elementwise_affine=False)
 
     def project_audio(self, audio) -> ProjectedAudio:
         """One projection per layer and unique audio, reusable within this graph only."""
@@ -103,6 +103,4 @@ class DraftGenerator(nn.Module):
             x = F.layer_norm(x.float(), self.output_norm.normalized_shape,
                              self.output_norm.weight.float(), self.output_norm.bias.float(),
                              self.output_norm.eps)
-            x = F.linear(x, self.output.weight.float(), self.output.bias.float())
-            x = self.latent_norm(x)
         return BeatMemory(x.masked_fill(~valid[..., None], 0), beats, valid)

@@ -15,16 +15,17 @@ from maidata.training import pretrain
 
 
 def test_weighted_logical_batch_supports_and_gradients():
-    totals = torch.tensor([2., 4., 6., 8., 10.], requires_grad=True)
-    counts = torch.tensor([2, 4, 3, 2, 5])
+    totals = torch.tensor([2., 40., 6., 8., 10., 12., 14.], requires_grad=True)
+    counts = torch.tensor([2, 10, 3, 2, 5, 3, 7])
     terms = {name: LossTerm(total, count)
-             for name, total, count in zip(pretrain.LOSS_WEIGHT_KEYS, totals, counts)}
+             for name, total, count in zip(('field/kind', 'field/route_id', 'moment96',
+                 'empty', 'positive_count', 'planner_continuous', 'planner_category'), totals, counts)}
     loss = pretrain.weighted_loss(terms, CONFIG)
-    assert loss.item() == pytest.approx(8.5)
+    assert loss.item() == pytest.approx(15.)
     loss.backward()
-    torch.testing.assert_close(totals.grad, torch.tensor([.5, .25, 1 / 3, .5, .05]))
-    config = dict(CONFIG, reconstruction_time_weight=0, planner_category_weight=2)
-    assert pretrain.weighted_loss(terms, config).item() == pytest.approx(11.)
+    torch.testing.assert_close(totals.grad, torch.tensor([.25, .05, 1/3, .5, .2, 1/3, 1/28]))
+    config = dict(CONFIG, reconstruction_moment_weight=0, planner_category_weight=2)
+    assert pretrain.weighted_loss(terms, config).item() == pytest.approx(16.5)
     empty = {name: LossTerm(totals.sum() * 0, torch.tensor(0)) for name in terms}
     assert pretrain.weighted_loss(empty, config).item() == 0
 
@@ -117,4 +118,5 @@ def test_scratch_seed_and_autocast_are_explicit(monkeypatch):
     assert calls == [(('cuda',), {'dtype': torch.bfloat16})]
     with pretrain.autocast('cpu', CONFIG), pretrain.autocast('cuda', dict(CONFIG, pretrain_precision='fp32')):
         pass
-    assert len(calls) == 1
+    assert calls[-1] == (('cpu',), {'dtype': torch.bfloat16})
+    assert len(calls) == 2

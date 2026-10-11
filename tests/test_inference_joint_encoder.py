@@ -28,7 +28,7 @@ def checkpoints(config, tmp_path, *, schema='maidata.decoder-training.v4'):
         decoder.heads.times['MOMENT'].weight.zero_()
         decoder.heads.times['MOMENT'].bias.fill_(-100)
         decoder.heads.times['MOMENT'].bias[384] = 100
-    producer = dict(schema='maidata.encoder-draft-training.v1', recipe=config,
+    producer = dict(schema='maidata.encoder-draft-training.v3', recipe=config,
                     model_state={name+'.'+key: value for name, module in teacher.items()
                                  for key, value in module.state_dict().items()})
     state = torch.nn.ModuleDict(dict(encoder=encoder, decoder=decoder)).state_dict()

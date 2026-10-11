@@ -1,9 +1,12 @@
-"""FP32 sums and supports; training chooses weights, never hidden defaults."""
+"""Independent FP32 numerators/supports; the caller owns logical reduction."""
 from dataclasses import dataclass
 
 import torch
 from torch import Tensor
 from torch.nn import functional as F
+
+
+FIELD_PREFIX = 'field/'
 
 
 @dataclass
@@ -16,38 +19,33 @@ class LossTerm:
         return self.total / self.count.clamp_min(1)
 
 
+def _categorical(logits, labels, active, smoothing):
+    """An empty field stays differentiably zero without inventing a label."""
+    total = (F.cross_entropy(logits.float()[active], labels[active],
+                             label_smoothing=smoothing, reduction='sum')
+             if active.any() else logits.float().sum() * 0)
+    return LossTerm(total, active.sum())
+
+
 def reconstruction_loss(output, target, *, label_smoothing):
     if not 0 <= label_smoothing <= 1:
         raise ValueError('invalid reconstruction label smoothing')
-    device = output.count_logits.device
+    device = output.empty_logits.device
     with torch.autocast(device_type=device.type, enabled=False):
-        ce = output.count_logits.float().sum() * 0
-        ce_count = torch.zeros((), device=device, dtype=torch.long)
+        query_valid = target.valid[:, None] & target.queries.valid & output.query_valid
+        terms = {}
         for name, logits in output.field_logits.items():
             labels = target.fields[name]
-            active = (labels != -100) & target.valid[:, None]
-            labels = labels.masked_fill(~active, -100)
-            ce = ce + F.cross_entropy(logits.float().transpose(1, 2), labels, ignore_index=-100,
-                                     label_smoothing=label_smoothing, reduction='sum')
-            ce_count = ce_count + active.sum()
-        time = output.count_logits.float().sum() * 0
-        time_count = torch.zeros((), device=device, dtype=torch.long)
-        for name, prediction in output.time_predictions.items():
-            selected = target.time_classes[name] & target.valid[:, None, None]
-            active = selected.any(-1)
-            logits = prediction.float()[active]
-            basic = target.time_basic[name][active]
-            logits = logits.masked_fill(~basic, -torch.inf)
-            numerator = torch.logsumexp(logits.masked_fill(~selected[active], -torch.inf), -1)
-            time = time + (torch.logsumexp(logits, -1)-numerator).sum()
-            time_count = time_count + (target.time_valid[name] & target.valid[:, None]).sum()
-        logits = output.count_logits.float()
-        active = target.valid[:, None].expand(logits.shape[:2])
-        labels = target.moment_counts.masked_fill(~active, -100)
-        count_loss = F.cross_entropy(logits.transpose(1, 2), labels, ignore_index=-100,
-                                    label_smoothing=label_smoothing, reduction='sum')
-    return {'classification': LossTerm(ce, ce_count), 'time': LossTerm(time, time_count),
-            'count': LossTerm(count_loss, active.sum())}
+            terms[FIELD_PREFIX + name] = _categorical(
+                logits, labels, query_valid & (labels != -100), label_smoothing)
+        terms['moment96'] = _categorical(output.moment_logits, target.moment_tick,
+                                        query_valid & (target.moment_tick != -100), 0.)
+        beat_valid = target.valid[:, None] & output.count_valid
+        terms['empty'] = _categorical(output.empty_logits, (target.moment_counts > 0).long(),
+                                      beat_valid, label_smoothing)
+        terms['positive_count'] = _categorical(output.positive_count_logits,
+            target.moment_counts - 1, beat_valid & (target.moment_counts > 0), label_smoothing)
+    return terms
 
 
 def planner_loss(output, target):

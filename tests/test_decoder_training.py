@@ -182,7 +182,7 @@ def tensor_window(row):
 def freeze_item(item,c):
     """Small independent online oracle, used only to create test cache tensors."""
     from maidata.decoder_training.p0_cache import collate,SCHEMA as P0_SCHEMA
-    from maidata.decoder_training.dp_cache import SCHEMA as DP_SCHEMA
+    from maidata.decoder_training.dp_cache import SCHEMA as DP_SCHEMA, Z_REPRESENTATION
     from maidata.draft.conditions import make_draft_inputs
     from maidata.draft.windows import assemble_full_p0,select_windows
     with torch.random.fork_rng(), torch.no_grad():
@@ -204,6 +204,7 @@ def freeze_item(item,c):
     p0 = dict(schema=P0_SCHEMA,audio_variant=item['variant'],producer_sha256='fixed-producer',
         coverage=asdict(item['coverage']),**{k:getattr(bank,k)[0] for k in ('values','beats','valid')})
     dp = dict(schema=DP_SCHEMA,audio_variant=item['variant'],producer_sha256='fixed-producer',
+        z_representation=Z_REPRESENTATION,z_width=c['draft_latent_dim'],
         chart_to_group=owner,conditions=[asdict(v) for v in item['conditions'].values()],
         z={k:getattr(z,k) for k in ('values','beats','valid')},
         planner=dict(window_ids=[w['identity'][0] for w in rows],chart_ids=[w['chart_id'] for w in rows],
@@ -504,7 +505,7 @@ def test_runner_exact_epoch_resume_dropout_validation_and_failure(config,tmp_pat
     assert runner.run(interrupted,resume=path)['step']==sum(steps)
 
 
-@pytest.mark.parametrize('schema',['maidata.encoder-draft-training.v1','maidata.encoder-draft-training.v2'])
+@pytest.mark.parametrize('schema',['maidata.encoder-draft-training.v3'])
 def test_producer_load_is_paired_strict_and_stage_two_resume_is_separate(config,tmp_path,monkeypatch,schema):
     from maidata.training.network import Pretrainer
     from maidata.training import checkpoint as pretrain

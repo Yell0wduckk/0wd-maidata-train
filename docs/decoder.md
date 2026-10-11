@@ -1,6 +1,6 @@
 # Decoder 模块与接口
 
-主 M 使用六层主干、五类 Router、原内容小头及独立 CONT 输入序列。架构配置仍集中在 `entry.CONFIG`；Draft R 独立局部重建不受本次修改影响。实施合同见[独立 CONT](decoder-cont-token-plan.md)。
+主 M 使用六层主干、五类 Router、原内容小头及独立 CONT 输入序列。架构配置仍集中在 `entry.CONFIG`；Draft已采用独立[拆分式直接解析](draft.md)，其拍内96类标签与M的时间任务分别维护。实施合同见[独立 CONT](decoder-cont-token-plan.md)。
 
 ## 主干与内容头
 
@@ -35,3 +35,5 @@
 每次 CONT 调用主干追加 KV，锁定时间类型；选择最终短值后组装完整 Moment/HoldDuration/SlideDuration，才调用真实规则接受。CONT 搜索使用不可变 KV 分支，失败可退回前缀，不污染 Physical。跨窗从真实谱面历史重新展开并 prefill；物化只接收真实谱面，不包含 CONT。
 
 新训练 checkpoint 为 `maidata.decoder-training.v4`，模型架构为 `maidata.decoder-causal-cont-tick384.v2`；旧 FieldReader 及未归一化 CONT v1 checkpoint 不支持完整续训，不迁移 optimizer。精确源谱和完整 Physical 仍为 v2；模型序列缓存为 `maidata.model-chart-sequence.v1`，窗口为 `maidata.decoder-window-tensors.v5`。迁移见[缓存说明](time384-cache-migration.md)。
+
+新教师Z默认256维，M启用Z时输入投影匹配DP manifest的真实宽度；关闭Z且GT/无plan时不加载教师。教师与M按各自checkpoint配置构造，不将旧128维Z补零扩维。主M架构、CONT、时间监督与Physical保持本文合同。

@@ -1,4 +1,4 @@
-"""Measure independent R query/substep cost on selected base windows."""
+"""Measure valid split-field query cost on explicitly selected base windows."""
 import argparse
 from collections import Counter, defaultdict
 import json
@@ -7,7 +7,6 @@ from pathlib import Path
 
 from maidata.chart_cache.cache import load_chart
 from .chart_data import from_record
-from .schema import ROW_TYPES
 from .targets import reconstruction_target, required_query_rows
 
 
@@ -63,15 +62,13 @@ def measure_capacity(plan_path, split_path, *, chart_cache=None):
             rows.append(dict(window_id=window['window_id'], chart_id=chart_id, split=owners[chart_id],
                              start_tick=window['start_tick'], end_tick=window['end_tick'],
                              query_rows=len(target.rows), query_cost=target.query_cost,
-                             original_time_fields=sum(r.first_time_step for r in target.rows),
-                             moment_counts=target.moment_counts, query_roles=dict(counts),
-                             truncated_time_fields=sum(r.first_time_step and r.closed_by_continue
-                                 and r.query.role != 'MOMENT' for r in target.rows)))
+                             moment_queries=sum(r.moment_tick is not None for r in target.rows),
+                             moment_counts=target.moment_counts, query_roles=dict(counts)))
     summary = _summary(rows)
-    report = dict(schema='maidata.draft-query-cost.v2', plan=str(plan_path.resolve()),
+    report = dict(schema='maidata.draft-query-cost.v3', plan=str(plan_path.resolve()),
                   split=str(split_path.resolve()), chart_cache=str(cache.resolve()),
                   target_beats=target_beats, target_stride_beats=plan['config']['target_stride_beats'],
-                  representation='relative-tick384-continue', max_query_substeps=summary['max'], all=summary,
+                  representation='beat-local-tick96', max_query_rows=summary['max'], all=summary,
                   splits={side: _summary([r for r in rows if r['split'] == side])
                           for side in ('train', 'validation')},
                   max_windows=[r for r in rows if r['query_rows'] == summary['max']])

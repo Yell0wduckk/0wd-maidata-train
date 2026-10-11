@@ -59,21 +59,21 @@ class PlannerOutput:
 @dataclass
 class ReconstructionOutput:
     field_logits: dict[str, Tensor]
-    time_predictions: dict[str, Tensor]
-    count_logits: Tensor
+    moment_logits: Tensor
+    empty_logits: Tensor
+    positive_count_logits: Tensor
     valid: Tensor
+    query_valid: Tensor
+    count_valid: Tensor
 
 
 @dataclass
 class ReconstructionTargets:
     fields: dict[str, Tensor]
-    times: dict[str, Tensor]
-    time_valid: dict[str, Tensor]
+    moment_tick: Tensor
     moment_counts: Tensor
     valid: Tensor
     queries: object = None
-    time_classes: dict[str, Tensor] | None = None
-    time_basic: dict[str, Tensor] | None = None
 
 
 @dataclass
@@ -82,7 +82,6 @@ class ReconstructionQueries:
     roles: Tensor
     beats: Tensor
     origins: Tensor
-    elapsed: Tensor
     ordinals: Tensor
     tracks: Tensor
     note_kinds: Tensor
@@ -90,8 +89,10 @@ class ReconstructionQueries:
     route_valid: Tensor
     valid: Tensor
     history_gaps: Tensor
-    boundary: Tensor
     last_real_valid: Tensor
+    note_ordinals: Tensor
+    segments: Tensor
+    current_route_ids: Tensor
 
 
 @dataclass

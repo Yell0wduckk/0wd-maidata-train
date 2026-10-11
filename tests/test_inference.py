@@ -48,7 +48,7 @@ def conditions(c, timing, duration):
 def test_checkpoint_and_full_e_d_p_m_no_training_or_hash_dependencies(config, geometry, tmp_path):
     c = config
     modules = [build_model(c), build_draft(c), build_planner(c), build_decoder(c)]
-    first = dict(schema='maidata.encoder-draft-training.v1', recipe=c, source={'commit': 'old-code'},
+    first = dict(schema='maidata.encoder-draft-training.v3', recipe=c, source={'commit': 'old-code'},
         model_state={name+'.'+key: value for name, m in zip(('encoder','draft','planner'), modules)
                      for key, value in m.state_dict().items()})
     decoder_encoder = build_model(c)

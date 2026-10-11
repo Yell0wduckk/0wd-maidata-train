@@ -128,7 +128,7 @@ def test_nonfinite_loss_still_stops_before_optimizer_update(config):
     model = Pretrainer(config)
     batch = collate_audio([item(0,config)],config=config)
     with torch.no_grad():
-        model.draft.output.weight.fill_(float('nan'))
+        model.draft.output_norm.weight.fill_(float('nan'))
     optimizer = make_optimizer(model.parameters(),config)
     scheduler = make_scheduler(optimizer,[1]*8,config)
     with patch.object(optimizer,'step',side_effect=AssertionError('nonfinite update')):

@@ -120,7 +120,7 @@ def main(argv=None):
                 conditions = prepare_conditions(models.encoder, models.draft, models.planner, models.config, grid,
                     timing, duration, difficulty=args.difficulty, level=args.level, device=device,
                     encoder_window_batch=args.encoder_window_batch, progress=progress,
-                    decoder_encoder=models.decoder_encoder)
+                    decoder_encoder=models.decoder_encoder, teacher_config=models.teacher_config)
             conditions = with_plan_source(conditions, args.plan_source, read_json(args.gt_plan) if args.gt_plan else None)
             with stage(progress, 'generation'):
                 encoded, windows = generate(models.decoder, conditions, timing, geometry, models.config, metadata,

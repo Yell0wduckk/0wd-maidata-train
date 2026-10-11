@@ -1,5 +1,7 @@
 # Encoder / Draft 批量化修复验证（2026-10-10）
 
+本文是旧结构的历史测量，不代表2026-10-11拆分式Drafter的CUDA速度或恢复资格；新结构见[Draft](draft.md)，v3不兼容旧完整轮checkpoint。
+
 对照基线为 `1f6a76288daa017c2ce2711302fc7c7bad41f325`。保留全部网络参数名称与形状、配置值、L/S联合softmax、G0共享计算图、绝对拍RoPE、逐拍全曲Draft、R/P监督及模块边界。
 
 ## 实现

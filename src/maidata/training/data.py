@@ -151,8 +151,7 @@ def collate_audio(items, *, config, packed=False):
     batch.draft_inputs.valid_indices = draft.draft_valid.flatten().nonzero().flatten()
     batch.layouts = dict(p0=prepare_p0(layout['grids'][0], layout['resample'][0]['valid'],
         starts, mapping, coverages, p0_rate=config['fpn_rates'][0]))
-    for name, before, after in (('reconstruction', config['reconstruction_before_beats'], config['reconstruction_after_beats']),
-                                ('planner', 0, 0)):
+    for name, before, after in (('reconstruction', 0, 0), ('planner', 0, 0)):
         batch.layouts[name] = prepare_selection(draft.query_beats, draft.draft_valid, batch.groups,
             batch.starts, batch.valid, target_beats=config['target_beats'], before_beats=before, after_beats=after)
     if packed:

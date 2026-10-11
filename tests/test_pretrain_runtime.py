@@ -34,10 +34,8 @@ def config():
         frequency_queries=2, fpn_rates=(3, 2, 1), target_beats=3,
         audio_before_beats=2, audio_after_beats=1, dropout=0.,
         draft_layers=2, draft_dim=24, draft_heads=3, draft_experts=3, draft_expert_ffn_dim=29,
-        draft_latent_dim=10, planner_dim=16, planner_heads=2, planner_mlp_dim=23, planner_dropout=0.,
-        reconstruction_dim=12, reconstruction_heads=3, reconstruction_ffn_dim=25,
-        reconstruction_dropout=0., reconstruction_query_rows=12,
-        reconstruction_before_beats=2, reconstruction_after_beats=1,
+        draft_latent_dim=24, planner_dim=16, planner_heads=2, planner_mlp_dim=23, planner_dropout=0.,
+        reconstruction_ffn_dim=48, reconstruction_dropout=0.,
         pretrain_device='cpu', pretrain_workers=0, pretrain_precision='fp32',
         pretrain_warmup_steps=2, pretrain_scheduler_epochs=8, pretrain_stop_after_epochs=6,
         pretrain_token_budget=None)
@@ -72,7 +70,9 @@ def item(index, config, remaster=False):
     return dict(variant=variant,grid=grid,coverage=coverage,conditions=conditions,windows=windows)
 
 
-def test_actual_update_shares_audio_and_preserves_all_tail_supervision(config):
+@pytest.mark.parametrize('precision', ['fp32', 'bf16'])
+def test_actual_update_shares_audio_and_preserves_all_tail_supervision(config, precision):
+    config = dict(config, pretrain_precision=precision)
     seed_scratch(config)
     batch = collate_audio([item(0,config,True), item(1,config)],config=config)
     assert len(batch.audio_variants)==2 and len(batch.draft_inputs.audio_mapping)==3
@@ -90,7 +90,8 @@ def test_actual_update_shares_audio_and_preserves_all_tail_supervision(config):
     assert prepare.call_count==draft.call_count==1
     assert all(v>0 for v in audit['gradients'].values())
     assert all(v>0 for v in audit['changed_parameter_tensors'].values())
-    assert metrics.sums['count'][1]==18 and metrics.sums['planner_category'][1]==6
+    assert metrics.sums['empty'][1]==18 and metrics.sums['planner_category'][1]==6
+    assert metrics.sums['positive_count'][1]==5 and metrics.sums['moment96'][1]==5
     assert scheduler.last_epoch==1
 
 
@@ -198,6 +199,7 @@ def test_complete_epoch_resume_is_exact_and_never_saves_failed_epoch(config,tmp_
     runner.run(interrupted,resume=ckpt)
     a=torch.load(Path(full['pretrain_output'])/'checkpoints/last.ckpt',weights_only=False)
     b=torch.load(ckpt,weights_only=False)
+    assert a['schema'] == b['schema'] == 'maidata.encoder-draft-training.v3'
     for k in a['model_state']: torch.testing.assert_close(a['model_state'][k],b['model_state'][k],rtol=0,atol=0)
     assert a['step']==b['step']==6
     assert a['scheduler_state']==b['scheduler_state']
@@ -207,6 +209,11 @@ def test_complete_epoch_resume_is_exact_and_never_saves_failed_epoch(config,tmp_
     assert [m['epoch'] for m in metrics if 'validation' in m]==[5,6]
     assert [m['epoch'] for m in metrics if 'diagnostics' in m.get('validation',{})]==[6]
     assert sorted(p.name for p in ckpt.parent.iterdir())==['best.ckpt','epoch-005.ckpt','epoch-006.ckpt','last.ckpt']
+    final_diagnostics = metrics[-1]['validation']['diagnostics']
+    assert len(final_diagnostics['moment96_conditional']['true_distribution']) == 96
+    assert final_diagnostics['positive_count_gt_nonempty']['count'] > 0
+    assert final_diagnostics['composed_count']['count'] > final_diagnostics['positive_count_gt_nonempty']['count']
+    assert 'confusion' in final_diagnostics['fields']['kind']
     assert runner.run(interrupted,resume=ckpt)['step']==6
     with pytest.raises(ValueError,match='recipe or scheduler steps changed'):
         runner.run(dict(interrupted,pretrain_audio_groups_per_batch=1),resume=ckpt)
@@ -241,3 +248,10 @@ def test_persistent_loader_rng_has_no_extra_resume_draw():
     finally:
         for loader in loaders:
             if loader._iterator is not None: loader._iterator._shutdown_workers()
+
+
+def test_stage_one_rejects_old_checkpoint_before_loading_or_partial_restore(config):
+    for version in ('v1', 'v2'):
+        with pytest.raises(ValueError, match='requires v3 checkpoint'):
+            checkpoint.restore({'schema': f'maidata.encoder-draft-training.{version}'},
+                None, None, None, config=config, binding=None, source=None, steps=[1]*8, loaders=[])

@@ -37,6 +37,8 @@ def collate_conditions(items, windows, config, *, audio, audio_keys=None):
             key = (item['variant'], group)
             if use_z and key not in groups:
                 groups[key] = len(z_rows)
+                if dp['z']['values'].shape[-1] != config['draft_latent_dim']:
+                    raise ValueError('M Z projection width differs from the frozen teacher Z')
                 z_rows.append({k: dp['z'][k][group] for k in ('values', 'beats', 'valid')})
             planner = item['gt_plan'] if config['decoder_train_plan_source'] == 'gt' else dp['planner']
             lookup = item['gt_plan']['window_index'] if config['decoder_train_plan_source'] == 'gt' else dp['window_index']

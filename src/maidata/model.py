@@ -33,7 +33,7 @@ def build_planner(config):
 
 def build_reconstruction(config):
     from .draft.reconstruction import ReconstructionHead
-    keys = ('layers', 'dim', 'heads', 'ffn_dim', 'dropout', 'norm_eps',
+    keys = ('ffn_dim', 'dropout', 'norm_eps',
             'position_base', 'position_scale')
     return ReconstructionHead(latent_dim=config['draft_latent_dim'], target_beats=config['target_beats'],
                                **{key: config['reconstruction_' + key] for key in keys})

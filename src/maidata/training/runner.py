@@ -7,19 +7,25 @@ import time
 
 import torch
 
+from maidata.draft.losses import FIELD_PREFIX
+from maidata.draft.schema import FIELD_SIZES
+
 from . import checkpoint
 from .batching import group_token_cost
 from .data import AudioPlan, make_loader, epoch_iterator
 from .network import Pretrainer
 from .pretrain import (LOSS_WEIGHT_KEYS, seed_scratch, make_optimizer, make_scheduler,
-                       clip_gradients, autocast, epoch_range)
+                       clip_gradients, autocast, epoch_range, weighted_loss)
 
 
 def supports(batch):
     r, p = batch.reconstruction, batch.planner
-    return dict(classification=sum(int(((v != -100) & r.valid[:, None]).sum()) for v in r.fields.values()),
-        time=sum(int((v & r.valid[:, None]).sum()) for v in r.time_valid.values()),
-        count=int(r.valid.sum()) * r.moment_counts.shape[1],
+    active = r.valid[:, None] & r.queries.valid
+    return dict({FIELD_PREFIX + name: int(((labels != -100) & active).sum())
+                 for name, labels in r.fields.items()},
+        moment96=int(((r.moment_tick != -100) & active).sum()),
+        empty=int(r.valid.sum()) * r.moment_counts.shape[1],
+        positive_count=int(((r.moment_counts > 0) & r.valid[:, None]).sum()),
         planner_continuous=int(p.valid.sum()), planner_category=int(p.valid.sum()))
 
 
@@ -31,7 +37,9 @@ def query_cost(batch):
 
 class Metrics:
     def __init__(self):
-        self.sums = {k: [0., 0] for k in LOSS_WEIGHT_KEYS}
+        self.sums = {k: [0., 0] for k in
+                     (*[FIELD_PREFIX + name for name in FIELD_SIZES],
+                      *[name for name in LOSS_WEIGHT_KEYS if name != 'classification'])}
 
     def add(self, terms):
         for name, term in terms.items():
@@ -40,14 +48,18 @@ class Metrics:
 
     def report(self, config):
         terms = {k: dict(total=v[0], count=v[1], mean=v[0]/max(1, v[1])) for k,v in self.sums.items()}
-        return dict(loss=sum(terms[k]['mean'] * config[w] for k,w in LOSS_WEIGHT_KEYS.items()), terms=terms)
+        fields = [v['mean'] for k,v in terms.items() if k.startswith(FIELD_PREFIX) and v['count']]
+        classification = sum(fields) / max(1, len(fields))
+        loss = classification * config[LOSS_WEIGHT_KEYS['classification']]
+        loss += sum(terms[k]['mean'] * config[w] for k,w in LOSS_WEIGHT_KEYS.items() if k != 'classification')
+        return dict(loss=loss, classification=dict(mean=classification, active_fields=len(fields)), terms=terms)
 
 
 def update(model, batches, optimizer, scheduler, config, *, audit=False):
     device = next(model.parameters()).device
     if any(not math.isfinite(config[k]) or config[k] < 0 for k in LOSS_WEIGHT_KEYS.values()):
         raise ValueError('loss weights must be finite and nonnegative')
-    total_counts = {k: 0 for k in LOSS_WEIGHT_KEYS}
+    total_counts = {k: 0 for k in Metrics().sums}
     for batch in batches:
         for k, n in supports(batch).items():
             total_counts[k] += n
@@ -58,7 +70,7 @@ def update(model, batches, optimizer, scheduler, config, *, audit=False):
         batch = raw.to(device)
         with autocast(device, config):
             terms, _ = model(batch)
-            loss = sum(terms[k].total / max(1, total_counts[k]) * config[w] for k,w in LOSS_WEIGHT_KEYS.items())
+            loss = weighted_loss(terms, config, denominators=total_counts)
         if not torch.isfinite(loss):
             raise ValueError('nonfinite pretraining loss')
         loss.backward()
@@ -75,11 +87,68 @@ def update(model, batches, optimizer, scheduler, config, *, audit=False):
     return metrics, dict(gradient_norm=float(norm), gradients=gradients, changed_parameter_tensors=changed)
 
 
+class Diagnostics:
+    """Exact final-only confusion counts, with no quality acceptance threshold."""
+    def __init__(self):
+        self.confusion = {name: torch.zeros(size, size, dtype=torch.long)
+                          for name, size in FIELD_SIZES.items()}
+        self.moment = torch.zeros(96, 96, dtype=torch.long)
+        self.empty = torch.zeros(2, 2, dtype=torch.long)
+        self.positive = torch.zeros(96, 96, dtype=torch.long)
+        self.composed = [0, 0]
+
+    @staticmethod
+    def add_confusion(table, logits, labels, active):
+        truth = labels[active].detach().cpu()
+        prediction = logits.argmax(-1)[active].detach().cpu()
+        size = table.shape[0]
+        table += torch.bincount(truth * size + prediction, minlength=size * size).reshape(size, size)
+
+    def add(self, output, target):
+        active = target.valid[:, None] & target.queries.valid & output.query_valid
+        for name, logits in output.field_logits.items():
+            labels = target.fields[name]
+            self.add_confusion(self.confusion[name], logits, labels, active & (labels != -100))
+        self.add_confusion(self.moment, output.moment_logits, target.moment_tick,
+                           active & (target.moment_tick != -100))
+        beats = target.valid[:, None] & output.count_valid
+        self.add_confusion(self.empty, output.empty_logits, (target.moment_counts > 0).long(), beats)
+        self.add_confusion(self.positive, output.positive_count_logits, target.moment_counts - 1,
+                           beats & (target.moment_counts > 0))
+        composed = torch.where(output.empty_logits.argmax(-1).bool(),
+                               output.positive_count_logits.argmax(-1) + 1, 0)
+        self.composed[0] += int(((composed == target.moment_counts) & beats).sum())
+        self.composed[1] += int(beats.sum())
+
+    @staticmethod
+    def accuracy(table):
+        correct, count = int(table.diag().sum()), int(table.sum())
+        return dict(correct=correct, count=count, accuracy=correct/max(1, count))
+
+    def report(self):
+        fields = {}
+        for name, table in self.confusion.items():
+            support = table.sum(1)
+            recall = [None if not int(n) else int(table[i, i])/int(n) for i,n in enumerate(support)]
+            least = int(support[support > 0].min()) if (support > 0).any() else 0
+            rare = {str(i): recall[i] for i,n in enumerate(support) if least and int(n) == least}
+            fields[name] = dict(**self.accuracy(table), confusion=table.tolist(),
+                class_support=support.tolist(), class_recall=recall,
+                rare_class_rule='least-supported observed classes', rare_class_recall=rare)
+        return dict(fields=fields,
+            moment96_conditional=dict(**self.accuracy(self.moment),
+                true_distribution=self.moment.sum(1).tolist(), predicted_distribution=self.moment.sum(0).tolist()),
+            empty=self.accuracy(self.empty),
+            positive_count_gt_nonempty=self.accuracy(self.positive),
+            composed_count=dict(correct=self.composed[0], count=self.composed[1],
+                                accuracy=self.composed[0]/max(1, self.composed[1])))
+
+
 @torch.no_grad()
 def validate(model, loader, config, *, final, restored_rng=None):
     mode, rng = model.training, checkpoint.rng_state()
     model.eval()
-    metrics, accuracy, examples = Metrics(), {}, []
+    metrics, diagnostics, examples = Metrics(), Diagnostics() if final else None, []
     try:
         for raw in epoch_iterator(loader, restored_rng):
             batch = raw.to(next(model.parameters()).device)
@@ -87,23 +156,23 @@ def validate(model, loader, config, *, final, restored_rng=None):
                 terms, (r, p, z) = model(batch)
             metrics.add(terms)
             if final:
-                for key, logits in r.field_logits.items():
-                    labels = batch.reconstruction.fields[key]
-                    mask = (labels != -100) & batch.valid[:, None]
-                    correct, count = accuracy.setdefault(key, [0, 0])
-                    accuracy[key] = [correct + int(((logits.argmax(-1) == labels) & mask).sum()), count + int(mask.sum())]
+                diagnostics.add(r, batch.reconstruction)
                 if not examples:
                     for i in range(min(4, len(raw.window_ids))):
                         examples.append(dict(window_id=raw.window_ids[i],
                             predicted_fields={k: v[i].argmax(-1).cpu().tolist() for k,v in r.field_logits.items()},
                             target_fields={k: v[i].cpu().tolist() for k,v in batch.reconstruction.fields.items()},
+                            predicted_moment96=r.moment_logits[i].argmax(-1).cpu().tolist(),
+                            target_moment96=batch.reconstruction.moment_tick[i].cpu().tolist(),
+                            predicted_empty=r.empty_logits[i].argmax(-1).cpu().tolist(),
+                            predicted_positive_count=(r.positive_count_logits[i].argmax(-1)+1).cpu().tolist(),
+                            target_count=batch.reconstruction.moment_counts[i].cpu().tolist(),
                             plan12=p.plan_values[i].float().cpu().tolist()))
         result = metrics.report(config)
         if not torch.isfinite(torch.tensor(result['loss'])):
             raise ValueError('nonfinite validation loss')
         if final:
-            result['diagnostics'] = dict(field_accuracy={k: dict(correct=v[0], count=v[1]) for k,v in accuracy.items()},
-                                         examples=examples)
+            result['diagnostics'] = dict(**diagnostics.report(), examples=examples)
         return result
     finally:
         model.train(mode)

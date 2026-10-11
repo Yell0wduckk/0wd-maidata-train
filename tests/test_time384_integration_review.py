@@ -193,36 +193,31 @@ def test_draft_moment_queries_do_not_see_future_kind_count_or_position():
     b = target([(192, [Note.make('tap','A8')]), (900, [Note.make('slide','A2'),
                 Route(0,0), SlideDuration(48), Note.make('hold','A7'), HoldDuration(96)])])
     assert a.rows[0].query == b.rows[0].query
-    assert a.rows[0].query.beat == 0
-    assert a.rows[0].target_classes == b.rows[0].target_classes
-    # Changing pad does not enter an R NOTE query.
+    assert a.rows[0].query.beat == 2.5
+    assert a.rows[0].moment_tick == b.rows[0].moment_tick == 0
+    # Changing pad does not enter an R NOTE_KIND query.
     assert a.rows[1].query == b.rows[1].query
 
 
-def test_draft_real_moment_and_exact_terminal_keep_source_indices():
+def test_draft_real_moment_keeps_source_indices_without_terminal():
     chart = from_record(draft_record())
     target = reconstruction_target(chart, start_tick=0, target_beats=3)
     source = [r.source_token_index for r in target.rows if r.query.role == 'MOMENT']
-    assert source == [8, 10, None]  # Two real source fields and a censored control.
+    assert source == [0, 8, 10]
     one_beat = reconstruction_target(chart, start_tick=0, target_beats=1)
-    assert one_beat.rows[0].query.role == 'NOTE'
-    assert one_beat.rows[0].source_token_index == 1  # No zero-time MOMENT row.
-    assert one_beat.rows[-1].source_token_index == 8  # Exact next-onset terminal.
+    assert one_beat.rows[0].query.role == 'MOMENT'
+    assert one_beat.rows[0].source_token_index == 0
+    assert not any(r.query.role in ('HOLD_DURATION', 'SLIDE_DURATION') for r in target.rows)
+    assert not any(r.source_token_index in (8, 10) for r in one_beat.rows)
 
 
-def test_draft_exact_censored_and_continue_close_metadata_stays_out_of_query():
+def test_draft_future_outside_window_does_not_create_terminal_queries():
     timing = TimingMap([(0, 120)])
     empty = ChartData((), (), timing, Fraction(32))
     later = ChartData((OnsetGroup(500, (Note.make('tap','A1'),)),), (), timing, Fraction(32))
-    def terminal(chart):
+    def target(chart):
         return reconstruction_target(chart, start_tick=0, target_beats=2,
-                                     audio_after_beats=4).rows[-1]
-    exact, censor = terminal(later), terminal(empty)
-    assert exact.query == censor.query
-    assert exact.target_classes == censor.target_classes == (CONTINUE,)
-    assert not exact.censored and censor.censored
-    assert exact.closes_window and censor.closes_window
-    assert exact.closed_by_continue and censor.closed_by_continue
-    assert exact.closed_lower_bound_tick == censor.closed_lower_bound_tick == 385
-    assert exact.times['moment_position_tick'] == 500
-    assert censor.times['moment_position_tick'] == 576
+                                     audio_after_beats=4)
+    assert target(later) == target(empty)
+    assert target(empty).rows == ()
+    assert target(empty).moment_counts == (0, 0)

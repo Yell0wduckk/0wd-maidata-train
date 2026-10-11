@@ -1,6 +1,6 @@
 # Draft 局部条件重建、Decoder 字段查询与 384 tick 时间编码计划
 
-> 历史方案：主 Decoder 的 FieldReader、逐字段读取和旧窗口监督描述已由[独立 CONT 序列合同](decoder-cont-token-plan.md)取代；下文保留作为历史记录。Draft R 的独立局部查询设计继续有效。
+> 历史方案：主 Decoder 的 FieldReader、逐字段读取和旧窗口监督描述已由[独立 CONT 序列合同](decoder-cont-token-plan.md)取代；下文保留作为历史记录。Draft R也已由[拆分合同](../../0wd-v3-refactor-docs/drafter-split-execution-plan.md)取代：末层256维Z、直接MLP、拍内96类MOMENT、无Draft duration/CONT。下文仅为旧方案记录。
 
 日期：2026-10-10（America/Los_Angeles）。状态：已授权实施，模型、监督、推理和缓存编译已接入；具体验证证据另见本次实施记录。
 

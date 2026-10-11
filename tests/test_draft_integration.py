@@ -55,10 +55,8 @@ def small_chain():
         frequency_queries=2, fpn_rates=(3, 2, 1), target_beats=3,
         audio_before_beats=2, audio_after_beats=1, dropout=0.,
         draft_layers=2, draft_dim=24, draft_heads=3, draft_experts=3, draft_expert_ffn_dim=29,
-        draft_latent_dim=10, planner_dim=16, planner_heads=2, planner_mlp_dim=23, planner_dropout=0.,
-        reconstruction_dim=12, reconstruction_heads=3, reconstruction_ffn_dim=25,
-        reconstruction_dropout=0.,
-        reconstruction_before_beats=2, reconstruction_after_beats=1)
+        draft_latent_dim=24, planner_dim=16, planner_heads=2, planner_mlp_dim=23, planner_dropout=0.,
+        reconstruction_ffn_dim=25, reconstruction_dropout=0.)
     timing = TimingMap([(0, 120)])
     coverage = song_coverage(timing, 1.2, first_beat=0, target_beats=3)
     grid = torch.arange(15).reshape(1, 3, 5).float() / 5
@@ -119,7 +117,7 @@ def test_trainable_chain_empty_tail_and_auxiliary_gradients():
         z = d(bank, inputs)
         assert prepare.call_count == 1
     assert bank.values.shape == (1, 9, 18)
-    assert z.values.shape == (1, 6, 10) and z.valid.all()
+    assert z.values.shape == (1, 6, 24) and z.valid.all()
     assert z.values[0, 3:].abs().sum() > 0  # No local audio, but a valid supervised tail.
     groups, starts, valid = torch.tensor([0, 0, 0]), torch.tensor([0., 3., 6.]), torch.tensor([True, True, False])
     chart = ChartData((OnsetGroup(0, (Note.make('tap', 'A1'),)),
@@ -134,11 +132,11 @@ def test_trainable_chain_empty_tail_and_auxiliary_gradients():
     # Unit weights here are a synthetic gradient probe, not a training recipe.
     sum(term.mean for term in terms.values()).backward()
     for module in (e.spectral.stem, e.feature_fusion.project, e.song_tokenizer.project,
-                   d.blocks[0].cross_attention.key, d.output, p.continuous,
-                   r.field_heads['field_kind'], r.count_head):
+                   d.blocks[0].cross_attention.key, d.output_norm, p.continuous,
+                   r.field_heads['field_kind'], r.empty_head):
         assert module.weight.grad is not None
         assert torch.isfinite(module.weight.grad).all() and module.weight.grad.abs().sum() > 0
-    assert terms['count'].count == 6 and terms['planner_category'].count == 2
+    assert terms['empty'].count == 6 and terms['planner_category'].count == 2
 
 
 @pytest.mark.parametrize('condition_path', ['Z', 'plan'])
@@ -158,7 +156,7 @@ def test_external_consumer_gradient_and_actual_freezing(condition_path):
     consumer = torch.nn.Linear(condition.shape[-1], 1)
     consumer(condition).sum().backward()
     assert e.spectral.stem.weight.grad.abs().sum() > 0
-    assert d.output.weight.grad.abs().sum() > 0
+    assert d.output_norm.weight.grad.abs().sum() > 0
     if condition_path == 'plan':
         assert p.continuous.weight.grad.abs().sum() > 0
     for module in (e, d, p):
@@ -184,15 +182,15 @@ def test_default_network_shapes_and_decoupled_imports():
                             target_beats=16, before_beats=16, after_beats=16)
         pw = select_windows(z, torch.tensor([0]), torch.tensor([16.]), torch.tensor([True]),
                             target_beats=16, before_beats=0, after_beats=0)
-        assert z.values.shape == (1, 32, 128) and rw.memory.values.shape == (1, 48, 128)
+        assert z.values.shape == (1, 32, 256) and rw.memory.values.shape == (1, 48, 256)
         assert p(pw).plan_values.shape == (1, 12)
         empty_chart = ChartData((), (), TimingMap([(0, 120)]), 32)
         labels = collate_reconstruction([reconstruction_target(empty_chart, start_tick=16*96,
             target_beats=16)], target_beats=16, device='cpu')
         output = r(rw, labels.queries)
-        assert output.count_logits.shape == (1, 16, 97)
-        assert all(v.shape == (1, labels.queries.valid.shape[1], 385)
-                   for v in output.time_predictions.values())
+        assert output.empty_logits.shape == (1, 16, 2)
+        assert output.positive_count_logits.shape == (1, 16, 96)
+        assert output.moment_logits.shape == (1, labels.queries.valid.shape[1], 96)
         assert 'type' not in output.field_logits
     source = str(Path(__file__).resolve().parents[1] / 'src')
     env = dict(os.environ, PYTHONPATH=source)

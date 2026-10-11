@@ -21,12 +21,10 @@ from maidata.time import TimingMap
 @pytest.fixture
 def config():
     return dict(CONFIG, d_model=18, draft_layers=2, draft_dim=24, draft_heads=3,
-                draft_experts=3, draft_expert_ffn_dim=29, draft_latent_dim=10,
+                draft_experts=3, draft_expert_ffn_dim=29, draft_latent_dim=24,
                 draft_dropout=0., planner_dim=16, planner_heads=2, planner_mlp_dim=23,
-                planner_dropout=0., reconstruction_layers=2, reconstruction_dim=12,
-                reconstruction_heads=3, reconstruction_ffn_dim=25, reconstruction_dropout=0.,
-                target_beats=3, reconstruction_before_beats=2,
-                reconstruction_after_beats=1)
+                planner_dropout=0., reconstruction_ffn_dim=25, reconstruction_dropout=0.,
+                target_beats=3)
 
 
 def query_batch(windows, notes=1):
@@ -58,7 +56,7 @@ def test_widths_conditions_and_output_normalization(config):
     model = build_draft(config).eval()
     audio, condition = inputs()
     z = model(audio, condition)
-    assert z.values.shape == (3, 9, 10) and z.values.dtype == torch.float32
+    assert z.values.shape == (3, 9, 24) and z.values.dtype == torch.float32
     assert torch.count_nonzero(z.values[~z.valid]) == 0
     torch.testing.assert_close(z.values[z.valid].mean(-1), torch.zeros(z.valid.sum()), atol=1e-6, rtol=0)
     torch.testing.assert_close(z.values[z.valid].var(-1, unbiased=False), torch.ones(z.valid.sum()), atol=1e-3, rtol=0)
@@ -74,6 +72,22 @@ def test_widths_conditions_and_output_normalization(config):
     changed = model(altered, condition)
     assert not torch.allclose(z.values[0], changed.values[0])
     torch.testing.assert_close(z.values[2], changed.values[2])
+
+
+def test_exported_z_is_exact_final_layernorm_without_projection(config):
+    model = build_draft(config).eval()
+    audio, condition = inputs()
+    captured = []
+    hook = model.blocks[-1].register_forward_hook(lambda _m, _args, output: captured.append(output))
+    z = model(audio, condition)
+    hook.remove()
+    expected = torch.nn.functional.layer_norm(captured[0].float(), model.output_norm.normalized_shape,
+        model.output_norm.weight.float(), model.output_norm.bias.float(), model.output_norm.eps)
+    torch.testing.assert_close(z.values, expected.masked_fill(~z.valid[..., None], 0), rtol=0, atol=0)
+    assert not hasattr(model, 'output') and not hasattr(model, 'latent_norm')
+    (z.values * torch.randn_like(z.values)).sum().backward()
+    assert model.output_norm.weight.grad.abs().sum() > 0
+    assert model.blocks[-1].experts.experts[0][0].weight.grad.abs().sum() > 0
 
 
 def test_project_once_shared_graph_matches_separate_conditions(config):
@@ -137,14 +151,15 @@ def test_nan_padding_and_dummy_windows_are_zero(config):
     plan, reconstruction = p(windows), r(windows, query_batch(windows))
     assert plan.valid.tolist() == [True, False]
     assert plan.plan_values[1].count_nonzero() == 0
-    assert reconstruction.count_logits[1].count_nonzero() == 0
+    assert reconstruction.empty_logits[1].count_nonzero() == 0
+    assert reconstruction.positive_count_logits[1].count_nonzero() == 0
     assert all(t[1].count_nonzero() == 0 for t in reconstruction.field_logits.values())
     assert torch.isfinite(plan.plan_values).all()
 
 
 def test_planner_uses_target_only_with_relative_beat_rope(config):
     planner = build_planner(config).eval()
-    x = torch.randn(1, 7, 10, requires_grad=True)
+    x = torch.randn(1, 7, 24, requires_grad=True)
     beats = torch.arange(7).float()[None] - 1.5
     window = WindowLatents(BeatMemory(x, beats, torch.ones(1, 7, dtype=torch.bool)),
                            torch.tensor([0.]), 3, torch.tensor([True]))
@@ -166,23 +181,24 @@ def test_reconstruction_has_no_row_interaction_and_relative_positions(config):
     short = build_reconstruction(config).eval()
     long = build_reconstruction(config).eval()
     long.load_state_dict(short.state_dict(), strict=True)
-    windows = WindowLatents(BeatMemory(torch.randn(1, 6, 10), torch.arange(6)[None].float() - 1.5,
+    windows = WindowLatents(BeatMemory(torch.randn(1, 6, 24), torch.arange(6)[None].float() - 1.5,
                                        torch.ones(1, 6, dtype=torch.bool)),
                             torch.tensor([0.]), 3, torch.tensor([True]))
-    full_queries = query_batch(windows, notes=16)
+    full_queries = query_batch(windows, notes=240)
     short_queries = replace(full_queries, **{name: getattr(full_queries, name)[:, :5]
                             for name in full_queries.__dataclass_fields__})
     a, b = short(windows, short_queries), long(windows, full_queries)
     for name in a.field_logits:
         torch.testing.assert_close(a.field_logits[name], b.field_logits[name][:, :5])
-    torch.testing.assert_close(a.count_logits, b.count_logits)
+    torch.testing.assert_close(a.empty_logits, b.empty_logits)
+    torch.testing.assert_close(a.positive_count_logits, b.positive_count_logits)
     shifted = replace(windows, target_start=windows.target_start + 12,
                       memory=replace(windows.memory, beats=windows.memory.beats + 12))
     shifted_queries = replace(short_queries, beats=short_queries.beats+12,
                               origins=short_queries.origins+12)
     torch.testing.assert_close(a.field_logits['kind'],
                                short(shifted, shifted_queries).field_logits['kind'])
-    assert not any('self_attention' in name for name, _ in short.named_modules())
+    assert not any('attention' in name for name, _ in short.named_modules())
 
 
 def test_rotary_reference_and_cpu_autocast(config):
@@ -202,7 +218,8 @@ def test_rotary_reference_and_cpu_autocast(config):
         reconstruction = build_reconstruction(config).eval()(windows, query_batch(windows))
     assert z.values.dtype == torch.float32 and torch.isfinite(z.values).all()
     assert plan.plan_values.dtype == torch.float32
-    assert torch.isfinite(reconstruction.count_logits).all()
+    assert torch.isfinite(reconstruction.empty_logits).all()
+    assert torch.isfinite(reconstruction.positive_count_logits).all()
 
 
 def test_empty_draft_batch_slot_cannot_revive_from_nan_padding(config):
@@ -221,7 +238,7 @@ def test_empty_draft_batch_slot_cannot_revive_from_nan_padding(config):
 
 
 @pytest.mark.parametrize('overrides', [dict(draft_heads=5), dict(planner_heads=16),
-                                       dict(draft_expert_ffn_dim=0), dict(reconstruction_heads=5)])
+                                       dict(draft_expert_ffn_dim=0), dict(draft_latent_dim=12)])
 def test_configuration_rejects_mathematically_invalid_shapes(config, overrides):
     config.update(overrides)
     with pytest.raises(ValueError):

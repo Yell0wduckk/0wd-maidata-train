@@ -13,7 +13,7 @@ from .data import make_loader
 from .network import DecoderTrainer
 from .shared_audio import SharedAudioGradients
 from .plan import DecoderPlan
-from .frozen_cache import FrozenCache
+from .frozen_cache import FrozenCache, condition_config
 from .window_cache import WindowCache
 from .supervision import KEYS, loss, objective
 
@@ -162,6 +162,7 @@ def run(config, *, resume=None, cuda_check=False, check_step=0):
              for i,key in enumerate(('train_plan','validation_plan'))]
     binding,hashes = checkpoint.data_provenance(config),{}
     cache = FrozenCache(plans,config,binding)
+    config = condition_config(config, cache)
     windows = WindowCache(plans,config,binding)
     producer = checkpoint.cache_producer(cache.producer,config,binding)
     binding['frozen_conditions'] = cache.binding

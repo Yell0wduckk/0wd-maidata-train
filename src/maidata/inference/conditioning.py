@@ -5,6 +5,7 @@ from contextlib import nullcontext
 import torch
 
 from maidata.preparation.cache import song_inputs, window_inputs
+from maidata.model import ENCODER_KEYS
 from maidata.audio.layout import prepare_encoder_layout
 from maidata.draft.conditions import ChartCondition, make_draft_inputs
 from maidata.draft.types import BeatMemory
@@ -113,10 +114,12 @@ def prepare_decoder_conditions(encoder, config, grid, timing, duration, *, devic
 @torch.inference_mode()
 def prepare_conditions(encoder, draft, planner, config, grid, timing, duration, *,
                        difficulty, level, device, encoder_window_batch=8, progress=None,
-                       decoder_encoder=None):
+                       decoder_encoder=None, teacher_config=None):
     """Fixed E_D -> D/P; optional independent E_M -> Decoder audio, each encoded once."""
-    c = config
-    local_decoder = decoder_encoder is not None and c.get('decoder_train_audio_scope', 'full_song') == 'window'
+    c = config if teacher_config is None else teacher_config
+    local_decoder = decoder_encoder is not None and config.get('decoder_train_audio_scope', 'full_song') == 'window'
+    separate_decoder = decoder_encoder is not None and any(c[k] != config[k] for k in ENCODER_KEYS)
+    shared_decoder = None if separate_decoder else decoder_encoder
     coverage = song_coverage(timing, duration, first_beat=int(grid['first_beat']), target_beats=c['target_beats'])
     starts, mapping = audio_windows([coverage], device='cpu')
     with stage(progress, 'encoder_global'):
@@ -124,11 +127,11 @@ def prepare_conditions(encoder, draft, planner, config, grid, timing, duration, 
         inputs_song = to_device(host_song, device)
         song = encoder.prepare_song(inputs_song)
     decoder_song = None
-    if decoder_encoder is not None:
+    if shared_decoder is not None:
         with stage(progress, 'decoder_encoder_global'):
-            decoder_song = decoder_encoder.prepare_song(inputs_song)
+            decoder_song = shared_decoder.prepare_song(inputs_song)
     pieces, decoder_pieces = [], []
-    decoder_stage = stage(progress, 'decoder_encoder_windows') if decoder_encoder is not None else nullcontext()
+    decoder_stage = stage(progress, 'decoder_encoder_windows') if shared_decoder is not None else nullcontext()
     with stage(progress, 'encoder_windows'), decoder_stage:
         for at in range(0, len(starts), encoder_window_batch):
             windows = window_inputs([grid], starts[at:at+encoder_window_batch].numpy(),
@@ -143,15 +146,15 @@ def prepare_conditions(encoder, draft, planner, config, grid, timing, duration, 
             pieces.append(encoder.encode_windows(song, windows).P0)
             complete = min(at+encoder_window_batch, len(starts))
             emit(progress, 'encoder_progress', encoder='draft', completed=complete, total=len(starts))
-            if decoder_encoder is not None:
-                decoder_pieces.append(decoder_encoder.encode_windows(decoder_song, windows).P0)
+            if shared_decoder is not None:
+                decoder_pieces.append(shared_decoder.encode_windows(decoder_song, windows).P0)
                 emit(progress, 'encoder_progress', encoder='decoder', completed=complete, total=len(starts))
         device_starts, device_mapping = starts.to(device), mapping.to(device)
         def assemble(parts):
             local = BeatMemory(*(torch.cat([getattr(p, name) for p in parts]) for name in ('values', 'beats', 'valid')))
             return assemble_full_p0(local, device_starts, device_mapping, [coverage], p0_rate=c['fpn_rates'][0])
         audio = assemble(pieces)
-        if local_decoder:
+        if local_decoder and shared_decoder is not None:
             # The complete supervised tail also has its own local audio context.
             tail = window_inputs([grid], [coverage.starts(include_tail=True)[-1]], [0],
                 target_beats=c['target_beats'], before_beats=c['audio_before_beats'],
@@ -159,11 +162,15 @@ def prepare_conditions(encoder, draft, planner, config, grid, timing, duration, 
             tail.layout = prepare_encoder_layout(host_song.beat_centers, host_song.sample_valid.any(-1), tail,
                 radii=c['stage_attention_radii'], rates=c['fpn_rates'], before=c['audio_before_beats'],
                 context=c['audio_before_beats']+c['target_beats']+c['audio_after_beats'])
-            decoder_pieces.append(decoder_encoder.encode_windows(decoder_song, to_device(tail, device)).P0)
+            decoder_pieces.append(shared_decoder.encode_windows(decoder_song, to_device(tail, device)).P0)
             decoder_audio = BeatMemory(*(torch.cat([getattr(p, name) for p in decoder_pieces])
                                         for name in ('values', 'beats', 'valid')))
         else:
-            decoder_audio = assemble(decoder_pieces) if decoder_encoder is not None else audio
+            decoder_audio = assemble(decoder_pieces) if shared_decoder is not None else audio
+    if separate_decoder:
+        independent = prepare_decoder_conditions(decoder_encoder, config, grid, timing, duration,
+            device=device, encoder_window_batch=encoder_window_batch, progress=progress)
+        decoder_audio = independent.audio
     inputs, _ = make_draft_inputs([ChartCondition('inference', difficulty, level, str(level))],
         ['inference'], [coverage], device=device, validate_input=False)
     with stage(progress, 'draft'):

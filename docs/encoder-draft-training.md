@@ -8,9 +8,9 @@
 
 `training.data`使用原仓库同类PyTorch Dataset/Collator/DataLoader：默认12个persistent workers，每worker计算线程数为1。每个Dataset项是一整个audio_variant组；采样器保持既有seed/epoch组间和组内排列，不能跨组找小曲回填。训练与验证直接消费已验收的计划和缓存，不执行输入校验或启动扫描。
 
-Dataset/Collator关闭共享读取器和标签适配器的`validate_input`，不重复扫描Mel/aux32、重放谱面语法、验证token/拍时间表或核对窗口覆盖。Encoder/D/R/P前向和loss适配不再检查输入shape/dtype、有限值、坐标、条件范围、mask一致性或监督计数。正常mask、索引、归约和token预算仍参与计算；R使用动态padding的独立查询，无固定行容量。超本地音频窗GT duration保留完整值，监督包含跨窗CONT后停止；窗内发出的最后非CONT即使落点在窗外也正常监督，仍按原字段计数。离线缓存生产和显式验收保留独立校验；不新增训练校验配置开关。
+Dataset/Collator关闭共享读取器和标签适配器的`validate_input`，不重复扫描Mel/aux32、重放谱面语法、验证token/拍时间表或核对窗口覆盖。Encoder/D/R/P前向和loss适配不再检查输入shape/dtype、有限值、坐标、条件范围、mask一致性或监督计数。正常mask、索引、归约和token预算仍参与计算；R只对有效字段查询直接索引所属拍Z，无固定行容量。MOMENT使用拍内96类，包括窗首0及跨窗上一真实起音条件；Draft不再创建terminal/CONT/duration查询，源duration仍保留并分隔轨道。离线缓存生产和显式验收保留独立校验；不新增训练校验配置开关。
 
-`training.network.Pretrainer`负责组合，E/D/R/P不持有彼此。E每组计算一次全曲G0，每个音频覆盖窗编码一次，中心P0拼成全曲bank；同音频不同等级/难度各生成完整逐拍Z，共享音频计算。R/P读取所有基础窗；R按真实适用字段创建独立局部查询，三种时间使用385类CONT路径，P独立读取目标全部16拍并预测plan12。无detach或跨参数更新缓存。
+`training.network.Pretrainer`负责组合，E/D/R/P不持有彼此。E每组计算一次全曲G0，每个音频覆盖窗编码一次，中心P0拼成全曲bank；同音频不同等级/难度各生成完整逐拍Z，共享音频计算。R/P读取所有基础窗；D最终LayerNorm隐藏直接作为Z，默认256维，无压缩或独立latent归一化。R按允许条件创建MOMENT/NOTE_KIND/NOTE_FLAGS/ROUTE_ID/TRACK_BREAK查询，通过共享残差MLP解析本拍Z；COUNT仅读本拍，P独立读取目标全部16拍并预测plan12。无detach或跨参数更新缓存。
 
 ## 双重 batch 上限
 
@@ -23,7 +23,7 @@ R_reference = 本组全部基础监督窗数 × pretrain_batch_reference_rows (2
 cost = pretrain_audio_token_weight × A + pretrain_row_token_weight × R_reference
 ```
 
-两种权重默认各1.0。A计入每窗重复计算的重叠音频上下文和全曲G0拍token；R_reference保留原计划的207行分批proxy，包含同音频各难度、空窗及尾窗；它不限制或填充新R查询。真实query/substep数单独写入训练及CUDA成本报告，不因此改变既有batch边界或实例。此线性指标限制批次规模，不等于精确显存模型；全曲attention和不同长度padding成本仍由CUDA实测确认。预算显式设为`null`可关闭，只保留组数上限。
+两种权重默认各1.0。A计入每窗重复计算的重叠音频上下文和全曲G0拍token；R_reference保留原计划的207行分批proxy，包含同音频各难度、空窗及尾窗；它不限制或填充新R查询。真实query数单独写入训练及CUDA成本报告，不因此改变既有batch边界或实例。此线性指标限制批次规模，不等于精确显存模型；全曲attention和不同长度padding成本仍由CUDA实测确认。预算显式设为`null`可关闭，只保留组数上限。
 
 顺序遍历当轮既定完整组；加入下一组将超出任一上限时，先提交当前batch。整曲不拆、顺序不改、末尾不足量保留。单组超过预算时指出该组并失败，不截断或静默越界。当前训练最大单组cost=34616，验证最大28575，均低于初始上限。
 
@@ -31,17 +31,17 @@ cost = pretrain_audio_token_weight × A + pretrain_row_token_weight × R_referen
 
 ## 优化与恢复
 
-五项loss权重1/1/1/1/0.25；AdamW，lr=2e-4，weight decay=0.01，全局裁剪1；CUDA bf16 autocast、FP32参数和损失归约；scratch，seed=20261010。线性warmup200次optimizer更新，100轮余弦调度，绝对完成50轮停止。
+loss为L_fields＋L_moment96＋L_empty＋L_positive_count＋L_planner_continuous＋0.25×L_planner_category；MOMENT无smoothing，其余分类及数量头0.05。AdamW，lr=2e-4，weight decay=0.01，全局裁剪1；CUDA bf16 autocast、FP32参数和损失归约；scratch，seed=20261010。线性warmup200次optimizer更新，100轮余弦调度，绝对完成50轮停止。
 
-`runner`按完整逻辑batch的各项有效计数归约；累积时各物理batch的分子除以共同分母，再分别反传，最后一次裁剪、optimizer.step与scheduler.step。不平均不同大小batch的均值。训练与验证统计也分别累加五项total/count。
+`runner`先取得整个逻辑更新的每字段及其他项共同分母。kind、route_id、track_break和每个flag分别归一，再对逻辑更新中有标签的分类字段等权平均；其余各项各自归一。microbatch仅贡献分子，最后一次裁剪、optimizer.step与scheduler.step。训练与validation累加各字段及各项total/count后按同样规则报告，不平均物理batch均值。缺字段、全空batch的无标签项贡献有限零。
 
-验证每5轮及显式末轮，重合一次；全字段准确率与预测示例仅末轮收集。`last.ckpt`每完整轮保存，`best.ckpt`只在轮末验证改善时保存，`epoch-NNN.ckpt`每5轮及末轮保存。best只是损失诊断，不是谱面质量判定。中途异常不保存、不伪造完整轮。
+验证每5轮及显式末轮，重合一次；完整诊断仅末轮收集：条件MOMENT准确率与96类真值/预测分布、空/非空准确率、GT非空条件正计数准确率与合成数量准确率、分类混淆/少数类召回及预测示例。`last.ckpt`每完整轮保存，`best.ckpt`只在轮末验证改善时保存，`epoch-NNN.ckpt`每5轮及末轮保存。best只是损失诊断，不是谱面质量判定。中途异常不保存、不伪造完整轮。
 
-新checkpoint schema为`maidata.encoder-draft-training.v2`；旧R架构的v1不能作为新完整轮resume。checkpoint保存成套E/D/R/P、optimizer、scheduler、完整轮游标、全部Python/NumPy/Torch/CUDA RNG、两个DataLoader RNG及启用状态、各轮步数和训练配方。源码版本与输入路径仅作为来源记录，不计算或比较源码、缓存、目录元数据或计划的哈希；旧checkpoint中的输入绑定不参与恢复判断，无需身份迁移。模型张量/形状、配方、各轮调度步数和完整恢复状态仍检查，训练保留loss/梯度非有限值报错。允许延长绝对停止轮但不改变调度合同；完成40轮从41轮继续，完成50轮不再更新。替换persistent workers后补偿额外base-seed消耗；CPU测试覆盖连续运行与中断恢复权重/RNG逐位一致。
+新checkpoint schema为`maidata.encoder-draft-training.v3`，记录拆分结构及分字段loss配方；旧v1/v2不能作为新完整轮resume，不隐式部分加载。checkpoint保存成套E/D/R/P、optimizer、scheduler、完整轮游标、全部Python/NumPy/Torch/CUDA RNG、两个DataLoader RNG及启用状态、各轮步数和训练配方。源码版本与输入路径仅作为来源记录，不计算或比较源码、缓存、目录元数据或计划的哈希；旧checkpoint中的输入绑定不参与恢复判断，无需身份迁移。模型张量/形状、配方、各轮调度步数和完整恢复状态仍检查，训练保留loss/梯度非有限值报错。允许延长绝对停止轮但不改变调度合同；完成40轮从41轮继续，完成50轮不再更新。替换persistent workers后补偿额外base-seed消耗；CPU测试覆盖连续运行与中断恢复权重/RNG逐位一致。
 
 ## Linux 输入
 
-已核对 `ssh -p 16079 root@connect.cqa1.seetacloud.com`：单张RTX4090 D，24564 MiB；数据盘约111GB可用。现成路径：
+以下为旧实验的历史路径与资源记录，本次未查询服务器；当时核对 `ssh -p 16079 root@connect.cqa1.seetacloud.com`：单张RTX4090 D，24564 MiB；数据盘约111GB可用。现成路径：
 
 | 配置 | 服务器路径 |
 |---|---|
@@ -51,11 +51,11 @@ cost = pretrain_audio_token_weight × A + pretrain_row_token_weight × R_referen
 
 计划与320首源文本准备为 [新增输入包](../../artifacts/pilot320-encoder-draft-inputs-20261010)，约9.8MB，目标为 `/root/autodl-tmp/pilot320-encoder-draft-inputs-20261010`。源文本提供精确等级和必要时的源时间格，副本与既有source_sha256一致。消费端通过source_root和Mel根目录定位，不改写缓存的生产者身份，不重算Mel、aux32或原谱。
 
-## 训练会话执行
+## 本次实施与后续实验
 
-新会话上传固定源码和新增输入包，只验证本次传输；已有输入直接读取，不重验。`--cuda-check`从第1轮既定batch中选择加权cost最大的实际batch，以相同12 workers、bf16和完整组进行一次前向/反向/更新，记录峰值显存、耗时、各模块梯度和更新、调用次数。检查模型独立丢弃，正式训练仍scratch。
+2026-10-11拆分实施仅完成源码和受影响CPU验收，不上传、不运行CUDA、不启动训练、不替换或干预既有实验绑定源码。历史Linux路径与已批准固定配方保留作来源记录，不因本文更新自动启动任务。
 
-CUDA验证交给训练会话；CPU通过不代表CUDA通过。若OOM，不自行缩小预算、组数或改累积，先报告实测。在正式训练准备启动时按确切命令和父子树停止当前远端Physical，保留产物和进度；不提前停止，不宽泛终止python。阶段一不等待Physical全部完成。实验进度只在训练会话报告，主会话交接后不主动轮询。
+未来选定新教师训练时，沿用既有完整音频组、207成本proxy及固定配方，CUDA原batch检查交给明确授权的实验会话。CPU证据不代表CUDA成本或质量已验收，不设性能或loss通过阈值。新权重取得后另目录导出256维Z及预测plan，旧128维缓存不能补零扩维；原谱、音频、Physical、计划、GT plan和主M窗口缓存继续复用。完整实施和测试状态见[拆分实施记录](drafter-split-implementation.md)。
 
 ## 批量计算与传输
 

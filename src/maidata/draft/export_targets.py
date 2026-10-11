@@ -27,10 +27,10 @@ def main(argv=None):
         p = planner.window(start * 96, (start + target_beats) * 96)
         rows.append(dict(start_beat=start, target_beats=target_beats,
                          reconstruction=asdict(r), planner=asdict(p), query_rows_required=len(r.rows),
-                         query_cost=r.query_cost, original_time_fields=sum(t.first_time_step for t in r.rows),
+                         query_cost=r.query_cost, moment_queries=sum(t.moment_tick is not None for t in r.rows),
                          trainable=True))
-    result = dict(schema='maidata.draft-local-query-targets.v2',
-                  representation='relative-tick384-continue', chart=str(args.chart), source_end_beat=str(planner.source_end_beat), windows=rows,
+    result = dict(schema='maidata.draft-local-query-targets.v3',
+                  representation='beat-local-tick96', chart=str(args.chart), source_end_beat=str(planner.source_end_beat), windows=rows,
                   query_rows_required=required_query_rows([r['query_rows_required'] for r in rows]))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False) + '\n', encoding='utf-8')

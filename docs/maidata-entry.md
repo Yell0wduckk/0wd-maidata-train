@@ -1,6 +1,6 @@
 # Maidata Encoder 入口与接口
 
-`src/maidata` 已实现独立音频 Encoder：frontend、geometry、attention、blocks、pyramid、encoder 和 types。它消费准备好的 Mel、aux32、绝对拍坐标与有效位，输出 P0/P1/P2 三路局部表示。独立输入生产及真实音频适配见[全官谱音频输入缓存](encoder-audio-cache.md)。新Draft D/R/P及辅助loss已实现，见[Draft接口](draft.md)；Decoder网络及主/Physical/几何loss见[Decoder接口](decoder.md)，数据集/DataLoader、完整训练循环和checkpoint另行接入；旧 `maimai_baseline` 保留作历史实现参考。
+`src/maidata` 已实现独立音频 Encoder：frontend、geometry、attention、blocks、pyramid、encoder 和 types。它消费准备好的 Mel、aux32、绝对拍坐标与有效位，输出 P0/P1/P2 三路局部表示。独立输入生产及真实音频适配见[全官谱音频输入缓存](encoder-audio-cache.md)。新Draft D/R/P及辅助loss已实现，见[Draft接口](draft.md)；Decoder网络及主/Physical/几何loss见[Decoder接口](decoder.md)，阶段一和阶段二分别由`maidata.training`与`maidata.decoder_training`接入；旧 `maimai_baseline` 保留作历史实现参考。
 
 从独立仓库根目录运行：
 
@@ -12,13 +12,13 @@ python -m maidata --show-config
 python -m maidata
 ```
 
-帮助和 `--show-config` 仅依赖标准库，后者显示入口顶部的统一配置（含18项Encoder配置及Draft配置）。默认命令延迟导入 Torch，成功构建 `AudioEncoder`，输出 `AudioEncoder built. End-to-end generation and training are not implemented.` 并正常退出；不创建训练目录或产物。`--component`可单独选择draft、planner、reconstruction或decoder，详见[Draft接口](draft.md)。
+帮助和 `--show-config` 仅依赖标准库，后者显示入口顶部的统一配置（含18项Encoder配置及Draft配置）。默认命令延迟导入 Torch，成功构建 `AudioEncoder`，输出已构建组件和训练/推理入口并正常退出；不创建训练目录或产物。`--component`可单独选择draft、planner、reconstruction或decoder，详见[Draft接口](draft.md)。
 
 ## 配置与构建
 
 - [entry.py](../src/maidata/entry.py) 顶部普通 `CONFIG` 是唯一人工参数位置，默认值及含义见[设计正本](../../0wd-v3-refactor-docs/new-audio-encoder.md#21-当前默认值)。构造器显式接收参数，不另设同名默认值。
 - [model.py](../src/maidata/model.py) 的 `build_model(config)` 从统一配置选择Encoder字段，构建 `AudioEncoder`。模型宽度、heads、FFN、各stage深度、频率query、窗口和输出密度均由这份配置传入；Draft字段由其独立工厂消费。
-- `entry.main` 负责帮助、配置展示和构建。学习率、数据集、训练/恢复命令未提前设置。
+- `entry.main` 负责帮助、配置展示和构建。阶段一配方、数据路径和训练/恢复由[训练入口](encoder-draft-training.md)维护；拆分D/R与checkpoint v3见[Draft](draft.md)。
 
 容量变化不要求重算内容未变的 Mel/aux32；修改 Mel 频带数或采样密度时需提供匹配输入。只保留真实数学与张量约束，例如 `d_model/heads` 为偶数、三 stage 参数长度一致和输出网格长度可表示，不固定为默认宽度、层数或参数总数。
 

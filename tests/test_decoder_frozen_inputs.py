@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from maidata.decoder_training.frozen_cache import FrozenCache
-from maidata.decoder_training.cache_schema import P0_SCHEMA, DP_SCHEMA
+from maidata.decoder_training.cache_schema import P0_SCHEMA, DP_SCHEMA, Z_REPRESENTATION
 from maidata.decoder_training.p0_cache import save_bank
 from maidata.decoder_training.dp_cache import save_outputs
 from maidata.decoder_training.data import collate_audio
@@ -31,6 +31,7 @@ def assets(config,tmp_path,monkeypatch):
     p0 = dict(schema=P0_SCHEMA,complete=True,producer=producer,normalization=normalization,
               precision='fp32',p0_rate=config['fpn_rates'][0],splits=splits,groups={})
     dp = dict(schema=DP_SCHEMA,complete=True,producer=producer,normalization=normalization,
+              z_representation=Z_REPRESENTATION,z_width=config['draft_latent_dim'],
               precision='fp32',splits=splits,groups={},plans={})
     plans = []
     for i,item in enumerate(items):

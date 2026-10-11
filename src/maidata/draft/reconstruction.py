@@ -1,95 +1,107 @@
-"""Independent local field queries and per-beat counts reading Z only."""
+"""Shared residual MLP: each valid field query reads exactly its owning beat Z."""
 import torch
 from torch import nn
-from torch.nn import functional as F
 
-from maidata.nn.position import sinusoidal, apply_rope
-from maidata.time.discrete import TIME_CLASSES
-from .attention import Attention, positive_ints, numerical_config
-from .schema import FIELD_SIZES, TIME_FIELDS, COUNT_CLASSES, QUERY_ROLES, KINDS
+from maidata.nn.position import sinusoidal
+from .attention import positive_ints, numerical_config
+from .schema import FIELD_SIZES, MOMENT_CLASSES, POSITIVE_COUNT_CLASSES, QUERY_ROLES, KINDS
 from .types import ReconstructionOutput
 
 
-class ReconstructionLayer(nn.Module):
-    def __init__(self, dim, heads, ffn_dim, dropout, eps, base, scale):
-        super().__init__()
-        self.norms = nn.ModuleList(nn.LayerNorm(dim, eps=eps) for _ in range(2))
-        self.cross_attention = Attention(dim, dim, dim, heads, dropout,
-                                         rotary=True, base=base, scale=scale)
-        self.ffn = nn.Sequential(nn.Linear(dim, ffn_dim), nn.GELU(),
-                                 nn.Dropout(dropout), nn.Linear(ffn_dim, dim))
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, query, beats, active, memory, memory_beats, memory_valid, indices, local_valid):
-        attention = self.cross_attention
-        # Project each window's Z once per layer, then select each query's slots.
-        k, v = attention.project_memory(memory, memory_beats, memory_valid)
-        n, q, slots = indices.shape
-        batch = torch.arange(n, device=query.device)[:, None, None]
-        k = k.transpose(1, 2)[batch, indices].reshape(n*q, slots, attention.heads, -1).transpose(1, 2)
-        v = v.transpose(1, 2)[batch, indices].reshape(n*q, slots, attention.heads, -1).transpose(1, 2)
-        x = self.norms[0](query).reshape(n*q, 1, -1)
-        h = attention(x, beats.reshape(n*q, 1), active.reshape(n*q, 1),
-                      (k, v), local_valid.reshape(n*q, slots)).reshape(n, q, -1)
-        query = query + self.dropout(h)
-        return (query + self.dropout(self.ffn(self.norms[1](query)))).masked_fill(~active[..., None], 0)
-
-
 class ReconstructionHead(nn.Module):
-    def __init__(self, *, latent_dim, layers, dim, heads, ffn_dim, dropout, norm_eps,
+    def __init__(self, *, latent_dim, ffn_dim, dropout, norm_eps,
                  target_beats, position_base, position_scale):
         super().__init__()
-        positive_ints(latent_dim=latent_dim, layers=layers, dim=dim, heads=heads,
-                      ffn_dim=ffn_dim, target_beats=target_beats)
+        positive_ints(latent_dim=latent_dim, ffn_dim=ffn_dim, target_beats=target_beats)
         numerical_config(dropout, norm_eps, position_base, position_scale)
-        self.latent_dim, self.dim, self.target_beats = latent_dim, dim, target_beats
+        self.latent_dim = self.dim = latent_dim
+        self.target_beats = target_beats
         self.base, self.scale = position_base, position_scale
-        self.input = nn.Linear(latent_dim, dim) if latent_dim != dim else nn.Identity()
-        self.role = nn.Embedding(len(QUERY_ROLES)+1, dim)
-        self.note_kind = nn.Embedding(len(KINDS)+1, dim)
-        self.route = nn.Embedding(71, dim)
-        self.prefix = nn.Linear(8, dim)
-        self.layers = nn.ModuleList(ReconstructionLayer(dim, heads, ffn_dim, dropout,
-            norm_eps, position_base, position_scale) for _ in range(layers))
-        self.norm = nn.LayerNorm(dim, eps=norm_eps)
-        self.field_heads = nn.ModuleDict({'field_' + name: nn.Linear(dim, n) for name, n in FIELD_SIZES.items()})
-        self.time_heads = nn.ModuleDict({name: nn.Linear(dim, TIME_CLASSES) for name in TIME_FIELDS})
-        self.count_head = nn.Linear(dim, COUNT_CLASSES)
+        self.role = nn.Embedding(len(QUERY_ROLES), latent_dim)
+        self.note_kind = nn.Embedding(len(KINDS)+1, latent_dim)
+        self.route = nn.Embedding(72, latent_dim)
+        self.condition = nn.Linear(3, latent_dim, bias=False)
+        self.ordinal_encoders = nn.ModuleList(nn.Linear(latent_dim, latent_dim, bias=False)
+                                             for _ in range(4))
+        self.input_norm = nn.LayerNorm(latent_dim, eps=norm_eps)
+        self.ffn = nn.Sequential(nn.Linear(latent_dim, ffn_dim), nn.GELU(),
+                                 nn.Dropout(dropout), nn.Linear(ffn_dim, latent_dim))
+        self.norm = nn.LayerNorm(latent_dim, eps=norm_eps)
+        self.field_heads = nn.ModuleDict({'field_' + name: nn.Linear(latent_dim, n)
+                                         for name, n in FIELD_SIZES.items()})
+        self.moment_head = nn.Linear(latent_dim, MOMENT_CLASSES)
+        self.empty_head = nn.Linear(latent_dim, 2)
+        self.positive_count_head = nn.Linear(latent_dim, POSITIVE_COUNT_CLASSES)
+
+    def _positions(self, values, mask, reference):
+        encoded = sinusoidal(values.masked_fill(~mask, 0).float(), self.dim,
+                             self.base, self.scale).to(reference)
+        return encoded.masked_fill(~mask[..., None], 0)
+
+    def _hidden(self, x, valid):
+        # Padding is never executed as an extra prediction query.
+        flat = x.flatten(0, 1)
+        selected = valid.flatten().nonzero().flatten()
+        active = flat.index_select(0, selected)
+        hidden = self.norm(active + self.ffn(self.input_norm(active)))
+        return flat.new_zeros(flat.shape).index_copy(0, selected, hidden).reshape_as(x)
+
+    @staticmethod
+    def _owners(memory, desired, enabled):
+        # Window memories have ordered centers; matching is exact on the beat grid.
+        index = torch.searchsorted(memory.beats.contiguous(), desired.contiguous())
+        safe = index.clamp_max(memory.beats.shape[1]-1)
+        batch = torch.arange(len(memory.values), device=desired.device)[:, None]
+        valid = enabled & (index < memory.beats.shape[1]) & memory.valid[batch, safe]
+        valid &= memory.beats[batch, safe] == desired
+        values = memory.values[batch, safe].masked_fill(~valid[..., None], 0)
+        return values, valid
 
     def forward(self, windows, queries):
         m, q = windows.memory, queries
         active = windows.window_valid & m.valid.any(-1)
-        valid = m.valid & active[:, None]
-        memory = self.input(m.values.masked_fill(~valid[..., None], 0)).masked_fill(~valid[..., None], 0)
-        scalars = torch.stack((q.origins-windows.target_start[:, None], q.elapsed,
-            q.ordinals.float(), q.tracks.float(), q.route_valid.sum(-1).float(), q.history_gaps,
-            q.boundary.float(), q.last_real_valid.float()), -1)
+        # Use safe desired coordinates for inert padding, including NaN placeholders.
+        desired = q.beats.masked_fill(~q.valid, 0)
+        owned, valid = self._owners(m, desired, q.valid & active[:, None])
+        roles = q.roles.masked_fill(~valid, 0)
+        moment = (roles == QUERY_ROLES.index('MOMENT')) & valid
+        note = ((roles == QUERY_ROLES.index('NOTE_KIND')) |
+                (roles == QUERY_ROLES.index('NOTE_FLAGS'))) & valid
+        route = ((roles == QUERY_ROLES.index('ROUTE_ID')) |
+                 (roles == QUERY_ROLES.index('TRACK_BREAK'))) & valid
+        lower_kind = ((roles == QUERY_ROLES.index('NOTE_FLAGS')) | route) & valid
+        track_break = (roles == QUERY_ROLES.index('TRACK_BREAK')) & valid
+        # Enforce allowed conditions by role even if a caller supplies extra values.
+        known_tick = (q.origins-q.beats.floor()).masked_fill(~(note | route), 0)
+        previous = q.history_gaps.masked_fill(~(moment & q.last_real_valid), 0)
+        scalars = torch.stack((known_tick, previous,
+                               (moment & q.last_real_valid).float()), -1)
         scalars = scalars.sign()*scalars.abs().log1p()
-        query = self.role(q.roles) + self.note_kind(q.note_kinds+1) + self.prefix(scalars.to(memory))
-        route_positions = torch.arange(q.route_ids.shape[-1], device=memory.device).float()
-        ordered_routes = self.route(q.route_ids) * (1+sinusoidal(route_positions, self.dim, self.base, self.scale).to(memory))
-        query = query + ordered_routes.masked_fill(~q.route_valid[..., None], 0).sum(-2)
-        query = query + sinusoidal(q.beats-windows.target_start[:, None], self.dim, self.base, self.scale).to(memory)
-        count_beats = windows.target_start[:, None] + torch.arange(self.target_beats, device=memory.device).float()+.5
-        count_query = self.role.weight[-1][None, None] + sinusoidal(count_beats-windows.target_start[:, None], self.dim, self.base, self.scale).to(memory)
-        query = torch.cat((query, count_query), 1)
-        beats = torch.cat((q.beats, count_beats), 1)
-        qvalid = torch.cat((q.valid & active[:, None], active[:, None].expand(-1, self.target_beats)), 1)
-        moment = torch.cat((q.roles == QUERY_ROLES.index('MOMENT'), torch.zeros_like(count_beats, dtype=torch.bool)), 1)
-        offsets = torch.arange(5, device=memory.device)
-        desired = beats.floor()[..., None] + torch.where(moment[..., None], offsets, offsets-1) + .5
-        index = torch.searchsorted(m.beats.contiguous(), desired.flatten(1).contiguous()).reshape_as(desired)
-        safe = index.clamp_max(m.beats.shape[1]-1)
-        owner = torch.arange(len(memory), device=memory.device)[:, None, None]
-        local_valid = (index < m.beats.shape[1]) & valid[owner, safe] & (m.beats[owner, safe] == desired)
-        local_valid &= moment[..., None] | (offsets < 3)
-        local_valid &= qvalid[..., None]
-        for layer in self.layers:
-            query = layer(query, beats, qvalid, memory, m.beats, valid, safe, local_valid)
-        hidden = self.norm(query).masked_fill(~qvalid[..., None], 0)
-        rows = hidden[:, :q.valid.shape[1]]
+        x = owned + self.role(roles) + self.condition(scalars.to(owned))
+        for encoder, values, mask in zip(self.ordinal_encoders,
+                (q.ordinals, q.note_ordinals, q.tracks, q.segments),
+                (moment | note | route, note | route, route, route)):
+            x = x + encoder(self._positions(values, mask, owned))
+        kind_ids = q.note_kinds.masked_fill(~lower_kind, -1)+1
+        x = x + self.note_kind(kind_ids).masked_fill(~lower_kind[..., None], 0)
+        current = q.current_route_ids.masked_fill(~track_break, -1)+1
+        x = x + self.route(current).masked_fill(~track_break[..., None], 0)
+        prefix_valid = q.route_valid & route[..., None]
+        prefix_ids = q.route_ids.masked_fill(~prefix_valid, 0)+1
+        prefix_positions = torch.arange(q.route_ids.shape[-1], device=owned.device).float()
+        order = sinusoidal(prefix_positions, self.dim, self.base, self.scale).to(owned)
+        prefix = self.route(prefix_ids)*(1+order)
+        x = x + prefix.masked_fill(~prefix_valid[..., None], 0).sum(-2)
+        hidden = self._hidden(x, valid)
+        count_beats = windows.target_start[:, None] + torch.arange(self.target_beats, device=owned.device)+.5
+        count_z, count_valid = self._owners(m, count_beats, active[:, None].expand(-1, self.target_beats))
+        count_hidden = self._hidden(count_z+self.role.weight[QUERY_ROLES.index('COUNT')], count_valid)
+        def predict(head, h, mask):
+            return head(h).masked_fill(~mask[..., None], 0)
         return ReconstructionOutput(
-            {name.removeprefix('field_'): head(rows).masked_fill(~qvalid[:, :rows.shape[1], None], 0)
+            {name.removeprefix('field_'): predict(head, hidden, valid)
              for name, head in self.field_heads.items()},
-            {name: head(rows).masked_fill(~qvalid[:, :rows.shape[1], None], 0) for name, head in self.time_heads.items()},
-            self.count_head(hidden[:, rows.shape[1]:]).masked_fill(~active[:, None, None], 0), active)
+            predict(self.moment_head, hidden, valid),
+            predict(self.empty_head, count_hidden, count_valid),
+            predict(self.positive_count_head, count_hidden, count_valid),
+            active, valid, count_valid)

@@ -38,10 +38,10 @@ def test_cli_end_to_end_cpu(config,tmp_path,native_miacode,precision,capsys):
         head.weight.zero_()
         head.bias.fill_(-100)
         head.bias[384]=100
-    torch.save(dict(schema='maidata.encoder-draft-training.v1',recipe=config,
+    torch.save(dict(schema='maidata.encoder-draft-training.v3',recipe=config,
         model_state={n+'.'+k:v for n,m in zip(('encoder','draft','planner'),modules) for k,v in m.state_dict().items()}),tmp_path/'ed.ckpt')
     decoder_encoder=build_model(config)
-    torch.save(dict(schema='maidata.decoder-training.v3',architecture='maidata.decoder-field-query-tick384.v1',
+    torch.save(dict(schema='maidata.decoder-training.v4',architecture='maidata.decoder-causal-cont-tick384.v2',
         recipe=config,model_state={n+'.'+k:v for n,m in (('encoder',decoder_encoder),('decoder',modules[-1]))
             for k,v in m.state_dict().items()}),tmp_path/'m.ckpt')
     np.savez(tmp_path/'grid.npz',**item(0,config)['grid'])
