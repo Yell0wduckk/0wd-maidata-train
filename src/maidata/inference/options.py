@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class GenerationOptions:
-    temperature: float = 1.
+    temperature: float = 0.
     seed: int = 20261010
     max_tokens_per_window: int = 512
     max_tokens_per_moment: int = 20

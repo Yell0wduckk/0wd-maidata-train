@@ -6,10 +6,10 @@
 
 ## 推理输入
 
-- 显式指定两份权重：阶段一 `maidata.encoder-draft-training.v2` checkpoint 提供固定 E_D/D/P；阶段二 `maidata.decoder-training.v4` checkpoint 提供联合训练后的 E_M/M。R不构建、不运行；结构相同的旧阶段一v1可显式作为E_D/D/P组件来源。
+- 阶段二 `maidata.decoder-training.v4` checkpoint 提供联合训练后的 E_M/M。Z开启或使用预测plan时，还需阶段一 `maidata.encoder-draft-training.v2` checkpoint 提供固定 E_D/D/P；结构相同的旧阶段一v1可显式作为组件来源。Z关闭且plan为gt/none时只需阶段二权重。R不构建、不运行。
 - 两套Encoder采用相同配置、独立参数；网络按checkpoint的`recipe`构建并严格加载，不把E_M替换成E_D，也不让D读取E_M的P0。当前加载器核对Encoder/Draft/Planner表示配置，不比较权重或源码哈希，不加载optimizer、训练计划或训练缓存清单。
 - M要求架构身份`maidata.decoder-causal-cont-tick384.v2`，并严格加载v4的E_M/M成套参数。旧v1/v2连续时间头不兼容本次独立CONT序列与385类头，不能仅修改schema后加载或冒充完整轮续训。
-- 阶段二默认GT plan，预测plan保留为显式对照，见[plan对照](decoder-plan-comparison.md)。两类权重的自由推理都运行P并读取预测plan12，不读取真实谱面统计；`generation.json`来源信息分别记录`training_plan_source`与`inference_plan_source`，后者始终为`predicted`。
+- 阶段二默认GT plan，见[plan对照](decoder-plan-comparison.md)。推理默认读取P预测plan12；用户可显式指定gt或none作对照。`generation.json`分别记录`training_plan_source`与实际`inference_plan_source`，不会把GT结果标为predicted。
 - 音频、完整 BPM/first 时间映射、目标 difficulty_id 与精确数值 level。无需源谱、真实 planner 或谱面结束时间。
 - 二选一：`--grid` 直接读取既有训练格式音频 NPZ，或者 `--mel-stats` 使用训练时固定的 Mel 统计从原音频提取 Mel128/全曲 aux32。引用旧 Mel 的 grid 可用 `--mel-root` 搬迁路径。已验收 grid 按指定输入直接读取，不全量扫描或重哈希。
 - `--geometry` 指向既有 Physical path-catalog；`--slide-data` 指向 MiaCode `slide_data.json`。只读资源，不重建几何。
@@ -60,7 +60,10 @@ python -m maidata.inference.materialize \
 | 参数 | 默认值与含义 |
 |---|---|
 | `--device / --precision` | cuda / bf16；CPU 可显式选择 cpu / fp32 |
-| `--temperature` | 1；0 为确定性 argmax，正值为温度采样 |
+| `--temperature` | 默认0，为确定性 argmax；正值为温度采样 |
+| `--z-cross-attention / --no-z-cross-attention` | 默认沿用checkpoint；可显式关闭Z。不能给未训练Z投影的checkpoint启用Z |
+| `--plan-source` | 默认predicted；gt读取`--gt-plan`逐窗JSON，none完全屏蔽plan key |
+| `--gt-plan` | `{"windows":[{"start_beat":0,"plan12":[12个数值],"valid":true}]}`，覆盖含完整尾窗的全部目标窗 |
 | `--seed` | 20261010；独立 CPU sampling generator，重试不重复同一候选 |
 | `--encoder-window-batch` | 8；控制两套Encoder的局部窗口分块大小，不改变全曲P0/Z或AR目标窗 |
 | `--max-tokens-per-window` | 512；当前新字段 token 数上限，不是旧行数或历史截断预算 |
@@ -76,6 +79,8 @@ python -m maidata.inference.materialize \
 网络容量、RoPE、音频余量、Z范围、谱面历史和目标窗口使用 checkpoint 保存的模型配方；时间词表固定为1..384 tick加CONT，共385类。目标 stride 必须等于目标长度，保证目标中心连续、无重复。换容量须使用相应训练权重，不能用 CLI 强行宽松加载。
 
 推理读取并准备一次音频输入，E_D与E_M分别计算自己的G0；可学习K/V和隐藏表示不共享。E_D按覆盖窗拼接全曲P0_D，D一次生成含完整空尾窗的Z，P预测各窗plan12。E_M按需要生成的目标窗编码局部24拍P0_M，含完整空尾窗，M只读取当前窗的对应bank。每窗选择固定Z上下文和plan12，内容重试及Physical回退不重跑Encoder或D/P。
+
+显式使用`--no-z-cross-attention --plan-source gt --gt-plan ...`，或`--no-z-cross-attention --plan-source none`时，仅加载阶段二E_M/M，不需要`--encoder-draft-checkpoint`，不构建或执行E_D/D/P。none将独立plan有效位设为false，不把全零向量当有效条件；Z和plan均关闭时条件attention没有有效key。GT与none报告分别记录来源、实际Z开关及每窗`plan_valid`。关闭Z的推理覆盖在严格加载原始checkpoint参数结构之后应用，不更改训练配置或checkpoint。
 
 M使用独立CONT输入；续接锁定时间类型，每次CONT执行主干并追加KV，不调用Physical接受、不产生新起音。最终短值合成完整时间后提交一次真实动作。温度0逐步取合法argmax，正温度逐步采样；窗口报告记录time_sampling。Hold/Slide按NOTE written BPM换算秒并反算绝对拍，Slide首次仅调整后段音频/Z查询坐标。
 

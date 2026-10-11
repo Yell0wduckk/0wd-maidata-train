@@ -1,5 +1,5 @@
 """Audio preparation, fixed E_D/D/P and optional joint-trained E_M execution."""
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass, replace
 from contextlib import nullcontext
 
 import torch
@@ -49,6 +49,65 @@ class Conditions:
     starts: tuple
     coverage: object
     audio_scope: str = 'full_song'
+
+
+def with_plan_source(conditions, source, document=None):
+    """GT rows are explicit per-window inputs; none masks the key completely."""
+    if source == 'predicted':
+        return conditions
+    plans = torch.zeros_like(conditions.plans)
+    valid = torch.zeros_like(conditions.plan_valid)
+    if source == 'gt':
+        if document is None:
+            raise ValueError('GT plan requires a window plan JSON')
+        rows = document['windows']
+        by_start = {float(row['start_beat']): row for row in rows}
+        if len(by_start) != len(rows):
+            raise ValueError('duplicate GT plan window start')
+        for i, start in enumerate(conditions.starts):
+            row = by_start[float(start)]
+            value = torch.as_tensor(row['plan12'], dtype=plans.dtype, device=plans.device)
+            if value.shape != (12,) or not torch.isfinite(value).all() or row.get('valid', True) is not True:
+                raise ValueError('GT plan requires twelve finite values and a valid row')
+            plans[i] = value
+            valid[i] = True
+    elif source != 'none':
+        raise ValueError('unknown plan source')
+    return replace(conditions, plans=plans, plan_valid=valid)
+
+
+@torch.inference_mode()
+def prepare_decoder_conditions(encoder, config, grid, timing, duration, *, device,
+                               encoder_window_batch=8, progress=None):
+    """Z-off GT/none inference runs only the independently trained E_M."""
+    c = config
+    coverage = song_coverage(timing, duration, first_beat=int(grid['first_beat']), target_beats=c['target_beats'])
+    starts = coverage.starts(include_tail=True)
+    host = song_inputs([grid], validate_input=False)
+    with stage(progress, 'decoder_encoder_global'):
+        song = encoder.prepare_song(to_device(host, device))
+    pieces = []
+    with stage(progress, 'decoder_encoder_windows'):
+        for at in range(0, len(starts), encoder_window_batch):
+            chosen = starts[at:at+encoder_window_batch]
+            windows = window_inputs([grid], chosen, [0]*len(chosen), target_beats=c['target_beats'],
+                before_beats=c['audio_before_beats'], after_beats=c['audio_after_beats'], validate_input=False)
+            windows.layout = prepare_encoder_layout(host.beat_centers, host.sample_valid.any(-1), windows,
+                radii=c['stage_attention_radii'], rates=c['fpn_rates'], before=c['audio_before_beats'],
+                context=c['audio_before_beats']+c['target_beats']+c['audio_after_beats'])
+            pieces.append(encoder.encode_windows(song, to_device(windows, device)).P0)
+            emit(progress, 'encoder_progress', encoder='decoder', completed=at+len(chosen), total=len(starts))
+    audio = BeatMemory(*(torch.cat([getattr(p, name) for p in pieces]) for name in ('values', 'beats', 'valid')))
+    if c.get('decoder_train_audio_scope', 'full_song') != 'window':
+        # The extra complete tail is a target, not part of the full-song bank.
+        local = BeatMemory(*(getattr(audio, name)[:-1] for name in ('values', 'beats', 'valid')))
+        audio = assemble_full_p0(local, torch.tensor(starts[:-1], device=device),
+            torch.zeros(len(starts)-1, dtype=torch.long, device=device), [coverage], p0_rate=c['fpn_rates'][0])
+    z = BeatMemory(audio.values.new_zeros((1, 0, c['draft_latent_dim'])),
+                   audio.beats.new_zeros((1, 0)), torch.zeros((1, 0), dtype=torch.bool, device=device))
+    return Conditions(audio, z, torch.zeros((len(starts), 12), device=device),
+                      torch.zeros(len(starts), dtype=torch.bool, device=device), starts, coverage,
+                      c.get('decoder_train_audio_scope', 'full_song'))
 
 
 @torch.inference_mode()

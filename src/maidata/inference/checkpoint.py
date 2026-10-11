@@ -19,24 +19,38 @@ class Models:
     decoder_encoder: object = None
 
 
-def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device):
-    producer = torch.load(encoder_draft_checkpoint, map_location='cpu', weights_only=False)
+def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device, z_cross_attention=None, plan_source='predicted'):
     consumer = torch.load(decoder_checkpoint, map_location='cpu', weights_only=False)
-    if producer.get('schema') not in ('maidata.encoder-draft-training.v1','maidata.encoder-draft-training.v2'):
-        raise ValueError('expected an Encoder/Draft stage-I checkpoint')
     if (consumer.get('schema') != 'maidata.decoder-training.v4'
             or consumer.get('architecture') != 'maidata.decoder-causal-cont-tick384.v2'):
         raise ValueError('expected a v4 causal CONT Decoder checkpoint with normalized-plan architecture v2; older architectures are not resume-compatible')
+    if plan_source not in ('predicted', 'gt', 'none'):
+        raise ValueError('plan_source must be predicted, gt or none')
+    saved_z = consumer['recipe']['decoder_z_cross_attention']
+    actual_z = saved_z if z_cross_attention is None else z_cross_attention
+    if type(actual_z) is not bool or actual_z and not saved_z:
+        raise ValueError('cannot enable Z on a checkpoint trained without its projection')
+    producer = None
+    if actual_z or plan_source == 'predicted':
+        if not encoder_draft_checkpoint:
+            raise ValueError('Z or predicted plan requires an Encoder/Draft checkpoint')
+        producer = torch.load(encoder_draft_checkpoint, map_location='cpu', weights_only=False)
+        if producer.get('schema') not in ('maidata.encoder-draft-training.v1','maidata.encoder-draft-training.v2'):
+            raise ValueError('expected an Encoder/Draft stage-I checkpoint')
     # These are architecture/representation settings, not source or asset identities.
-    keys = [k for k in producer['recipe'] if k in ENCODER_KEYS or k.startswith(('draft_', 'planner_'))]
+    producer_recipe = producer['recipe'] if producer is not None else {}
+    keys = [k for k in producer_recipe if k in ENCODER_KEYS or k.startswith(('draft_', 'planner_'))]
     for key in keys:
         if key in consumer['recipe'] and json.dumps(producer['recipe'][key]) != json.dumps(consumer['recipe'][key]):
             raise ValueError(f'Encoder/Draft and Decoder representation differs: {key}')
-    config = dict(CONFIG, **producer['recipe'])
+    config = dict(CONFIG, **producer_recipe)
     config.update(consumer['recipe'])
     config['decoder_train_audio_scope'] = consumer['recipe'].get('decoder_train_audio_scope', 'full_song')
-    modules = [build_model(config), build_draft(config), build_planner(config), build_decoder(config)]
+    modules = ([build_model(config), build_draft(config), build_planner(config)]
+               if producer is not None else [None, None, None]) + [build_decoder(config)]
     for name, module in zip(('encoder', 'draft', 'planner'), modules):
+        if module is None:
+            continue
         prefix = name + '.'
         module.load_state_dict({k[len(prefix):]: v for k, v in producer['model_state'].items()
                                 if k.startswith(prefix)}, strict=True)
@@ -48,17 +62,22 @@ def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device):
         torch.nn.ModuleDict(dict(encoder=decoder_encoder, decoder=modules[-1])).load_state_dict(
             consumer['model_state'], strict=True)
     for model in modules + ([decoder_encoder] if decoder_encoder is not None else []):
+        if model is None:
+            continue
         model.to(device).eval().requires_grad_(False)
         for module in model.modules():
             if hasattr(module, 'validate_inputs'):
                 module.validate_inputs = False
+    # Load the original structure strictly before applying the inference ablation.
+    config['decoder_z_cross_attention'] = actual_z
+    modules[-1].condition.z_cross_attention = actual_z
     def describe(path, payload):
         return dict(path=str(path), schema=payload['schema'], epoch=payload.get('completed_epochs'), step=payload.get('step'),
                     source=payload.get('source'))
-    return Models(*modules, config, dict(encoder_draft=describe(encoder_draft_checkpoint, producer),
+    return Models(*modules, config, dict(encoder_draft=describe(encoder_draft_checkpoint, producer) if producer is not None else None,
                                         decoder=describe(decoder_checkpoint, consumer),
                                         training_plan_source=consumer['recipe'].get('decoder_train_plan_source', 'gt'),
-                                        inference_plan_source='predicted',
+                                        inference_plan_source=plan_source, z_cross_attention=actual_z,
                                         decoder_audio_scope=config['decoder_train_audio_scope'],
                                         decoder_audio_encoder='stage_ii' if decoder_encoder is not None else 'stage_i'),
                   decoder_encoder=decoder_encoder)

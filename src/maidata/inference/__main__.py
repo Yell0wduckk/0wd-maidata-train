@@ -12,8 +12,12 @@ def parser():
     from .progress import DEFAULT_INTERVAL
     defaults = GenerationOptions()
     p = argparse.ArgumentParser(description='Current E/D/P + Decoder M full-song inference (new five-token fields).')
-    p.add_argument('--encoder-draft-checkpoint', required=True)
+    p.add_argument('--encoder-draft-checkpoint', help='Required for Z or predicted plan; unused for Z-off GT/none')
     p.add_argument('--decoder-checkpoint', required=True)
+    p.add_argument('--z-cross-attention', action=argparse.BooleanOptionalAction, default=None,
+                   help='Inherit checkpoint by default; --no-z-cross-attention disables Z')
+    p.add_argument('--plan-source', choices=('predicted', 'gt', 'none'), default='predicted')
+    p.add_argument('--gt-plan', help='JSON windows: [{start_beat, plan12, valid}] for --plan-source gt')
     p.add_argument('--audio', required=True, help='Original audio; also defines the full-song duration')
     clock = p.add_mutually_exclusive_group(required=True)
     clock.add_argument('--timing', help='JSON: first_seconds and bpm=[[beat_num,beat_den,bpm], ...]')
@@ -68,7 +72,7 @@ def main(argv=None):
         from maidata.preparation.cache import load_grid
         from maidata.time import TimingMap
         from .checkpoint import load_models
-        from .conditioning import audio_grid, prepare_conditions
+        from .conditioning import audio_grid, prepare_conditions, prepare_decoder_conditions, with_plan_source
         from .generation import generate, GenerationOptions
         from .materialize import read_json, write_json
 
@@ -82,7 +86,8 @@ def main(argv=None):
     timing_data = read_json(args.timing) if args.timing else dict(first_seconds=args.first_seconds, bpm=[[0, 1, args.bpm]])
     timing = TimingMap.from_audio_timing(timing_data)
     with stage(progress, 'models'):
-        models = load_models(args.encoder_draft_checkpoint, args.decoder_checkpoint, device=device)
+        models = load_models(args.encoder_draft_checkpoint, args.decoder_checkpoint, device=device,
+                             z_cross_attention=args.z_cross_attention, plan_source=args.plan_source)
     with stage(progress, 'audio'):
         if args.grid:
             grid = load_grid(args.grid, mel_root=args.mel_root, validate_input=False)
@@ -108,10 +113,15 @@ def main(argv=None):
                 path.unlink()
     try:
         with torch.inference_mode(), torch.autocast(device.type, dtype=torch.bfloat16, enabled=args.precision == 'bf16'):
-            conditions = prepare_conditions(models.encoder, models.draft, models.planner, models.config, grid,
-                timing, duration, difficulty=args.difficulty, level=args.level, device=device,
-                encoder_window_batch=args.encoder_window_batch, progress=progress,
-                decoder_encoder=models.decoder_encoder)
+            if models.draft is None:
+                conditions = prepare_decoder_conditions(models.decoder_encoder, models.config, grid, timing, duration,
+                    device=device, encoder_window_batch=args.encoder_window_batch, progress=progress)
+            else:
+                conditions = prepare_conditions(models.encoder, models.draft, models.planner, models.config, grid,
+                    timing, duration, difficulty=args.difficulty, level=args.level, device=device,
+                    encoder_window_batch=args.encoder_window_batch, progress=progress,
+                    decoder_encoder=models.decoder_encoder)
+            conditions = with_plan_source(conditions, args.plan_source, read_json(args.gt_plan) if args.gt_plan else None)
             with stage(progress, 'generation'):
                 encoded, windows = generate(models.decoder, conditions, timing, geometry, models.config, metadata,
                                              duration, device=device, options=options, progress=progress)

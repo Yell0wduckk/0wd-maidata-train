@@ -140,3 +140,46 @@ def test_unnormalized_cont_architecture_is_not_silently_loaded(config,tmp_path):
     torch.save(payload,paths[1])
     with pytest.raises(ValueError,match='v4 causal CONT'):
         load_models(*paths,device='cpu')
+
+
+@pytest.mark.parametrize('plan_source', ['gt', 'none'])
+def test_z_off_cli_uses_only_stage_two_and_masks_absent_plan(config, tmp_path, geometry, plan_source):
+    c = dict(config, decoder_z_cross_attention=False, decoder_train_audio_scope='window')
+    paths, _, _, _, _ = checkpoints(c, tmp_path)
+    plan = tmp_path/'gt-plan.json'
+    # Audio duration 1.2 seconds produces one real window and one complete tail.
+    coverage = conditioning.song_coverage(TimingMap([(0, 120)]), 1.2,
+        first_beat=int(item(0, c)['grid']['first_beat']), target_beats=c['target_beats'])
+    values = [0.]*8+[1., 0., 0., 0.]
+    plan.write_text(json.dumps(dict(windows=[dict(start_beat=s, plan12=values)
+                    for s in coverage.starts(include_tail=True)])))
+    args = ['--decoder-checkpoint', str(paths[1]), '--no-z-cross-attention', '--plan-source', plan_source,
+            '--audio', 'unused.wav', '--grid', 'unused.npz', '--bpm', '120', '--geometry', 'unused',
+            '--slide-data', 'unused', '--difficulty', '5', '--level', '14.5', '--device', 'cpu',
+            '--precision', 'fp32', '--encoder-window-batch', '1', '--output', str(tmp_path/'result'), '--no-progress']
+    if plan_source == 'gt':
+        args += ['--gt-plan', str(plan)]
+    with patch('maidata.inference.checkpoint.build_draft', side_effect=AssertionError('must not run D')), \
+         patch('maidata.inference.checkpoint.build_planner', side_effect=AssertionError('must not run P')), \
+         patch('maidata.preparation.cache.load_grid', return_value=item(0, c)['grid']), \
+         patch('soundfile.info', return_value=SimpleNamespace(frames=28800, samplerate=24000)), \
+         patch('maidata.physical.Geometry.from_resources', return_value=geometry):
+        main(args)
+    report = json.loads((tmp_path/'result/generation.json').read_text())
+    assert report['complete'] and report['options']['temperature'] == 0
+    assert report['checkpoints']['encoder_draft'] is None
+    assert report['checkpoints']['inference_plan_source'] == plan_source
+    assert report['config']['decoder_z_cross_attention'] is False
+    assert all(w['plan_valid'] == (plan_source == 'gt') for w in report['windows'])
+    assert all(w['plan12'] == (values if plan_source == 'gt' else [0.]*12) for w in report['windows'])
+
+
+def test_z_ablation_loads_original_weights_strictly(config, tmp_path):
+    paths, _, _, _, _ = checkpoints(config, tmp_path)
+    model = load_models(paths[0], paths[1], device='cpu', z_cross_attention=False, plan_source='gt')
+    assert model.encoder is model.draft is model.planner is None
+    assert model.decoder.condition.z_cross_attention is False
+    c = dict(config, decoder_z_cross_attention=False)
+    paths, _, _, _, _ = checkpoints(c, tmp_path)
+    with pytest.raises(ValueError, match='cannot enable Z'):
+        load_models(None, paths[1], device='cpu', z_cross_attention=True, plan_source='gt')
