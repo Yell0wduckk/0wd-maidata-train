@@ -1,4 +1,4 @@
-"""Shared residual MLP: each valid field query reads exactly its owning beat Z."""
+"""Shared residual MLP: each valid field query reads exactly its owning beat-block Z."""
 import torch
 from torch import nn
 
@@ -10,12 +10,14 @@ from .types import ReconstructionOutput
 
 class ReconstructionHead(nn.Module):
     def __init__(self, *, latent_dim, ffn_dim, dropout, norm_eps,
-                 target_beats, position_base, position_scale):
+                 target_beats, position_base, position_scale, z_stride_beats):
         super().__init__()
         positive_ints(latent_dim=latent_dim, ffn_dim=ffn_dim, target_beats=target_beats)
         numerical_config(dropout, norm_eps, position_base, position_scale)
         self.latent_dim = self.dim = latent_dim
         self.target_beats = target_beats
+        from .spacing import z_stride
+        self.z_stride_beats = z_stride(z_stride_beats, target_beats=target_beats)
         self.base, self.scale = position_base, position_scale
         self.role = nn.Embedding(len(QUERY_ROLES), latent_dim)
         self.note_kind = nn.Embedding(len(KINDS)+1, latent_dim)
@@ -48,7 +50,7 @@ class ReconstructionHead(nn.Module):
 
     @staticmethod
     def _owners(memory, desired, enabled):
-        # Window memories have ordered centers; matching is exact on the beat grid.
+        # Window memories have ordered centers; matching is exact on the configured Z grid.
         index = torch.searchsorted(memory.beats.contiguous(), desired.contiguous())
         safe = index.clamp_max(memory.beats.shape[1]-1)
         batch = torch.arange(len(memory.values), device=desired.device)[:, None]
@@ -57,12 +59,24 @@ class ReconstructionHead(nn.Module):
         values = memory.values[batch, safe].masked_fill(~valid[..., None], 0)
         return values, valid
 
+    def _block_coordinates(self, beats, starts):
+        stride = self.z_stride_beats
+        block_start = starts[:, None] + ((beats-starts[:, None])/stride).floor()*stride
+        return block_start + stride/2, beats.floor()-block_start
+
+    def _beat_position(self, offset, valid, reference):
+        # Known beat within the Z block, never an onset target. Zero at offset
+        # zero preserves the exact stride-one path and its parameter inventory.
+        return (self._positions(offset, valid, reference)
+                - self._positions(torch.zeros_like(offset), valid, reference))
+
     def forward(self, windows, queries):
         m, q = windows.memory, queries
         active = windows.window_valid & m.valid.any(-1)
         # Use safe desired coordinates for inert padding, including NaN placeholders.
         desired = q.beats.masked_fill(~q.valid, 0)
-        owned, valid = self._owners(m, desired, q.valid & active[:, None])
+        centers, offset = self._block_coordinates(desired, windows.target_start)
+        owned, valid = self._owners(m, centers, q.valid & active[:, None])
         roles = q.roles.masked_fill(~valid, 0)
         moment = (roles == QUERY_ROLES.index('MOMENT')) & valid
         note = ((roles == QUERY_ROLES.index('NOTE_KIND')) |
@@ -78,6 +92,8 @@ class ReconstructionHead(nn.Module):
                                (moment & q.last_real_valid).float()), -1)
         scalars = scalars.sign()*scalars.abs().log1p()
         x = owned + self.role(roles) + self.condition(scalars.to(owned))
+        if self.z_stride_beats > 1:
+            x = x + self._beat_position(offset, valid, owned)
         for encoder, values, mask in zip(self.ordinal_encoders,
                 (q.ordinals, q.note_ordinals, q.tracks, q.segments),
                 (moment | note | route, note | route, route, route)):
@@ -94,8 +110,12 @@ class ReconstructionHead(nn.Module):
         x = x + prefix.masked_fill(~prefix_valid[..., None], 0).sum(-2)
         hidden = self._hidden(x, valid)
         count_beats = windows.target_start[:, None] + torch.arange(self.target_beats, device=owned.device)+.5
-        count_z, count_valid = self._owners(m, count_beats, active[:, None].expand(-1, self.target_beats))
-        count_hidden = self._hidden(count_z+self.role.weight[QUERY_ROLES.index('COUNT')], count_valid)
+        centers, offset = self._block_coordinates(count_beats, windows.target_start)
+        count_z, count_valid = self._owners(m, centers, active[:, None].expand(-1, self.target_beats))
+        count_x = count_z+self.role.weight[QUERY_ROLES.index('COUNT')]
+        if self.z_stride_beats > 1:
+            count_x = count_x + self._beat_position(offset, count_valid, count_z)
+        count_hidden = self._hidden(count_x, count_valid)
         def predict(head, h, mask):
             return head(h).masked_fill(~mask[..., None], 0)
         return ReconstructionOutput(

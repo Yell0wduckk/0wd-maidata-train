@@ -61,13 +61,8 @@ def collate_conditions(items, windows, config, *, audio, audio_keys=None):
     mapping = torch.tensor(window_groups, dtype=torch.long)
     starts = torch.tensor(starts, dtype=torch.float32)
     valid = torch.ones(len(starts), dtype=torch.bool)
-    count = config['decoder_z_before_beats'] + config['target_beats'] + config['decoder_z_after_beats']
-    desired = starts[:, None] - config['decoder_z_before_beats'] + torch.arange(count).float() + .5
-    position = (desired-z.beats[mapping, :1]).long()
-    safe = position.clamp(0, z.values.shape[1]-1)
-    selected_valid = (position >= 0) & (position < z.values.shape[1]) & z.valid[mapping[:, None], safe]
-    selected = Memory(z.values[mapping[:, None], safe].masked_fill(~selected_valid[..., None], 0),
-                      desired, selected_valid)
+    from maidata.decoder.batching import select_condition_windows
+    selected = select_condition_windows(z, mapping, starts, valid, config).memory
     return Conditions(audio, Memory(selected.values, selected.beats, selected.valid), torch.stack(plans),
         torch.stack(plan_valid), torch.tensor(indices, dtype=torch.long), torch.tensor(audio_mapping, dtype=torch.long),
         audio.valid.flatten().nonzero().flatten())

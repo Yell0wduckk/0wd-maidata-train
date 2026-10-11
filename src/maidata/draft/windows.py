@@ -60,22 +60,26 @@ def assemble_full_p0(local, starts, window_to_audio, coverages, *, p0_rate, layo
 
 
 
-def draft_queries(coverages, audio_mapping):
+def draft_queries(coverages, audio_mapping, *, z_stride_beats=None):
+    from .spacing import z_stride
     rows, valid = [], []
     for index in audio_mapping.tolist():
         c = coverages[index]
-        rows.append(c.first_beat + torch.arange(c.draft_beats, device=audio_mapping.device).float() + .5)
-        valid.append(torch.ones(c.draft_beats, device=audio_mapping.device, dtype=torch.bool))
+        stride = z_stride(z_stride_beats, target_beats=c.target_beats)
+        count = c.draft_beats // stride
+        rows.append(c.first_beat + torch.arange(count, device=audio_mapping.device).float()*stride + stride/2)
+        valid.append(torch.ones(count, device=audio_mapping.device, dtype=torch.bool))
     return pad_sequence(rows, batch_first=True), pad_sequence(valid, batch_first=True)
 
 
-def select_windows(z, window_groups, starts, window_valid, *, target_beats, before_beats, after_beats, layout=None):
+def select_windows(z, window_groups, starts, window_valid, *, target_beats, before_beats, after_beats,
+                   layout=None, z_stride_beats=None):
     """Separate calls select R, P or Decoder contexts; no query regeneration."""
     from .layout import prepare_selection, to_device
     if layout is None:
         layout = to_device(prepare_selection(z.beats.detach().cpu(), z.valid.cpu(), window_groups.cpu(),
             starts.detach().cpu(), window_valid.cpu(), target_beats=target_beats,
-            before_beats=before_beats, after_beats=after_beats), z.values.device)
+            before_beats=before_beats, after_beats=after_beats, z_stride_beats=z_stride_beats), z.values.device)
     values = z.values.flatten(0, 1)[layout['indices']].masked_fill(~layout['valid'][..., None], 0)
     return WindowLatents(BeatMemory(values, layout['beats'], layout['valid']),
                          starts, target_beats, window_valid)

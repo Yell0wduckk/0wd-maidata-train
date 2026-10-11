@@ -103,7 +103,9 @@ def restore_rng(state):
 def _validate_producer(payload, config, binding):
     keys = [k for k in config if k in ENCODER_KEYS or k.startswith('draft_') or k in PLANNER_KEYS]
     current = json.loads(json.dumps({k:config[k] for k in keys}))
-    if current != {k:payload['recipe'].get(k) for k in keys}:
+    saved = dict(payload['recipe'])
+    saved.setdefault('draft_z_stride_beats', 1)
+    if current != {k:saved.get(k) for k in keys}:
         raise ValueError('frozen producer architecture/representation differs')
     # Current v3 training records selected paths, not input-content receipts.
     # Reusing those accepted assets does not require reconstructing old hashes.

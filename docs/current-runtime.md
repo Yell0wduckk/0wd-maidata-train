@@ -26,15 +26,17 @@ Encoder 合成验证见[入口文档](maidata-entry.md#cpu-合成验证)。独�
 
 ## 新 Draft：末层Z、直接解析与Planner
 
-`maidata.draft`采用[拆分实施合同](../../0wd-v3-refactor-docs/drafter-split-execution-plan.md)。D保留默认8层256维8头4专家全曲非AR主干，一拍一个Z，直接取最终LayerNorm隐藏；`draft_latent_dim == draft_dim`，移除128维瓶颈及独立latent normalization。
+`maidata.draft`采用[拆分实施合同](../../0wd-v3-refactor-docs/drafter-split-execution-plan.md)。D保留默认8层256维8头4专家全曲非AR主干，默认一拍一个Z，直接取最终LayerNorm隐藏；`draft_latent_dim == draft_dim`，移除128维瓶颈及独立latent normalization。
 
-R使用共享残差MLP，只索引所属拍Z，没有邻拍读取或查询间attention。MOMENT、NOTE_KIND、NOTE_FLAGS、ROUTE_ID、TRACK_BREAK、COUNT分别编码允许条件；kind和当前route只进入下级查询，不输入pad、duration、总行数或未来类型表。真实起音监督拍内0…95，包含窗首0，上一真实起音可来自前拍/前窗；不再生成Draft终端、窗外起音、CONT、删失或duration标签。SLIDE_DURATION仍负责轨道分隔和前缀复位。COUNT拆为空/非空2类和仅非空拍监督的正计数96类。P继续独立读取全部目标16拍。
+R使用共享残差MLP，只索引所属拍块Z，没有邻拍读取或查询间attention。MOMENT、NOTE_KIND、NOTE_FLAGS、ROUTE_ID、TRACK_BREAK、COUNT分别编码允许条件；kind和当前route只进入下级查询，不输入pad、duration、总行数或未来类型表。真实起音监督拍内0…95，包含窗首0，上一真实起音可来自前拍/前窗；不再生成Draft终端、窗外起音、CONT、删失或duration标签。SLIDE_DURATION仍负责轨道分隔和前缀复位。COUNT拆为空/非空2类和仅非空拍监督的正计数96类。P继续独立读取全部目标16拍。
 
 分类每字段独立累计总和/计数，字段均值等权；microbatch共享逻辑更新分母，epoch/validation沿用累计规则。MOMENT无smoothing，其余分类及数量头0.05；Planner权重1/0.25保持。末轮诊断增加条件MOMENT准确率/96类分布、数量两头与合成数量准确率、分类混淆及少数类召回。
 
 `pretrain_batch_reference_rows=207`只保留原分批proxy，实际查询数量另记；pilot320组顺序及边界、workers12、BF16/scratch、学习率/调度、完整轮保存及每5轮/末轮验证不变。阶段一checkpoint为`maidata.encoder-draft-training.v3`，标签导出为`beat-local-tick96`。旧checkpoint不能完整续训，不隐式部分加载；旧128维Z不能补零扩维。原谱、音频、Physical、计划、GT plan及主M窗口缓存直接复用。
 
 新教师Z/plan生产消费接口支持256维，教师与主M各自构造配置；Z开启时M投影匹配教师宽度，Z关闭且GT/无plan时不加载教师。在线推理共用一份grid，加载时要求两侧每拍采样数和Mel频带数一致，网络隐藏维度和窗口音频余量仍可不同。只完成代码及CPU合成验收，CUDA、正式训练、真实新教师缓存和质量未验证。接口见[Draft](draft.md)，实际测试见[实施记录](drafter-split-implementation.md)。
+
+新增 `draft_z_stride_beats` / 阶段一入口 `--z-stride-beats`，支持1、2、4、8、16。D按块中心生成Z，R以块内拍偏移保留逐拍监督，P读取目标16拍内全部Z，M缓存与推理按生产者间隔选块。原采样和音频窗口不变，旧拆分式缓存/权重缺省间隔解释为1；详见[参数与坐标合同](draft.md#可配置的-z-拍间隔)。仅本地代码和CPU验证，不替换已绑定训练源码。
 
 ## 新 Decoder：网络、窗口与监督
 

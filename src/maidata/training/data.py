@@ -141,7 +141,8 @@ def collate_audio(items, *, config, packed=False):
     variants = [i['variant'] for i in items]
     starts, mapping = audio_windows(coverages, device='cpu')
     conditions = {k: v for i in items for k, v in i['conditions'].items()}
-    draft, chart_groups = make_draft_inputs(list(conditions.values()), variants, coverages, device='cpu', validate_input=False)
+    draft, chart_groups = make_draft_inputs(list(conditions.values()), variants, coverages, device='cpu', validate_input=False,
+        z_stride_beats=config['draft_z_stride_beats'])
     ownership = dict(zip(conditions, chart_groups.tolist()))
     windows = [w for i in items for w in i['windows']]
     batch = Batch(None if cached else song_inputs(grids, validate_input=False), None if cached else window_inputs(grids, starts.numpy(), mapping.numpy(),
@@ -168,7 +169,8 @@ def collate_audio(items, *, config, packed=False):
     batch.draft_inputs.valid_indices = draft.draft_valid.flatten().nonzero().flatten()
     for name, before, after in (('reconstruction', 0, 0), ('planner', 0, 0)):
         batch.layouts[name] = prepare_selection(draft.query_beats, draft.draft_valid, batch.groups,
-            batch.starts, batch.valid, target_beats=config['target_beats'], before_beats=before, after_beats=after)
+            batch.starts, batch.valid, target_beats=config['target_beats'], before_beats=before, after_beats=after,
+            z_stride_beats=config['draft_z_stride_beats'])
     if packed:
         from .transport import pack_batch
         return pack_batch(batch)

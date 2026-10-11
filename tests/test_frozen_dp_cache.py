@@ -31,7 +31,8 @@ def test_cached_p0_produces_exact_conditioned_z_and_tail_plan(config,tmp_path):
     c = dict(config,decoder_train_train_plan=str(tmp_path),decoder_train_chart_cache=str(tmp_path),
              decoder_train_source_root=str(tmp_path))
     manifest = dict(schema=P0_SCHEMA,producer=dict(sha256='p'),groups={'0':row})
-    def chart(path):
+    def chart(path, *, validate_input):
+        assert validate_input is False
         key = path.name.replace('_',':')
         condition = source['conditions'][key]
         return dict(source=dict(chart_id=key,audio_variant='0',song_id='0',difficulty=str(condition.difficulty_id),

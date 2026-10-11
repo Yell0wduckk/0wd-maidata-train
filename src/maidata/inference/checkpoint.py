@@ -46,6 +46,8 @@ def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device, z_cross
             raise ValueError('teacher Planner and M target-window spans differ')
         if actual_z and teacher['draft_latent_dim'] != config['draft_latent_dim']:
             raise ValueError('teacher Z width differs from the trained M input projection; old Z cannot be expanded')
+        if actual_z and teacher['draft_z_stride_beats'] != config['draft_z_stride_beats']:
+            raise ValueError('teacher Z spacing differs from the trained M conditions')
     modules = ([build_model(teacher), build_draft(teacher), build_planner(teacher)]
                if producer is not None else [None, None, None]) + [build_decoder(config)]
     for name, module in zip(('encoder', 'draft', 'planner'), modules):

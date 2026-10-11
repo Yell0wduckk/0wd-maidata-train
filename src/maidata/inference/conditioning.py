@@ -175,13 +175,15 @@ def prepare_conditions(encoder, draft, planner, config, grid, timing, duration, 
             device=device, encoder_window_batch=encoder_window_batch, progress=progress)
         decoder_audio = independent.audio
     inputs, _ = make_draft_inputs([ChartCondition('inference', difficulty, level, str(level))],
-        ['inference'], [coverage], device=device, validate_input=False)
+        ['inference'], [coverage], device=device, validate_input=False,
+        z_stride_beats=c['draft_z_stride_beats'])
     with stage(progress, 'draft'):
         z = draft(audio, inputs)
     all_starts = coverage.starts(include_tail=True)
     target_starts = torch.tensor(all_starts, device=device, dtype=torch.float32)
     groups, valid = torch.zeros(len(all_starts), device=device, dtype=torch.long), torch.ones(len(all_starts), device=device, dtype=torch.bool)
-    windows = select_windows(z, groups, target_starts, valid, target_beats=c['target_beats'], before_beats=0, after_beats=0)
+    windows = select_windows(z, groups, target_starts, valid, target_beats=c['target_beats'], before_beats=0, after_beats=0,
+        z_stride_beats=c['draft_z_stride_beats'])
     with stage(progress, 'planner'):
         plans = planner(windows)
     return Conditions(decoder_audio, z, plans.plan_values, plans.valid, all_starts, coverage,

@@ -34,6 +34,7 @@ CONFIG = {
     "draft_experts": 4,
     "draft_expert_ffn_dim": 512,
     "draft_latent_dim": 256,  # Must equal draft_dim; no latent bottleneck.
+    "draft_z_stride_beats": 1,  # One Z per block; divisors of 16 only.
     "draft_dropout": 0.0,
     "draft_norm_eps": 1e-5,
     "draft_difficulty_vocab_size": 8,
@@ -155,14 +156,19 @@ def main(argv=None):
     parser.add_argument("--show-config", action="store_true", help="show the configuration in entry.py")
     parser.add_argument("--component", choices=("encoder", "draft", "planner", "reconstruction", "decoder"),
                         default="encoder", help="build one independent component")
+    parser.add_argument('--z-stride-beats', type=int, choices=(1, 2, 4, 8, 16),
+                        help='beats per Z; default from CONFIG')
     args = parser.parse_args(argv)
+    config = dict(CONFIG)
+    if args.z_stride_beats is not None:
+        config['draft_z_stride_beats'] = args.z_stride_beats
     if args.show_config:
-        pprint(CONFIG, sort_dicts=False)
+        pprint(config, sort_dicts=False)
         return 0
     builders = {"encoder": build_model, "draft": build_draft,
                 "planner": build_planner, "reconstruction": build_reconstruction, "decoder": build_decoder}
     try:
-        module = builders[args.component](CONFIG)
+        module = builders[args.component](config)
     except ValueError as exc:
         parser.error(str(exc))
     print(f"{type(module).__name__} built. Encoder/Draft training: python -m maidata.training. "

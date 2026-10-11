@@ -9,7 +9,7 @@
 
 独立的 `maidata.chart`、`maidata.time` 与 `maidata.physical` 已实现新字段的数据与规则层：IR编解码、Route-71连续链/分支、时间标签、Physical候选查询及动作回退。它们不实现可学习字段模块或Decoder网络，说明见[新字段与Physical](docs/chart-fields-physical.md)。
 
-当前拆分式D直接输出最终LayerNorm后的256维Z，R直接索引所属拍并通过共享残差MLP解析，MOMENT采用拍内96类，duration退出Draft监督；P保留目标全部16拍。阶段一checkpoint升级v3，详见[实施记录](docs/drafter-split-implementation.md)。主M删除额外FieldReader，普通字段读取主干，三类时间保留385类并将CONT展开为独立主序列输入。训练默认GT plan，推理用P预测；新窗口v5与模型序列缓存的增量/从零生产见[迁移命令](docs/time384-cache-migration.md)。源原谱和Physical仍为v2。
+当前拆分式D直接输出最终LayerNorm后的256维Z，`draft_z_stride_beats`支持每1、2、4、8、16拍一枚（默认1），R直接索引所属拍并通过共享残差MLP解析，MOMENT采用拍内96类，duration退出Draft监督；P保留目标全部16拍。阶段一checkpoint升级v3，详见[实施记录](docs/drafter-split-implementation.md)。主M删除额外FieldReader，普通字段读取主干，三类时间保留385类并将CONT展开为独立主序列输入。训练默认GT plan，推理用P预测；新窗口v5与模型序列缓存的增量/从零生产见[迁移命令](docs/time384-cache-migration.md)。源原谱和Physical仍为v2。
 
 仅覆盖 Encoder 的模块、接口与验证要求见 [实施文档](../0wd-v3-refactor-docs/encoder-execution-plan.md)。
 

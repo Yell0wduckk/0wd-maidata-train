@@ -14,6 +14,8 @@ python -m maidata
 
 帮助和 `--show-config` 仅依赖标准库，后者显示入口顶部的统一配置（含18项Encoder配置及Draft配置）。默认命令延迟导入 Torch，成功构建 `AudioEncoder`，输出已构建组件和训练/推理入口并正常退出；不创建训练目录或产物。`--component`可单独选择draft、planner、reconstruction或decoder，详见[Draft接口](draft.md)。
 
+Draft新增 `--z-stride-beats {1,2,4,8,16}`（统一配置 `draft_z_stride_beats`，默认1），阶段一训练入口同样支持，同步更新与冻结P0输入两种模式通用。坐标、逐拍监督及缓存衔接见[Draft拍间隔](draft.md#可配置的-z-拍间隔)。
+
 ## 配置与构建
 
 - [entry.py](../src/maidata/entry.py) 顶部普通 `CONFIG` 是唯一人工参数位置，默认值及含义见[设计正本](../../0wd-v3-refactor-docs/new-audio-encoder.md#21-当前默认值)。构造器显式接收参数，不另设同名默认值。

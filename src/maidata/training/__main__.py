@@ -23,10 +23,14 @@ def main(argv=None):
     parser.add_argument('--resume', type=Path, help='strict completed-epoch checkpoint')
     parser.add_argument('--audio-mode', choices=('joint', 'cached'), help='Override joint Encoder updates or frozen P0 input')
     parser.add_argument('--p0-cache', type=Path, help='Frozen P0 export directory for cached mode')
+    parser.add_argument('--z-stride-beats', type=int, choices=(1, 2, 4, 8, 16),
+                        help='beats per Drafter Z; applies to joint and cached training')
     parser.add_argument('--cuda-check', action='store_true', help='one unchanged logical batch on a disposable model')
     parser.add_argument('--show-config', action='store_true')
     args = parser.parse_args(argv)
     config = load_config(args.config)
+    if args.z_stride_beats is not None:
+        config['draft_z_stride_beats'] = args.z_stride_beats
     if args.audio_mode is not None:
         config['pretrain_audio_mode'] = args.audio_mode
     if args.p0_cache is not None:

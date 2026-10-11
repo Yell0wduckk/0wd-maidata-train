@@ -62,7 +62,8 @@ class CachedP0Dataset(Dataset):
                 raise ValueError('chart condition ownership differs')
             source['source_path'] = str(Path(self.config['decoder_train_source_root'])/source['song_id']/'maidata.txt')
             conditions.append(read_condition(source))
-        inputs, mapping = make_draft_inputs(conditions, [variant], [coverage], device='cpu')
+        inputs, mapping = make_draft_inputs(conditions, [variant], [coverage], device='cpu',
+            z_stride_beats=self.config['draft_z_stride_beats'])
         inputs.valid_indices = inputs.draft_valid.flatten().nonzero().flatten()
         ownership = dict(zip(keys, mapping.tolist()))
         windows = self.windows[variant]
@@ -73,15 +74,18 @@ class CachedP0Dataset(Dataset):
         starts = torch.tensor([w['start_beat'] for w in windows],dtype=torch.float32)
         valid = torch.ones(len(windows),dtype=torch.bool)
         layout = prepare_selection(inputs.query_beats, inputs.draft_valid, groups, starts, valid,
-            target_beats=self.config['target_beats'],before_beats=0,after_beats=0)
+            target_beats=self.config['target_beats'],before_beats=0,after_beats=0,
+            z_stride_beats=self.config['draft_z_stride_beats'])
         return pack_batch(dict(variant=variant,bank=bank,inputs=inputs,groups=groups,starts=starts,
             valid=valid,layout=layout,chart_to_group=ownership,conditions=[asdict(c) for c in conditions],
             window_ids=[w['window_id'] for w in windows],chart_ids=[w['chart_id'] for w in windows]))
 
 
-def save_outputs(path, batch, z, plan, producer_sha):
+def save_outputs(path, batch, z, plan, producer_sha, *, z_stride_beats=None):
+    from maidata.draft.spacing import z_stride
+    stride = z_stride(z_stride_beats)
     payload = dict(schema=SCHEMA,audio_variant=batch['variant'],producer_sha256=producer_sha,
-        z_representation=Z_REPRESENTATION,z_width=z.values.shape[-1],
+        z_representation=Z_REPRESENTATION,z_width=z.values.shape[-1],z_stride_beats=stride,
         chart_to_group=batch['chart_to_group'],conditions=batch['conditions'],
         z={k:getattr(z,k).detach().cpu() for k in ('values','beats','valid')},
         planner=dict(window_ids=batch['window_ids'],chart_ids=batch['chart_ids'],
@@ -151,6 +155,7 @@ def export(config, p0_root, output):
     output.mkdir(parents=True,exist_ok=True)
     report = dict(schema=SCHEMA,complete=False,producer=producer,normalization=binding,
         z_representation=Z_REPRESENTATION,z_width=teacher['draft_latent_dim'],
+        z_stride_beats=teacher['draft_z_stride_beats'],
         p0_manifest_sha256=None if external_encoder else digest_file(p0_root/'manifest.json'),p0_root=str(p0_root),
         precision=config['decoder_train_precision'],workers=workers,splits=splits,groups={},
         plans={} if external_encoder else {side:{name:digest_file(Path(config['decoder_train_'+side+'_plan'])/name)
@@ -166,10 +171,12 @@ def export(config, p0_root, output):
         with autocast(device,config):
             z = draft(batch['bank'],batch['inputs'])
             target = select_windows(z,batch['groups'],batch['starts'],batch['valid'],
-                target_beats=teacher['target_beats'],before_beats=0,after_beats=0,layout=batch['layout'])
+                target_beats=teacher['target_beats'],before_beats=0,after_beats=0,layout=batch['layout'],
+                z_stride_beats=teacher['draft_z_stride_beats'])
             plan = planner(target)
         path = output/'banks'/f'{batch["variant"]}.pt'
-        row = save_outputs(path,batch,z,plan,producer['sha256'])
+        row = save_outputs(path,batch,z,plan,producer['sha256'],
+            z_stride_beats=teacher['draft_z_stride_beats'])
         if not report['groups']:
             saved = torch.load(path,map_location='cpu',weights_only=True)
             assert all(torch.equal(saved['z'][k],getattr(z,k).cpu()) for k in ('values','beats','valid'))

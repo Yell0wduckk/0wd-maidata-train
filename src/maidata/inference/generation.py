@@ -163,7 +163,8 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
         selected = select_windows(conditions.z, torch.tensor([0], device=device),
             torch.tensor([start], device=device, dtype=torch.float32), torch.tensor([True], device=device),
             target_beats=config['target_beats'], before_beats=config['decoder_z_before_beats'],
-            after_beats=config['decoder_z_after_beats']).memory if config['decoder_z_cross_attention'] else conditions.z
+            after_beats=config['decoder_z_after_beats'],
+            z_stride_beats=config['draft_z_stride_beats']).memory if config['decoder_z_cross_attention'] else conditions.z
         audio_index = i if conditions.audio_scope == 'window' else 0
         memory = decoder.prepare_memory(audio_kv, torch.tensor([audio_index], device=device), selected,
                                         conditions.plans[i:i+1], conditions.plan_valid[i:i+1])

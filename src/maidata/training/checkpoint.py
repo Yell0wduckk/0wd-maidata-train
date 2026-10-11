@@ -134,6 +134,7 @@ def restore(payload, model, optimizer, scheduler, *, config, binding, source, st
         raise ValueError('resume architecture, recipe or scheduler steps changed: split Drafter requires v3 checkpoint')
     current, saved = recipe(config), dict(payload['recipe'])
     saved.setdefault('pretrain_audio_mode', 'joint')
+    saved.setdefault('draft_z_stride_beats', 1)  # Legacy split checkpoints are per-beat.
     if payload.get('audio_producer') != model.audio_producer:
         raise ValueError('resume frozen P0 producer changed')
     stop = 'pretrain_stop_after_epochs'

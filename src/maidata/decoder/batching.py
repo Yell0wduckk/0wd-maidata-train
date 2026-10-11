@@ -67,7 +67,8 @@ def select_condition_windows(z, groups, starts, window_valid, config):
     """Consumer calls the public data-only selector; no learned parameters are shared."""
     from maidata.draft.windows import select_windows
     return select_windows(z, groups, starts, window_valid, target_beats=config['target_beats'],
-                          before_beats=config['decoder_z_before_beats'], after_beats=config['decoder_z_after_beats'])
+                          before_beats=config['decoder_z_before_beats'], after_beats=config['decoder_z_after_beats'],
+                          z_stride_beats=config['draft_z_stride_beats'])
 
 
 def audio_key_spans(valid, *, validate=True):

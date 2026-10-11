@@ -16,6 +16,8 @@ def build_model(config):
 
 def build_draft(config):
     from .draft.generator import DraftGenerator
+    from .draft.spacing import z_stride
+    z_stride(config['draft_z_stride_beats'], target_beats=config['target_beats'])
     keys = ('layers', 'dim', 'heads', 'experts', 'expert_ffn_dim', 'latent_dim',
             'dropout', 'norm_eps', 'difficulty_vocab_size', 'level_center', 'level_scale', 'span_scale')
     return DraftGenerator(audio_dim=config['d_model'],
@@ -36,6 +38,7 @@ def build_reconstruction(config):
     keys = ('ffn_dim', 'dropout', 'norm_eps',
             'position_base', 'position_scale')
     return ReconstructionHead(latent_dim=config['draft_latent_dim'], target_beats=config['target_beats'],
+                               z_stride_beats=config['draft_z_stride_beats'],
                                **{key: config['reconstruction_' + key] for key in keys})
 
 

@@ -3,12 +3,14 @@ import json
 from pathlib import Path
 import torch
 from .cache_schema import DP_SCHEMA, Z_REPRESENTATION
+from maidata.draft.spacing import z_stride
 
 
 def condition_config(config, cache):
-    """Only the M Z input width comes from the frozen producer representation."""
+    """M consumes the frozen producer's Z width and beat spacing."""
     width = getattr(cache, 'latent_dim', None)
-    return dict(config, draft_latent_dim=width) if config['decoder_z_cross_attention'] and width else dict(config)
+    return dict(config, draft_latent_dim=width, draft_z_stride_beats=cache.z_stride_beats) \
+        if config['decoder_z_cross_attention'] and width else dict(config)
 
 
 class FrozenCache:
@@ -27,6 +29,11 @@ class FrozenCache:
                     or type(manifest.get('z_width')) is not int or manifest['z_width'] < 1):
                 raise ValueError('fixed conditions require a new split Drafter Z/plan cache; old Z cannot be expanded')
             self.latent_dim = manifest['z_width']
+            # Existing split-D caches predate spacing and are exactly per-beat.
+            self.z_stride_beats = z_stride(manifest.get('z_stride_beats', 1), target_beats=config['target_beats'])
+            expected = self.producer.get('recipe', {}).get('draft_z_stride_beats', 1)
+            if self.z_stride_beats != expected:
+                raise ValueError('fixed Z spacing differs from its producer recipe')
 
     def read(self, variant):
         if not self.roots:
@@ -35,6 +42,7 @@ class FrozenCache:
                         map_location='cpu', weights_only=True)
         if (dp.get('schema') != DP_SCHEMA or dp.get('z_representation') != Z_REPRESENTATION
                 or dp.get('z_width') != self.latent_dim
+                or dp.get('z_stride_beats', 1) != self.z_stride_beats
                 or self.use_z and dp['z']['values'].shape[-1] != self.latent_dim):
             raise ValueError('fixed Draft representation/width differs; old Z cannot be expanded')
         dp['window_index'] = {key: i for i, key in enumerate(dp['planner']['window_ids'])}
