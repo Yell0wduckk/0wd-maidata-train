@@ -24,6 +24,8 @@ Encoder 合成验证见[入口文档](maidata-entry.md#cpu-合成验证)。独�
 
 不导入旧模型包、Torch或音频模块。flags不参与四类Physical判定，short音符与Tap/Touch占用等价，1tick音频越界单独处理。拼接链逐段检查几何、整体占手和释放；duration支持可以不连续。字段/规则模块本身没有embedding、预测网络或调度；这些可学习组件位于独立`maidata.decoder`，旧模型及旧缓存合同保持原样。
 
+训练 ROUTE 已补上首段不可修复的 `path_coverage` 提前归责，与推理共享见证并在后续 duration 消重。提供独立 Physical v2 和窗口 v5 的迁移入口，旧缓存仍正常读取，不自动迁移、不替换实验输入。实施及命令见 [Physical 归责迁移](route-coverage-physical-migration.md)；本次仅代码与 CPU 合成验证。
+
 ## 新 Draft：末层Z、直接解析与Planner
 
 `maidata.draft`采用[拆分实施合同](../../0wd-v3-refactor-docs/drafter-split-execution-plan.md)。D保留默认8层256维8头4专家全曲非AR主干，默认一拍一个Z，直接取最终LayerNorm隐藏；`draft_latent_dim == draft_dim`，移除128维瓶颈及独立latent normalization。

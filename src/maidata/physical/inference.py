@@ -9,8 +9,7 @@ from maidata.chart.types import (KINDS, BUTTON_PADS, TOUCH_PADS, Completion,
                                 Moment, Note, Route, HoldDuration, SlideDuration)
 from .actions import materialize
 from .conflicts import branch_conflicts
-from .geometry import Geometry
-from .rules import CATEGORIES, EPS, prune_history
+from .rules import CATEGORIES, prune_history
 from .inference_context import InferenceIntervalContext
 from .state import Decision, PhysicalState
 from .support import duration_support, moment_support
@@ -159,17 +158,9 @@ class InferencePhysicalState(PhysicalState):
         Later segments retain full-action checks: their starts depend on the
         total duration and the lengths of every segment in the chain.
         """
-        path = self.geometry.path(grammar.note.pad, grammar.routes[0])
-        if path.exempt:
-            return frozenset()
-        appearance = self.timing.second(grammar.cursor)
-        launch = self.timing.second(grammar.cursor + 96)
-        for action in self.actions:
-            for old in action.motions:
-                if (not old.exempt and Geometry.covers(old.path, path.key)
-                        and old.start <= launch + EPS and old.end >= appearance - EPS):
-                    return frozenset({'slide_too_fast'})
-        return frozenset()
+        from .conflicts import first_route_coverage
+        return frozenset(c.category for c in first_route_coverage(
+            self.actions, grammar, self.timing, self.geometry))
 
     def query(self, token, *, window_end=None, touch_repeat=True):
         self._refresh()

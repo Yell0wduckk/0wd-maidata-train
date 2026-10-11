@@ -67,6 +67,7 @@ def source_window(chart, row, config, audio_end, onsets):
         history=example.boundary_index,
         labels=dict(groups=labels.groups, counts=labels.counts, flags=labels.flags),
         metadata=dict(chart_id=row.get('chart_id'), window_id=row.get('window_id'),
+            route_coverage_attribution=chart.route_coverage_attribution,
             source_schema=chart.record['schema'], time_representation='relative-tick384-continue',
             start_tick=example.start_tick, end_tick=example.end_tick, local_end_tick=example.cap_tick,
             history_beats=example.beats[:example.boundary_index], boundary_index=example.boundary_index,

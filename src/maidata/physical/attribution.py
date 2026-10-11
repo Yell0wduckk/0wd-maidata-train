@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from maidata.chart.types import (KINDS, BUTTON_PADS, TOUCH_PADS, Completion,
                                 Moment, Note, Route, HoldDuration, SlideDuration)
 from .actions import materialize
-from .conflicts import Conflict, action_conflicts, branch_conflicts, capacity_conflicts
+from .conflicts import (Conflict, action_conflicts, branch_conflicts, capacity_conflicts,
+                        first_route_coverage)
 from .state import Decision, PhysicalState
 from .support import CATEGORIES, duration_support, moment_support
 from maidata.time import duration_end, advance_ticks
@@ -174,10 +175,13 @@ class AttributionState:
                                       wifi=token.route_id == 70)
             if branch:
                 return self._leaf(conflicts=branch)
+            coverage = first_route_coverage(p.actions, s, p.timing, p.geometry)
+            if coverage:
+                return self._leaf(conflicts=coverage)
             if s.routes == (70,):
                 # WiFi cannot be extended; all basic durations are now known.
                 return self._fork(grammar)._duration_projection()
-            # A normal prefix may be repaired by more ROUTEs. No temporary
+            # Remaining conflicts may be repaired by more ROUTEs. No temporary
             # single-segment duration or arbitrary chain length is invented.
             return self._leaf(deferred=True)
         return Evaluation()

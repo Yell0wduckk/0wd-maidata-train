@@ -17,6 +17,7 @@
 | [maidata-inference](maidata-inference.md) | 当前E/D/P/M整曲推理、新字段跨窗历史、MiaCode物化与可播放音频 |
 | [current-runtime](current-runtime.md) | 新 Encoder 和保留的旧模型的实际状态 |
 | [chart-fields-physical](chart-fields-physical.md) | 新token、IR编解码、时间语义与Physical查询/回退 |
+| [route-coverage-physical-migration](route-coverage-physical-migration.md) | ROUTE首段覆盖提前归责、Physical及v5窗口迁移，旧缓存继续可读 |
 | [sampling](sampling.md) | 固定谱面清单、完整基础窗与空尾窗、复杂节奏过采样、完整音频组及确定性实例 |
 | [import-and-layout](import-and-layout.md) | 复制来源、独立 Git、排除项、外部依赖 |
 | [audio-draft](audio-draft.md) | 现有一拍草稿、native 缓存、32/64 首模式 |

@@ -20,6 +20,7 @@ from maidata.physical.rules import CATEGORIES, CATEGORY_WEIGHTS, CATEGORY_DIVISO
 from maidata.time import TimingMap
 
 SCHEMA = 'maidata.training-physical-original.v2'
+ROUTE_COVERAGE = 'first-route-path-coverage.v1'
 
 
 def build_supports(record, geometry):
@@ -37,6 +38,7 @@ def build_supports(record, geometry):
     stage['target_token_index'] = len(tokens)
     stages.append(stage)
     return dict(schema=SCHEMA,view='original',chart_id=record['source']['chart_id'],
+                route_coverage_attribution=ROUTE_COVERAGE,
                 source_schema=record['schema'],categories=list(CATEGORIES),
                 category_weights=list(CATEGORY_WEIGHTS),category_divisor=CATEGORY_DIVISOR,
                 stages=stages,token_count=len(tokens),boundary_target=False)

@@ -43,6 +43,25 @@ def branch_conflicts(actions, owner, index, tick, *, wifi=False):
     return frozenset(result)
 
 
+def first_route_coverage(actions, grammar, timing, geometry):
+    """Duration-independent first-segment witnesses, identical to action_conflicts.
+
+    Only segment zero appears at the NOTE and launches one beat later. Later
+    segments depend on the eventual total duration and remain action checks.
+    """
+    path = geometry.path(grammar.note.pad, grammar.routes[0])
+    if path.exempt:
+        return frozenset()
+    appearance = timing.second(grammar.cursor)
+    launch = timing.second(grammar.cursor + 96)
+    new = ('track', grammar.owner, grammar.track_count, grammar.cursor)
+    return frozenset(
+        Conflict('slide_too_fast', 'path_coverage', (new, track_key(action)), (0, old_i))
+        for action in actions for old_i, old in enumerate(action.motions)
+        if (not old.exempt and Geometry.covers(old.path, path.key)
+            and old.start <= launch + EPS and old.end >= appearance - EPS))
+
+
 def _demand(resources):
     presses = [r for r in resources if r[0][0] != 'track']
     tracks = [r for r in resources if r[0][0] == 'track']

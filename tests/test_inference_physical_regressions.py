@@ -159,12 +159,12 @@ def test_first_route_coverage_is_rejected_before_duration_or_extension(timing, g
         with pytest.raises(PhysicalError):
             s.accept(route)
     assert s.snapshot() == saved
-    # The training oracle is deliberately unchanged by this inference fix.
+    # Training now charges the same immutable witness at the ROUTE decision.
     training = PhysicalState(timing, geometry, audio_end_seconds=20.)
     training.restore(saved)
     oracle = AttributionState(training)
-    assert oracle.query(route).raw.deferred
-    assert oracle.query(route).raw.decision().allowed
+    assert not oracle.query(route).raw.deferred
+    assert not oracle.query(route).raw.decision().allowed
     training.accept_source(route)
     assert 'slide_too_fast' in oracle.query(SlideDuration(96)).raw.decision().physical
     # A restored legacy/deferred prefix cannot append its way out of coverage.

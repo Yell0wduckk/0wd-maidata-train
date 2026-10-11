@@ -62,6 +62,7 @@ class ChartSupports:
         self.start_tick = record['start_tick']
         self.record = record
         self.stages = supports['stages']
+        self.route_coverage_attribution = supports.get('route_coverage_attribution')
         self.actions = {r['token_index']: action_from_record(r['action']) for r in record['actions']}
         self.state = AttributionState(PhysicalState(self.timing, geometry,
             audio_end_seconds=record['source']['audio_end_seconds']))
@@ -160,8 +161,8 @@ class ChartSupports:
                     if 'duration' in old:
                         grammar = replace(state.physical.grammar.snapshot(), token_count=0, window_end=None)
                         self.counterfactuals[(grammar, state.physical.actions)] = old['duration']
-                    # Normal ROUTE prefixes remain repairable and their raw
-                    # witnesses do not depend on duration. WiFi cannot extend,
+                    # Ordinary ROUTE raw witnesses (branch / immutable first
+                    # coverage) do not depend on duration. WiFi cannot extend,
                     # so only that candidate needs a new cap projection.
                     if 'route' in old:
                         def cached_route(current, token, records=old['route']):
