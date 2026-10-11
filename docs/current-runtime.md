@@ -46,6 +46,14 @@ CPU验证覆盖默认与非默认架构、并行/增量一致、目标类型隔�
 
 统一新窗口编译器从精确原谱v2和完整Physical整数区间生产`maidata.decoder-window-tensors.v5`监督，增量与从零入口共用；完整源资产和迁移不变。GT duration、真实动作与历史保持完整，监督到跨音频窗CONT或窗内发出的最后短值；旧v3局部cap监督需重编译标签，不能混用。迁移命令见[缓存迁移](time384-cache-migration.md)。E/D/P权重变化后的神经特征需重新前向导出。
 
+## 监督窗口采样
+
+`maidata.sampling` 已实现固定清单到基础窗口与逐轮实例的离线计划，入口为 `python -m maidata.sampling`，见[采样说明](sampling.md)。默认目标16拍、stride 16拍，保留整曲音频覆盖及额外完整空尾窗。主Decoder训练对短于1拍的不同真实起音delta种类至少3种的窗口总采样2倍，Slide不额外加权；Encoder＋Draft预训练全部基础窗各1次，不过采样。默认值读取唯一 `entry.CONFIG`。
+
+模块仅使用标准库及现有TimingMap，按所选侧读取原谱v2载荷，不扫描其他谱面、不计算音频或Physical、不重新哈希输入。输出唯一基础窗、按完整audio_variant组排列的occurrence，以及可复现的seed/epoch/config和组偏移；只引用既有训练/验证划分，不重新创建split，不物化谱面历史、终端标签或batch。
+
+pilot320的320份Master及23份Re:Master已有8,828个基础窗和1,587个复杂窗，包含343个完整空尾窗，分为320个音频组。按固定split派生的[Encoder＋Draft计划](../../artifacts/pilot320-encoder-draft-sampling-20261010/README.md)为训练288首／307谱、7,924实例，验证32首／36谱、904实例，全部基础窗各1次。[主Decoder计划](../../artifacts/pilot320-sampling-20261010/README.md)为训练9,342实例、验证904实例，all概览10,415实例。派生阶段一计划只读取现成窗口元数据，不重读源谱。采样与唯一CONFIG入口的16项定向CPU检查通过，真实输出与既有逐窗口统计一致，分侧组与实例独立复核通过；主Decoder训练已通过 maidata.decoder_training.plan 消费既有计划并复用 make_occurrences；本次不重新生成计划。
+
 ## 当前整曲推理与物化
 
 `python -m maidata.inference`显式加载阶段一E_D/D/P与阶段二v4的E_M/M权重。固定E_D产生Draft的P0并计算全曲Z/预测plan；独立E_M产生M的全曲P0，参数与隐藏表示分开。GT plan训练的M自由推理仍读取P预测，报告分别记录训练和推理plan来源。读取配套grid或使用固定Mel统计提取音频，按新字段规则维护真实起音组、边界MOMENT、跨窗活动动作与完整规则快照。两套Encoder各自按曲复用准备结果，D/P及M音频投影整次生成复用；各窗重新prefill历史，始终覆盖音频及一个完整空尾窗。旧连续时间头不兼容新385类架构。Physical硬约束默认开启，trace默认关闭；路径、温度、种子与生成上限可配置。

@@ -5,7 +5,7 @@
 
 新 `maidata` 包已实现独立、可训练的音频 Encoder、Draft 与 Decoder。架构配置集中在 `src/maidata/entry.py` 顶部的普通 `CONFIG` 字典；构造器无第二套默认值，尺寸随配置推导。用法见 [Encoder 入口与接口](docs/maidata-entry.md)、[Draft 接入](docs/draft.md)和[Decoder 接入](docs/decoder.md)。
 
-**当前交付包括 Encoder、Draft D/R/P、Decoder、独立音频输入生产、字段/Physical数据规则层。** Encoder公开结果仅有 P0/P1/P2，支持按曲准备 G0 和按窗编码。`maidata.preparation` 生产直接拍网格 Mel、全曲 aux32、坐标和 mask，并构造 SongInputs/WindowInputs，见[输入缓存说明](docs/encoder-audio-cache.md)。`maidata.draft` 独立实现全曲P0组合、逐拍D、重建R、Planner P、标签适配及辅助loss。`maidata.decoder`实现独立网络、内容小头、时间分布及主/Physical/几何loss；阶段二训练与checkpoint由独立的`maidata.decoder_training`接入，整曲推理与MiaCode物化由独立的[`maidata.inference`](docs/maidata-inference.md)提供。设计正本位于 [new-audio-encoder.md](../0wd-v3-refactor-docs/new-audio-encoder.md)和[new-draft.md](../0wd-v3-refactor-docs/new-draft.md)。目录名 `0wd-v3` 不改变旧模型的架构或版本兼容值；旧模型版本仍只在 `src/maimai_baseline/runtime-versions.toml` 维护，新模块不读取该表。
+**当前交付包括 Encoder、Draft D/R/P、Decoder、独立音频输入生产、字段/Physical数据规则层和窗口采样计划生成。** Encoder公开结果仅有 P0/P1/P2，支持按曲准备 G0 和按窗编码。`maidata.preparation` 生产直接拍网格 Mel、全曲 aux32、坐标和 mask，并构造 SongInputs/WindowInputs，见[输入缓存说明](docs/encoder-audio-cache.md)。`maidata.draft` 独立实现全曲P0组合、逐拍D、重建R、Planner P、标签适配及辅助loss。`maidata.sampling` 保留完整基础窗及空尾窗，对复杂节奏窗口总采样2倍，按完整音频组输出引用计划，见[采样说明](docs/sampling.md)。`maidata.decoder`实现独立网络、内容小头、时间分布及主/Physical/几何loss；阶段二训练与checkpoint由独立的`maidata.decoder_training`接入，整曲推理与MiaCode物化由独立的[`maidata.inference`](docs/maidata-inference.md)提供。设计正本位于 [new-audio-encoder.md](../0wd-v3-refactor-docs/new-audio-encoder.md)和[new-draft.md](../0wd-v3-refactor-docs/new-draft.md)。目录名 `0wd-v3` 不改变旧模型的架构或版本兼容值；旧模型版本仍只在 `src/maimai_baseline/runtime-versions.toml` 维护，新模块不读取该表。
 
 独立的 `maidata.chart`、`maidata.time` 与 `maidata.physical` 已实现新字段的数据与规则层：IR编解码、Route-71连续链/分支、时间标签、Physical候选查询及动作回退。它们不实现可学习字段模块或Decoder网络，说明见[新字段与Physical](docs/chart-fields-physical.md)。
 
@@ -37,6 +37,7 @@
 - [全官谱音频输入缓存](docs/encoder-audio-cache.md)
 - [新字段、时间与 Physical](docs/chart-fields-physical.md)
 - [全官谱原谱全曲缓存](docs/chart-cache.md)
+- [基础窗口与复杂节奏采样](docs/sampling.md)
 - [复制范围、独立 Git 与外部依赖](docs/import-and-layout.md)
 - [文档索引](docs/README.md)
 - [一拍草稿实现参考](docs/audio-draft.md)
