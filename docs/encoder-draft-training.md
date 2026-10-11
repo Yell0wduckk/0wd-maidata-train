@@ -8,9 +8,9 @@
 
 `training.data`使用原仓库同类PyTorch Dataset/Collator/DataLoader：默认12个persistent workers，每worker计算线程数为1。每个Dataset项是一整个audio_variant组；采样器保持既有seed/epoch组间和组内排列，不能跨组找小曲回填。训练与验证直接消费已验收的计划和缓存，不执行输入校验或启动扫描。
 
-Dataset/Collator关闭共享读取器和标签适配器的`validate_input`，不重复扫描Mel/aux32、重放谱面语法、验证token/拍时间表或核对窗口覆盖。Encoder/D/R/P前向和loss适配不再检查输入shape/dtype、有限值、坐标、条件范围、mask一致性或监督计数。正常mask、索引、归约和token预算仍参与计算；固定R容量不截断标签，越界由原生张量操作报错。离线缓存生产和显式验收保留独立校验；不新增训练校验配置开关。
+Dataset/Collator关闭共享读取器和标签适配器的`validate_input`，不重复扫描Mel/aux32、重放谱面语法、验证token/拍时间表或核对窗口覆盖。Encoder/D/R/P前向和loss适配不再检查输入shape/dtype、有限值、坐标、条件范围、mask一致性或监督计数。正常mask、索引、归约和token预算仍参与计算；R使用动态padding的独立查询，无固定行容量。超本地音频窗GT duration保留精确记录并明确报出延期边界，不产生部分训练样本。离线缓存生产和显式验收保留独立校验；不新增训练校验配置开关。
 
-`training.network.Pretrainer`负责组合，E/D/R/P不持有彼此。E每组计算一次全曲G0，每个音频覆盖窗编码一次，中心P0拼成全曲bank；同音频不同等级/难度各生成完整逐拍Z，共享音频计算。R/P读取所有基础窗，R固定每窗207个query，P预测plan12。无detach或跨参数更新缓存。
+`training.network.Pretrainer`负责组合，E/D/R/P不持有彼此。E每组计算一次全曲G0，每个音频覆盖窗编码一次，中心P0拼成全曲bank；同音频不同等级/难度各生成完整逐拍Z，共享音频计算。R/P读取所有基础窗；R按真实适用字段创建独立局部查询，三种时间使用385类CONT路径，P独立读取目标全部16拍并预测plan12。无detach或跨参数更新缓存。
 
 ## 双重 batch 上限
 
@@ -19,11 +19,11 @@ Dataset/Collator关闭共享读取器和标签适配器的`validate_input`，不
 ```text
 A = 音频覆盖窗数 × (before + target + after) × samples_per_beat
     + ceil(actual_audio_end_beat) − first_beat
-R = 本组全部基础监督窗数 × reconstruction_query_rows
-cost = pretrain_audio_token_weight × A + pretrain_row_token_weight × R
+R_reference = 本组全部基础监督窗数 × pretrain_batch_reference_rows (207)
+cost = pretrain_audio_token_weight × A + pretrain_row_token_weight × R_reference
 ```
 
-两种权重默认各1.0。A计入每窗重复计算的重叠音频上下文和全曲G0拍token；R使用实际固定query容量，包含同音频各难度、空窗及尾窗，不能只按GT有效行数计费。此线性指标限制批次规模，不等于精确显存模型；全曲attention和不同长度padding成本仍由CUDA实测确认。预算显式设为`null`可关闭，只保留组数上限。
+两种权重默认各1.0。A计入每窗重复计算的重叠音频上下文和全曲G0拍token；R_reference保留原计划的207行分批proxy，包含同音频各难度、空窗及尾窗；它不限制或填充新R查询。真实query/substep数单独写入训练及CUDA成本报告，不因此改变既有batch边界或实例。此线性指标限制批次规模，不等于精确显存模型；全曲attention和不同长度padding成本仍由CUDA实测确认。预算显式设为`null`可关闭，只保留组数上限。
 
 顺序遍历当轮既定完整组；加入下一组将超出任一上限时，先提交当前batch。整曲不拆、顺序不改、末尾不足量保留。单组超过预算时指出该组并失败，不截断或静默越界。当前训练最大单组cost=34616，验证最大28575，均低于初始上限。
 
@@ -37,7 +37,7 @@ cost = pretrain_audio_token_weight × A + pretrain_row_token_weight × R
 
 验证每5轮及显式末轮，重合一次；全字段准确率与预测示例仅末轮收集。`last.ckpt`每完整轮保存，`best.ckpt`只在轮末验证改善时保存，`epoch-NNN.ckpt`每5轮及末轮保存。best只是损失诊断，不是谱面质量判定。中途异常不保存、不伪造完整轮。
 
-checkpoint保存成套E/D/R/P、optimizer、scheduler、完整轮游标、全部Python/NumPy/Torch/CUDA RNG、两个DataLoader RNG及启用状态、各轮步数和训练配方。源码版本与输入路径仅作为来源记录，不计算或比较源码、缓存、目录元数据或计划的哈希；旧checkpoint中的输入绑定不参与恢复判断，无需身份迁移。模型张量/形状、配方、各轮调度步数和完整恢复状态仍检查，训练保留loss/梯度非有限值报错。允许延长绝对停止轮但不改变调度合同；完成40轮从41轮继续，完成50轮不再更新。替换persistent workers后补偿额外base-seed消耗；CPU测试覆盖连续运行与中断恢复权重/RNG逐位一致。
+新checkpoint schema为`maidata.encoder-draft-training.v2`；旧R架构的v1不能作为新完整轮resume。checkpoint保存成套E/D/R/P、optimizer、scheduler、完整轮游标、全部Python/NumPy/Torch/CUDA RNG、两个DataLoader RNG及启用状态、各轮步数和训练配方。源码版本与输入路径仅作为来源记录，不计算或比较源码、缓存、目录元数据或计划的哈希；旧checkpoint中的输入绑定不参与恢复判断，无需身份迁移。模型张量/形状、配方、各轮调度步数和完整恢复状态仍检查，训练保留loss/梯度非有限值报错。允许延长绝对停止轮但不改变调度合同；完成40轮从41轮继续，完成50轮不再更新。替换persistent workers后补偿额外base-seed消耗；CPU测试覆盖连续运行与中断恢复权重/RNG逐位一致。
 
 ## Linux 输入
 

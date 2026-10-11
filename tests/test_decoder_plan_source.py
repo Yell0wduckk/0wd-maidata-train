@@ -13,6 +13,13 @@ from maidata.decoder_training.network import DecoderTrainer
 from test_decoder_training import config, encoder_config, training_item, distances
 
 
+def test_default_training_entry_uses_gt_plan(capsys):
+    from maidata.entry import CONFIG
+    assert CONFIG['decoder_train_plan_source']=='gt'
+    assert main(['--show-config'])==0
+    assert json.loads(capsys.readouterr().out)['decoder_train_plan_source']=='gt'
+
+
 def gt_values(item):
     identities = list(dict.fromkeys(w['identity'][0] for w in item['windows']))[::-1]
     values = torch.zeros(len(identities), 12)

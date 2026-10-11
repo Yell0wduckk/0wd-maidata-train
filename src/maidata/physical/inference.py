@@ -13,6 +13,7 @@ from .rules import CATEGORIES, prune_history
 from .inference_context import InferenceIntervalContext
 from .state import Decision, PhysicalState
 from .support import duration_support, moment_support
+from maidata.time import duration_end
 
 
 def _project(decisions, *, uniform_deferred=False):
@@ -75,7 +76,14 @@ class InferencePhysicalState(PhysicalState):
         self._types = None
         self._times = {}
         self._context = None
+        self.duration_end_seconds = None
         self._refresh()
+
+    def set_duration_cap(self, seconds):
+        if seconds != self.duration_end_seconds:
+            self.duration_end_seconds = seconds
+            self._prefix = None
+            self._refresh()
 
     @property
     def physical(self):
@@ -129,6 +137,12 @@ class InferencePhysicalState(PhysicalState):
 
     def _action(self, completion, *, touch_repeat=True, deferred=False):
         basic = self._basic(completion)
+        if self.duration_end_seconds is not None:
+            ticks = (completion.track.duration_tick if completion.track is not None
+                     else completion.duration_tick)
+            if ticks is not None and duration_end(self.timing, completion.tick, ticks,
+                    slide=completion.track is not None) > self.duration_end_seconds + 1e-9:
+                basic = (*basic, 'duration_outside_local_audio')
         if basic:
             return Decision(basic)
         action = materialize(completion, self.timing, self.geometry)
@@ -178,6 +192,7 @@ class InferencePhysicalState(PhysicalState):
                 # WiFi cannot be extended. Ordinary chains remain deferred:
                 # adding routes can repair their eventual duration/coverage.
                 fork = type(self)(self.timing, self.geometry, audio_end_seconds=self.audio_end_seconds)
+                fork.duration_end_seconds = self.duration_end_seconds
                 fork.grammar, fork.actions = grammar, self.actions
                 return fork._duration_projection()
             return Decision(deferred=True)
@@ -236,5 +251,6 @@ class InferencePhysicalState(PhysicalState):
         self._refresh()
         if kind not in self._times:
             producer = moment_support if kind == 'MOMENT' else duration_support
-            self._times[kind] = producer(self, query=self.query, record=_record)
+            extra = {} if kind == 'MOMENT' else {'end_seconds': self.duration_end_seconds}
+            self._times[kind] = producer(self, query=self.query, record=_record, **extra)
         return self._times[kind]

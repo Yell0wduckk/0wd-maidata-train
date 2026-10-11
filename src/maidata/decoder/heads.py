@@ -2,6 +2,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
+from maidata.time.discrete import TIME_CLASSES
 
 
 class ConditionalReadout(nn.Module):
@@ -15,7 +16,7 @@ class ConditionalReadout(nn.Module):
 
 
 class ContentHeads(nn.Module):
-    def __init__(self, dim, middle, norm_eps, components):
+    def __init__(self, dim, middle, norm_eps):
         super().__init__()
         self.kind = nn.Linear(dim, 5)
         self.route = nn.Linear(dim, 71)
@@ -30,9 +31,8 @@ class ContentHeads(nn.Module):
         self.pad_adapter = ConditionalReadout(dim, middle, norm_eps)
         self.flags_adapter = ConditionalReadout(dim, middle, norm_eps)
         self.break_adapter = ConditionalReadout(dim, middle, norm_eps)
-        self.times = nn.ModuleDict({name: nn.Linear(dim, 3 * components) for name in
+        self.times = nn.ModuleDict({name: nn.Linear(dim, TIME_CLASSES) for name in
                                    ('MOMENT', 'HOLD_DURATION', 'SLIDE_DURATION')})
-        self.components = components
 
     def pad_logits(self, h, kind):
         shape = h.shape[:-1]
@@ -58,4 +58,6 @@ class ContentHeads(nn.Module):
         # Match the original time readout: keep linear output precise under AMP.
         with torch.autocast(device_type=h.device.type, enabled=False):
             value = F.linear(h.float(), head.weight.float(), head.bias.float())
-        return value.reshape(*h.shape[:-1], self.components, 3)
+        return value
+
+    time_logits = time_parameters

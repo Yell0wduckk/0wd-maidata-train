@@ -12,9 +12,9 @@
 
 新字段的数据与规则层位于 `maidata.chart`、`maidata.time`、`maidata.physical`，接口见 `docs/chart-fields-physical.md`。只实现编解码、语法、时间标签、Physical查询/动作/回退，不将embedding、小头、Decoder或训练放入数据/规则模块；可学习组件由`maidata.decoder`独立持有。生产模块不导入旧包；测试可以使用保留旧实现作单段数值/规则对照。几何通过显式资源路径读取，不重建旧资产。
 
-- `maidata` 不导入旧模型或参考仓库。帮助和配置展示仅需标准库，实际构建时延迟导入 Torch；默认命令成功构建 `AudioEncoder` 并提示完整生成和训练调度未实现。
+- `maidata` 不导入旧模型或参考仓库。帮助和配置展示仅需标准库，实际构建时延迟导入Torch；默认命令构建`AudioEncoder`，阶段一/阶段二训练与整曲推理各有独立入口。
 - 新 Encoder 通过 `prepare_song`、`encode_windows`、`forward` 消费准备好的 Mel、aux32、绝对拍坐标和有效位，仅公开 P0/P1/P2 三路局部输出。独立输入生产与新Draft已实现；Decoder已作为独立消费方实现，完整训练与恢复系统仍另行接入。
-- Draft网络不持有Encoder或Decoder，D/R/P参数独立；公开张量组合保留计算图。R的query_rows从新字段长度元数据显式配置，不能按每个GT样本长度改变查询数或静默截断。主Decoder的Z/plan适配和条件attention归Decoder所有。
+- Draft网络不持有Encoder或Decoder，D/R/P参数独立；公开张量组合保留计算图。R使用独立局部字段查询，GT只安排查询和监督索引，查询之间无self-attention，不输入总行数或完整未来类型表，不预测type/pad/空槽；逐拍count保留零类。主Decoder仍预测全部结构及pad，其Z/plan适配和条件attention归Decoder所有。
 - 复制来源是 `main-new-audio-draft-beat` 的一拍草稿/native 音频路线。当前 native 路径冻结保留的音频模块，训练步读取外部原生 22 拍 P0/C0/C1 缓存。
 - 旧 Decoder 仍读取全曲 P0 bank，旧草稿仍读取整曲 P0。新 Encoder 的可配置 24 拍默认窗口、S 工作槽和局部三尺度输出已实现，但尚未接入旧 Decoder 或草稿。
 - 新 Encoder 的 G₀ 可复用不等于冻结：tokenizer/encoder 可训练，同次前向按曲共享计算图，不能 detach 或跨参数更新缓存旧表示。

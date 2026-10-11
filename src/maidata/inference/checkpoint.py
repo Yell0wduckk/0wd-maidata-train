@@ -22,10 +22,11 @@ class Models:
 def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device):
     producer = torch.load(encoder_draft_checkpoint, map_location='cpu', weights_only=False)
     consumer = torch.load(decoder_checkpoint, map_location='cpu', weights_only=False)
-    if producer.get('schema') != 'maidata.encoder-draft-training.v1':
+    if producer.get('schema') not in ('maidata.encoder-draft-training.v1','maidata.encoder-draft-training.v2'):
         raise ValueError('expected an Encoder/Draft stage-I checkpoint')
-    if consumer.get('schema') not in ('maidata.decoder-training.v1', 'maidata.decoder-training.v2'):
-        raise ValueError('expected a Decoder stage-II checkpoint')
+    if (consumer.get('schema') != 'maidata.decoder-training.v3'
+            or consumer.get('architecture') != 'maidata.decoder-field-query-tick384.v1'):
+        raise ValueError('expected a v3 tick384 field-query Decoder checkpoint; old heads are not resume-compatible')
     # These are architecture/representation settings, not source or asset identities.
     keys = [k for k in producer['recipe'] if k in ENCODER_KEYS or k.startswith(('draft_', 'planner_'))]
     for key in keys:
@@ -40,14 +41,12 @@ def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device):
         module.load_state_dict({k[len(prefix):]: v for k, v in producer['model_state'].items()
                                 if k.startswith(prefix)}, strict=True)
     decoder_encoder = None
-    if consumer['schema'] == 'maidata.decoder-training.v2':
+    if consumer['schema'] == 'maidata.decoder-training.v3':
         decoder_encoder = build_model(config)
         # The stage-II encoder is independently trained with M. It must never
         # replace the stage-I encoder used by the fixed Draft/Planner.
         torch.nn.ModuleDict(dict(encoder=decoder_encoder, decoder=modules[-1])).load_state_dict(
             consumer['model_state'], strict=True)
-    else:
-        modules[-1].load_state_dict(consumer['model_state'], strict=True)
     for model in modules + ([decoder_encoder] if decoder_encoder is not None else []):
         model.to(device).eval().requires_grad_(False)
         for module in model.modules():
@@ -58,7 +57,7 @@ def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device):
                     source=payload.get('source'))
     return Models(*modules, config, dict(encoder_draft=describe(encoder_draft_checkpoint, producer),
                                         decoder=describe(decoder_checkpoint, consumer),
-                                        training_plan_source=consumer['recipe'].get('decoder_train_plan_source', 'predicted'),
+                                        training_plan_source=consumer['recipe'].get('decoder_train_plan_source', 'gt'),
                                         inference_plan_source='predicted',
                                         decoder_audio_scope=config['decoder_train_audio_scope'],
                                         decoder_audio_encoder='stage_ii' if decoder_encoder is not None else 'stage_i'),

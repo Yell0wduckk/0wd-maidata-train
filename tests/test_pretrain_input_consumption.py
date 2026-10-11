@@ -30,7 +30,7 @@ from maidata.training.checkpoint import data_provenance
 
 @pytest.mark.parametrize('reference_mel', [False, True])
 def test_dataset_to_forward_has_no_input_scans(config, tmp_path, reference_mel):
-    c = dict(config, reconstruction_query_rows=16, pretrain_audio_cache=str(tmp_path),
+    c = dict(config, pretrain_audio_cache=str(tmp_path),
              pretrain_chart_cache=str(tmp_path), pretrain_source_root=str(tmp_path), pretrain_mel_root=str(tmp_path))
     reference = item(0, c)
     (tmp_path/'grids').mkdir()
@@ -48,6 +48,12 @@ def test_dataset_to_forward_has_no_input_scans(config, tmp_path, reference_mel):
     source.mkdir()
     (source/'maidata.txt').write_text('&lv_5=14.5\n&inote_5={1}1,,E\n', encoding='utf-8')
     raw = record()
+    # Keep this small accepted-audio fixture's exact GT durations in its cap.
+    for token in raw['tokens']:
+        if token['type'] == 'SLIDE_DURATION':
+            token['ticks'] = 96
+        elif token['type'] == 'HOLD_DURATION':
+            token['ticks'] = 20
     raw['source'] = dict(chart_id='chart', audio_variant='0', song_id='song', difficulty='5',
                          source_path=str(source/'maidata.txt'))
     if reference_mel:
@@ -63,7 +69,8 @@ def test_dataset_to_forward_has_no_input_scans(config, tmp_path, reference_mel):
     planner = MusicPlanTargets(chart)
     expected = dict(reference, conditions={'chart':ChartCondition('0',5,14.5,'14.5')},
         windows=[(w['window_id'],'chart',w['start_beat'],
-            reconstruction_target(chart,start_tick=w['start_tick'],target_beats=3),
+            reconstruction_target(chart,start_tick=w['start_tick'],target_beats=3,
+                audio_after_beats=c['audio_after_beats'], audio_end_seconds=1.2),
             planner.window(w['start_tick'],w['end_tick'])) for w in rows])
     expected_batch = collate_audio([expected], config=c)
     model = Pretrainer(c).train()
@@ -104,10 +111,10 @@ def test_offline_checks_remain_separate_from_training(tmp_path, config):
     with pytest.raises(ValueError,match='binary'):
         token_from_dict(bad)
     assert token_from_dict(bad,validate_input=False).ex == 2
-    # Fixed query capacity still cannot silently truncate accepted rows.
+    # Query padding is dynamic; a legacy capacity hint cannot truncate rows.
     target = reconstruction_target(from_record(record()),start_tick=0,target_beats=3)
-    with pytest.raises(IndexError):
-        collate_reconstruction([target],query_rows=1,target_beats=3,device='cpu',validate_input=False)
+    batch = collate_reconstruction([target],query_rows=1,target_beats=3,device='cpu',validate_input=False)
+    assert batch.queries.valid.sum() == len(target.rows)
 
 
 def test_input_provenance_does_not_read_or_hash_inputs(config):

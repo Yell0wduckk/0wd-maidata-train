@@ -11,7 +11,7 @@ from maidata.model import ENCODER_KEYS
 from .data import read_json
 
 
-SCHEMA = 'maidata.encoder-draft-training.v1'
+SCHEMA = 'maidata.encoder-draft-training.v2'
 PATH_KEYS = ('pretrain_train_plan', 'pretrain_validation_plan', 'pretrain_chart_cache',
              'pretrain_audio_cache', 'pretrain_mel_root', 'pretrain_source_root', 'pretrain_output')
 

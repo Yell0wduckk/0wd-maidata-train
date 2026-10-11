@@ -8,6 +8,7 @@
 | [draft](draft.md) | 独立D/R/P、全曲P0拼接、窗口、原谱/simai标签及辅助loss接口 |
 | [decoder](decoder.md) | 独立Decoder、Router/MMoE、内容小头、时间概率、窗口与监督归约 |
 | [decoder-training](decoder-training.md) | 新 Encoder 与 Decoder 联训、固定 D/P 条件、窗口与 Physical 监督、完整轮恢复 |
+| [time384-cache-migration](time384-cache-migration.md) | 精确原谱v2/完整Physical到v3字段查询监督的增量迁移与从零生产 |
 | [新 encoder 设计](../../0wd-v3-refactor-docs/new-audio-encoder.md) | G₀ / S / L、共享块、局部三尺度及边界 |
 | [Encoder 实施文档](../../0wd-v3-refactor-docs/encoder-execution-plan.md) | 已实现模块、完整张量协议、验证范围与 aux32 生产约定 |
 | [maidata-inference](maidata-inference.md) | 当前E/D/P/M整曲推理、新字段跨窗历史、MiaCode物化与可播放音频 |

@@ -11,6 +11,8 @@ from maidata.time import TimingMap
 class OnsetGroup:
     tick: int
     tokens: tuple
+    source_indices: tuple = ()
+    moment_source_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -46,12 +48,13 @@ def from_record(record, *, source_end_beat=None, validate_input=True):
     if validate_input and (len(record['tokens']) != len(record['token_map'])):
         raise ValueError('chart token/ownership lengths differ')
     groups, notes, seen_owners = [], [], set()
-    owner, onset = None, None
+    owner, onset, pending_moment = None, None, None
     for i, (raw, mapping) in enumerate(zip(record['tokens'], record['token_map'])):
         token = token_from_dict(raw, validate_input=validate_input)
         if validate_input and (mapping['token_index'] != i or type(mapping['tick']) is not int):
             raise ValueError('invalid token index/tick mapping')
         if isinstance(token, Moment):
+            pending_moment = i
             continue
         tick = mapping['tick']
         if isinstance(token, Note):
@@ -63,14 +66,15 @@ def from_record(record, *, source_end_beat=None, validate_input=True):
             if not groups or tick != groups[-1][0]:
                 if validate_input and (groups and tick < groups[-1][0]):
                     raise ValueError('onset groups must be ordered')
-                groups.append((tick, []))
+                groups.append((tick, [], [], pending_moment))
             kind = ('hold' if token.short_hold else 'touch_hold' if token.short_touch_hold else token.kind)
             button = None if token.kind in ('touch', 'touch_hold') else int(token.pad[1:])
             notes.append(PlanNote(tick, kind, button))
         if validate_input and (owner is None or mapping['owner'] != owner or tick != onset):
             raise ValueError('ROUTE/duration must retain its NOTE owner and onset')
         groups[-1][1].append(token)
+        groups[-1][2].append(i)
     source = record.get('source', {})
-    return ChartData(tuple(OnsetGroup(tick, tuple(tokens)) for tick, tokens in groups),
+    return ChartData(tuple(OnsetGroup(tick, tuple(tokens), tuple(indices), moment) for tick, tokens, indices, moment in groups),
                      tuple(notes), timing, source_end_beat,
                      source.get('source_path'), source.get('difficulty'))

@@ -48,13 +48,12 @@ CONFIG = {
     "reconstruction_ffn_dim": 512,
     "reconstruction_dropout": 0.1,
     "reconstruction_norm_eps": 1e-5,
-    "reconstruction_query_rows": 207,  # Per target window (pilot320), including SEGMENT_END.
-    "reconstruction_before_beats": 16,
-    "reconstruction_after_beats": 16,
+    "pretrain_batch_reference_rows": 207,  # Existing pilot scheduling proxy, never a query capacity.
+    "reconstruction_before_beats": 4,
+    "reconstruction_after_beats": 4,
     "reconstruction_position_base": 10000.0,
     "reconstruction_position_scale": 1.0,
     "reconstruction_label_smoothing": 0.05,
-    "reconstruction_smooth_l1_beta": 1.0,
     "reconstruction_classification_weight": 1.0,
     "reconstruction_time_weight": 1.0,
     "reconstruction_count_weight": 1.0,
@@ -101,14 +100,13 @@ CONFIG = {
     "decoder_route_dims": (240, 16),
     "decoder_time_base": 10000.0,
     "decoder_time_scale": 1.0,
-    "decoder_time_components": 5,
     "decoder_z_before_beats": 4,
     "decoder_z_after_beats": 4,
     "decoder_history_dropout": 0.15,
     "decoder_train_checkpoint": None,  # Offline-export producer; optional in training, never initializes stage-II E.
     "decoder_train_p0_cache": None,  # Optional offline-export path; joint training does not read P0 caches.
     "decoder_train_dp_cache": None,  # Matching frozen Z and predicted plan12 export.
-    "decoder_train_plan_source": "predicted",  # predicted or gt; Z stays fixed in both modes.
+    "decoder_train_plan_source": "gt",  # Match GT charts in training; inference reads predicted plan12.
     "decoder_train_gt_plan_cache": None,  # Required only for gt; offline MusicPlanTargets export.
     "decoder_train_optimizer": "adamw",
     "decoder_train_fused_optimizer": True,  # CUDA backend; optimizer moments are preserved on resume.
@@ -141,17 +139,6 @@ CONFIG = {
     "decoder_train_slide_data": "../../tools/MiaCode/assets/reference/slide_data.json",
     "decoder_train_route_distances": None,
     "decoder_train_output": None,
-    "decoder_time_distributions": {
-        "MOMENT": {"reference": 1000., "minimum_scale": 2.5,
-                   "initial_centers": (0., 100., 200., 400., 800.),
-                   "initial_scales": (50., 50., 200/3, 100., 200.)},
-        "HOLD_DURATION": {"reference": 1000., "minimum_scale": 2.5,
-                          "initial_centers": (100., 200., 400., 800., 1600.),
-                          "initial_scales": (100., 100., 400/3, 200., 400.)},
-        "SLIDE_DURATION": {"reference": 96., "minimum_scale": .25,
-                           "initial_centers": (0., 24., 48., 96., 192.),
-                           "initial_scales": (12., 12., 16., 24., 48.)},
-    },
 }
 
 
@@ -174,5 +161,5 @@ def main(argv=None):
     except ValueError as exc:
         parser.error(str(exc))
     print(f"{type(module).__name__} built. Encoder/Draft training: python -m maidata.training. "
-          "End-to-end generation is not implemented.")
+          "Stage-II training: python -m maidata.decoder_training; generation: python -m maidata.inference.")
     return 0

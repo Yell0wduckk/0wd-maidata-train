@@ -164,7 +164,8 @@ def test_joint_checkpoint_restores_both_networks_optimizer_rng_and_rejects_m_onl
                     steps=[1]*6, loaders=loaders)
     payload = deepcopy(checkpoint.capture(model, opt, sched, epoch=1, step=1,
         best=1., metrics={}, **identity))
-    assert payload['schema'] == 'maidata.decoder-training.v2'
+    assert payload['schema'] == 'maidata.decoder-training.v3'
+    assert payload['architecture']=='maidata.decoder-field-query-tick384.v1'
     assert any(k.startswith('encoder.') for k in payload['model_state'])
     assert any(k.startswith('decoder.') for k in payload['model_state'])
     runner.update(model, [batch], opt, sched, c, distances())
@@ -181,7 +182,9 @@ def test_joint_checkpoint_restores_both_networks_optimizer_rng_and_rejects_m_onl
     assert_trees_equal(checkpoint.rng_state(), expected_rng)
     actual_draws = (random.random(), np.random.rand(), torch.rand(4))
     assert_trees_equal(actual_draws, expected_draws)
-    old = dict(payload, schema='maidata.decoder-training.v1',
-               model_state=deepcopy(model.decoder.state_dict()))
-    with pytest.raises(ValueError):
-        checkpoint.restore(old, resumed, resumed_opt, resumed_sched, **identity)
+    for schema in ('maidata.decoder-training.v1','maidata.decoder-training.v2'):
+        old = dict(payload,schema=schema,model_state=deepcopy(model.decoder.state_dict()))
+        with pytest.raises(ValueError):
+            checkpoint.restore(old,resumed,resumed_opt,resumed_sched,**identity)
+    with pytest.raises(ValueError,match='field-query'):
+        checkpoint.restore(dict(payload,architecture='wrong-head'),resumed,resumed_opt,resumed_sched,**identity)

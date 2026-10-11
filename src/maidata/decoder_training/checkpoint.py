@@ -12,7 +12,8 @@ from .plan import read_json
 from .recipe import PATH_KEYS, restore_optimizer
 
 
-SCHEMA = 'maidata.decoder-training.v2'
+SCHEMA = 'maidata.decoder-training.v3'
+ARCHITECTURE = 'maidata.decoder-field-query-tick384.v1'
 PLANNER_KEYS = ('planner_dim','planner_heads','planner_mlp_dim','planner_dropout','planner_norm_eps')
 
 
@@ -66,8 +67,8 @@ def data_binding(plans, config):
 def load_producer(model, config, binding):
     path = config['decoder_train_checkpoint']
     payload = torch.load(path,map_location='cpu',weights_only=False)
-    if payload.get('schema') != stage_one.SCHEMA:
-        raise ValueError('initialization requires a compatible stage-I complete-epoch checkpoint')
+    if payload.get('schema') not in ('maidata.encoder-draft-training.v1', stage_one.SCHEMA):
+        raise ValueError('E/D/P component export requires a compatible stage-I v1/v2 checkpoint')
     validate_cursor(payload,payload['steps_by_epoch'])
     _validate_producer(payload, config, binding)
     for name in ('encoder','draft','planner'):
@@ -110,7 +111,7 @@ def _load(module, actual):
 
 
 def capture(model, opt, sched, *, epoch, step, config, binding, source, producer, steps, loaders, best, metrics):
-    result = dict(schema=SCHEMA,model_state=model.state_dict(),optimizer_state=opt.state_dict(),
+    result = dict(schema=SCHEMA,architecture=ARCHITECTURE,model_state=model.state_dict(),optimizer_state=opt.state_dict(),
         scheduler_state=sched.state_dict(),completed_epochs=epoch,step=step,recipe=recipe(config),binding=binding,
         source=source,producer=producer,steps_by_epoch=steps,rng=rng_state(),
         loader_rng=[l.generator.get_state() for l in loaders],loader_started=[l._iterator is not None for l in loaders],
@@ -121,8 +122,8 @@ def capture(model, opt, sched, *, epoch, step, config, binding, source, producer
 def restore(payload, model, opt, sched, *, config, binding, source, producer, steps, loaders):
     # The user/training operator selects the checkpoint. Source, budget, recipe,
     # plan and cache provenance are recorded, not used as resume vetoes.
-    if payload.get('schema') != SCHEMA:
-        raise ValueError('joint stage-II resume requires a v2 checkpoint with Encoder and M states')
+    if payload.get('schema') != SCHEMA or payload.get('architecture') != ARCHITECTURE:
+        raise ValueError('stage-II resume requires a v3 tick384 field-query checkpoint with Encoder and M states')
     _load(model,payload['model_state'])
     restore_optimizer(opt, payload['optimizer_state'])
     sched.load_state_dict(payload['scheduler_state'])

@@ -6,8 +6,7 @@ import torch
 from maidata.chart.types import (GENERATED_TYPES, KINDS, FLAGS, APPLICABLE,
     BUTTON_PADS, TOUCH_PADS, Moment, Note, Route, HoldDuration, SlideDuration)
 from maidata.chart.windows import TimeTarget
-from maidata.decoder.probability import interval_log_mass
-from .time_support import TimeCandidateCache
+from maidata.time.discrete import compile_support_tree, TimeQuery, CONTINUE
 
 
 class Sampler:
@@ -17,7 +16,6 @@ class Sampler:
         self.temperature = temperature
         self.generator = torch.Generator(device='cpu').manual_seed(seed)
         self.physical_hard_mask = physical_hard_mask
-        self.time_candidates = TimeCandidateCache()
 
     def order(self, scores, allowed=None):
         """Lazy weighted sampling without replacement; retries never repeat a choice."""
@@ -37,7 +35,7 @@ class Sampler:
         return not d.basic_errors and (not self.physical_hard_mask or not d.physical)
 
     def contents(self, decoder, h, kind, oracle, timing, distributions, *, end_tick, cap_tick,
-                 moment_remaining=None):
+                 moment_remaining=None, output=None):
         heads, device = decoder.heads, h.device
         if kind == 'NOTE':
             kinds = oracle.query_kinds()
@@ -70,22 +68,38 @@ class Sampler:
             if kind != 'MOMENT' and support['domain'][1] < support['domain'][0]:
                 return
             stage = dict(cursor_tick=cursor, **{'moment' if kind == 'MOMENT' else 'duration': support})
-            candidates = self.time_candidates.candidates(stage, timing, kind=kind,
-                window_end=end_tick, cap_tick=cap_tick, device=device)
-            valid = candidates.valid & (~candidates.raw.any(-1) if self.physical_hard_mask else True)
-            mass = interval_log_mass(heads.time_parameters(h, kind), candidates.lower, candidates.upper,
-                                     distributions[kind], validate=False)
-            for i in self.order(mass, valid.cpu()):
-                tick = candidates.ticks[i]
-                if kind == 'MOMENT':
-                    delta = timing.delta_ms(cursor, tick)
-                    yield (TimeTarget(delta, tick, candidates.labels[i] is None, True) if tick >= end_tick
-                           else Moment(delta))
-                else:
-                    yield (HoldDuration if kind == 'HOLD_DURATION' else SlideDuration)(tick)
+            if output is None:
+                raise ValueError('time generation requires a reusable completed main prefix')
+            tree = compile_support_tree(stage,timing,kind=kind,window_end=end_tick,cap_tick=cap_tick,target=None)
+            index = torch.tensor([[0,output.hidden.shape[1]-1]],device=device)
+            role = torch.tensor([GENERATED_TYPES.index(kind)],device=device)
+            origin = torch.tensor([cursor],device=device)
+            def visit(depth, query):
+                # No begin/complete call, KV write, Grammar mutation or Physical
+                # commit occurs along this one temporary CONT chain.
+                qh = output.field_reader(output,index,torch.tensor([query.query_beat(timing)],device=device),
+                    role,origin,torch.tensor([query.elapsed_ticks],device=device))[0]
+                valid = tree.hard[depth] if self.physical_hard_mask else tree.basic[depth]
+                for choice in self.order(heads.time_logits(qh,kind),valid):
+                    value = query.advance(choice,window_end_tick=end_tick)
+                    if value.closed_by_continue:
+                        lower = value.lower_bound_tick
+                        yield TimeTarget(timing.delta_ms(cursor,lower),lower,False,True,True,lower,
+                                         cursor+value.query.elapsed_ticks)
+                    elif choice == CONTINUE:
+                        yield from visit(depth+1,value.query)
+                    elif kind == 'MOMENT':
+                        tick = cursor+value.complete_ticks
+                        delta = timing.delta_ms(cursor,tick)
+                        yield (TimeTarget(delta,tick,False,True) if value.closes_window else Moment(delta))
+                    else:
+                        yield (HoldDuration if kind == 'HOLD_DURATION' else SlideDuration)(value.complete_ticks)
+            yield from visit(0,TimeQuery(kind,cursor))
 
     def choices(self, decoder, routed, oracle, timing, distributions, *, end_tick, cap_tick,
                 moment_remaining=None):
+        if hasattr(oracle,'set_duration_cap'):
+            oracle.set_duration_cap(timing.second(cap_tick))
         types = oracle.query_types()
         allowed = [name in types and self.allowed(types[name]) for name in GENERATED_TYPES]
         if moment_remaining is not None and moment_remaining <= 0:
@@ -96,7 +110,14 @@ class Sampler:
         for index in self.order(routed.logits[0, -1], allowed):
             target_type = torch.full_like(routed.valid, index, dtype=torch.long)
             result = decoder.complete(routed, target_type)
-            for token in self.contents(decoder, result.hidden[0, -1], GENERATED_TYPES[index], oracle,
+            cursor = oracle.physical.grammar.state.cursor
+            h = result.hidden[0,-1]
+            if GENERATED_TYPES[index] in ('NOTE','ROUTE'):
+                query_index = torch.tensor([[0,result.hidden.shape[1]-1]],device=result.hidden.device)
+                h = result.field_reader(result,query_index,
+                    torch.tensor([cursor/96],device=result.hidden.device),torch.tensor([index],device=result.hidden.device),
+                    torch.tensor([cursor],device=result.hidden.device),torch.tensor([0],device=result.hidden.device))[0]
+            for token in self.contents(decoder, h, GENERATED_TYPES[index], oracle,
                                        timing, distributions, end_tick=end_tick, cap_tick=cap_tick,
-                                       moment_remaining=moment_remaining):
+                                       moment_remaining=moment_remaining,output=result):
                 yield token, result.cache

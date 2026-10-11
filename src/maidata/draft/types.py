@@ -71,6 +71,27 @@ class ReconstructionTargets:
     time_valid: dict[str, Tensor]
     moment_counts: Tensor
     valid: Tensor
+    queries: object = None
+    time_classes: dict[str, Tensor] | None = None
+    time_basic: dict[str, Tensor] | None = None
+
+
+@dataclass
+class ReconstructionQueries:
+    """Allowed prefix conditions only; no labels, total rows, or future types."""
+    roles: Tensor
+    beats: Tensor
+    origins: Tensor
+    elapsed: Tensor
+    ordinals: Tensor
+    tracks: Tensor
+    note_kinds: Tensor
+    route_ids: Tensor
+    route_valid: Tensor
+    valid: Tensor
+    history_gaps: Tensor
+    boundary: Tensor
+    last_real_valid: Tensor
 
 
 @dataclass

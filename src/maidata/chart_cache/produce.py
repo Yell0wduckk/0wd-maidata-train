@@ -203,16 +203,19 @@ def main():
     for name in ('source', 'audio_cache', 'parser', 'geometry', 'slide_data', 'output'):
         setattr(args, name, getattr(args, name).resolve())
     cat = catalog(args.source, args.audio_cache, args.parser, args.geometry, args.slide_data)
-    catalog_path = args.output/'catalog.json'
-    if catalog_path.exists() and read_json(catalog_path) != cat:
-        raise ValueError('existing catalog differs; refusing overwrite')
-    write_json(catalog_path, cat)
     # Bind only producer code, not concurrently edited draft/planner documents.
     code_paths = [*Path(__file__).parent.glob('*.py')]
     for package in ('chart', 'time', 'physical'):
         code_paths.extend((Path(__file__).parents[1]/package).rglob('*.py'))
     recipe = digest({str(path.relative_to(Path(__file__).parents[1])): hashlib.sha256(path.read_bytes()).hexdigest()
                      for path in sorted(code_paths)})
+    # The exact source producer identity is consumed unchanged by sampling and
+    # the shared window compiler. A fresh v2 production must publish it too.
+    cat['producer_recipe'] = recipe
+    catalog_path = args.output/'catalog.json'
+    if catalog_path.exists() and read_json(catalog_path) != cat:
+        raise ValueError('existing catalog differs; refusing overwrite')
+    write_json(catalog_path, cat)
     rows = [r for r in cat['charts'] if not args.song_id or r['song_id'] in args.song_id]
     if args.limit is not None:
         rows = rows[:args.limit]

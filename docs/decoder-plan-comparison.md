@@ -1,13 +1,13 @@
 # Predicted／GT plan 训练对照
 
-两次训练仅切换主Decoder的plan12来源，比较准确统计条件对谱面生成的作用。全曲Z始终来自同一份固定阶段一D/P缓存；E_M与M都从同seed重新随机初始化，各自建立新的optimizer、scheduler和输出目录。共享base config保留相同模型、数据计划、采样、历史dropout、预算、学习率与调度。
+默认训练使用GT plan，使条件与GT谱面对应；自由推理仍使用预测plan。两次显式对照训练仅切换主Decoder的plan12来源，比较准确统计条件对谱面生成的作用。全曲Z始终来自同一份固定阶段一D/P缓存；E_M与M都从同seed重新随机初始化，各自建立新的optimizer、scheduler和输出目录。共享base config保留相同模型、数据计划、采样、历史dropout、预算、学习率与调度。
 
 ## 条件表示
 
 | 模式 | 前8维 | 后4维 |
 |---|---|---|
-| `predicted`（默认） | 固定P的sigmoid预测 | 固定P的softmax类别概率 |
-| `gt` | MusicPlanTargets的归一化原谱统计 | `single/chord/slide/touch` one-hot |
+| `predicted` | 固定P的sigmoid预测 | 固定P的softmax类别概率 |
+| `gt`（默认） | MusicPlanTargets的归一化原谱统计 | `single/chord/slide/touch` one-hot |
 
 连续字段顺序为：
 
@@ -28,7 +28,7 @@
 
 ```json
 {
-  "decoder_train_plan_source": "predicted",
+  "decoder_train_plan_source": "gt",
   "decoder_train_gt_plan_cache": "/path/to/gt-plan-cache"
 }
 ```
@@ -67,6 +67,6 @@ GT缓存路径从base config读取。第四个日志目录可省略，默认为`
 
 ## 记录与比较
 
-训练与validation都使用当前选定plan来源，GT validation仅作准确条件下的oracle诊断。v2 checkpoint recipe记录来源，输入记录保留对应缓存；完整轮恢复继续加载E_M/M、optimizer、scheduler与全部RNG，不新增plan来源身份门禁。该对照使用两个独立fresh运行，不把来源切换当作第一项的续训。
+训练与validation都使用当前选定plan来源，GT validation仅作准确条件下的oracle诊断。v3 checkpoint recipe记录来源，输入记录保留对应缓存；完整轮恢复继续加载E_M/M、optimizer、scheduler与全部RNG，不新增plan来源身份门禁。该对照使用两个独立fresh运行，不把来源切换当作第一项的续训。
 
 GT条件衡量的是准确谱面统计可带来的帮助；GT训练的checkpoint在自动推理时仍使用固定E_D/D/P的预测plan，不读取GT谱面。推理provenance分别记录`training_plan_source`和`inference_plan_source`，因此GT对照权重正常推理会记录前者为`gt`、后者为`predicted`。比较时明确生成所用plan来源、checkpoint、温度和seed，以实际自由生成谱面的听感及用户评谱为主；各自validation loss作为诊断，不能将两种条件信息不同的loss直接视为部署质量结论。

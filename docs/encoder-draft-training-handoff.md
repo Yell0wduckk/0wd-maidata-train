@@ -1,5 +1,7 @@
 # pilot320 Encoder＋Draft 训练交接
 
+本交接记录旧固定行R/v1实验的既有授权与绑定，运行中的任务继续使用其指定源码。2026-10-10新局部查询R和tick384改造不替换该实验，也不沿用本文自动启动；新接口、v2恢复边界和query成本见[阶段一训练](encoder-draft-training.md)，正式训练另在明确选定的新实验中执行。
+
 ## 授权与范围
 
 用户已授权新建 `gpt-6.1-sol` 会话，上传本次源码并启动pilot320阶段一，启动训练时停止当前远端Physical计算。新会话负责训练前真实CUDA batch检查。仅训练E/D/R/P，不训练主Decoder、不跑后续阶段、不重建旧资产。本任务使用独立仓库 `D:/01YD/01code/codex/maimai-ai-charting/repos-0wd-v3/src`，不要转到根AGENTS默认的maidata-baseline。使用交接消息指定提交，不复制共享目录的未提交工作。

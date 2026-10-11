@@ -23,6 +23,12 @@ def supports(batch):
         planner_continuous=int(p.valid.sum()), planner_category=int(p.valid.sum()))
 
 
+def query_cost(batch):
+    """Report actual local queries separately from the preserved batch proxy."""
+    r = batch.reconstruction
+    return int(r.queries.valid.sum()) + int(r.valid.sum()) * r.moment_counts.shape[1]
+
+
 class Metrics:
     def __init__(self):
         self.sums = {k: [0., 0] for k in LOSS_WEIGHT_KEYS}
@@ -165,6 +171,7 @@ def run(config, *, resume=None, cuda_check=False):
             seconds=time.perf_counter()-started, peak_allocated=torch.cuda.max_memory_allocated(device),
             peak_reserved=torch.cuda.max_memory_reserved(device), audio_groups=[b.audio_variants for b in batches],
             windows=sum(len(b.window_ids) for b in batches), config=config, binding=binding, source=source)
+        report['reconstruction_query_substeps'] = sum(query_cost(b) for b in batches)
         for handle in handles:
             handle.remove()
         write_json(output.with_name(output.name + '-cuda-check.json'), report)
@@ -183,7 +190,7 @@ def run(config, *, resume=None, cuda_check=False):
         loaders[0].batch_sampler.epoch = epoch
         iterator = epoch_iterator(loaders[0], restored[0])
         restored[0] = None
-        epoch_metrics, updates, windows, groups = Metrics(), 0, 0, 0
+        epoch_metrics, updates, windows, groups, queries = Metrics(), 0, 0, 0, 0
         while batches := list(islice(iterator, config['pretrain_gradient_accumulation_steps'])):
             metrics, audit = update(model, batches, optimizer, scheduler, config)
             for k, value in metrics.sums.items():
@@ -193,13 +200,15 @@ def run(config, *, resume=None, cuda_check=False):
             step += 1
             windows += sum(len(b.window_ids) for b in batches)
             groups += sum(len(b.audio_variants) for b in batches)
+            queries += sum(query_cost(b) for b in batches)
             print(json.dumps(dict(epoch=epoch, update=updates, updates=steps[epoch-1], step=step,
                                   loss=metrics.report(config)['loss'], lr=optimizer.param_groups[0]['lr'])), flush=True)
         if updates != steps[epoch-1] or groups != len(plans[0].groups) or windows != len(plans[0].windows):
             raise ValueError('incomplete training epoch; checkpoint not saved')
         final = epoch == config['pretrain_stop_after_epochs']
         result = dict(epoch=epoch, step=step, train=epoch_metrics.report(config),
-                      seconds=time.perf_counter()-started, audio_groups=groups, windows=windows)
+                      seconds=time.perf_counter()-started, audio_groups=groups, windows=windows,
+                      reconstruction_query_substeps=queries)
         improved = False
         if epoch % 5 == 0 or final:
             result['validation'] = validate(model, loaders[1], config, final=final, restored_rng=restored[1])

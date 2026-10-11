@@ -16,9 +16,9 @@ class LossTerm:
         return self.total / self.count.clamp_min(1)
 
 
-def reconstruction_loss(output, target, *, label_smoothing, smooth_l1_beta):
-    if not 0 <= label_smoothing <= 1 or smooth_l1_beta <= 0:
-        raise ValueError('invalid reconstruction smoothing/beta')
+def reconstruction_loss(output, target, *, label_smoothing):
+    if not 0 <= label_smoothing <= 1:
+        raise ValueError('invalid reconstruction label smoothing')
     device = output.count_logits.device
     with torch.autocast(device_type=device.type, enabled=False):
         ce = output.count_logits.float().sum() * 0
@@ -33,13 +33,14 @@ def reconstruction_loss(output, target, *, label_smoothing, smooth_l1_beta):
         time = output.count_logits.float().sum() * 0
         time_count = torch.zeros((), device=device, dtype=torch.long)
         for name, prediction in output.time_predictions.items():
-            values, active = target.times[name].float(), target.time_valid[name] & target.valid[:, None]
-            values = values[active] / 96
-            if name != 'moment_position_tick':
-                values = values.log1p()
-            time = time + F.smooth_l1_loss(prediction.float()[active], values,
-                                         beta=smooth_l1_beta, reduction='sum')
-            time_count = time_count + active.sum()
+            selected = target.time_classes[name] & target.valid[:, None, None]
+            active = selected.any(-1)
+            logits = prediction.float()[active]
+            basic = target.time_basic[name][active]
+            logits = logits.masked_fill(~basic, -torch.inf)
+            numerator = torch.logsumexp(logits.masked_fill(~selected[active], -torch.inf), -1)
+            time = time + (torch.logsumexp(logits, -1)-numerator).sum()
+            time_count = time_count + (target.time_valid[name] & target.valid[:, None]).sum()
         logits = output.count_logits.float()
         active = target.valid[:, None].expand(logits.shape[:2])
         labels = target.moment_counts.masked_fill(~active, -100)

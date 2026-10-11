@@ -46,7 +46,8 @@ def config(encoder_config):
         decoder_train_warmup_steps=1,decoder_train_scheduler_epochs=6,decoder_train_stop_after_epochs=2,
         decoder_train_gradient_accumulation_steps=1,decoder_train_row_budget=8192,
         decoder_train_chunk_token_budget=24,decoder_train_physical_weight=.1,decoder_train_judge_weight=.2,
-        decoder_train_trajectory_weight=.3,decoder_history_dropout=.15)
+        decoder_train_trajectory_weight=.3,decoder_history_dropout=.15,
+        decoder_train_plan_source='predicted')  # This fixture explicitly supplies a predicted-plan cache.
     return c
 
 
@@ -359,6 +360,7 @@ def test_real_dataset_reads_fields_supports_and_plan_without_rebuilding(config,t
         context = c['audio_before_beats'] + c['target_beats'] + c['audio_after_beats']
         cost = batch_cost([len({w['start'] for w in p['windows']})*context*c['fpn_rates'][0]
                            for p in parts],lengths,small)
+        cost['field_queries'] = sum(w['field_query_cost'] for w in ordered)
         assert cost==batch.budget_cost
     expected = [(r['window_id'],r['occurrence']) for r in plan.occurrences(3)]
     assert seen==expected
@@ -503,13 +505,14 @@ def test_runner_exact_epoch_resume_dropout_validation_and_failure(config,tmp_pat
     assert runner.run(interrupted,resume=path)['step']==sum(steps)
 
 
-def test_producer_load_is_paired_strict_and_stage_two_resume_is_separate(config,tmp_path,monkeypatch):
+@pytest.mark.parametrize('schema',['maidata.encoder-draft-training.v1','maidata.encoder-draft-training.v2'])
+def test_producer_load_is_paired_strict_and_stage_two_resume_is_separate(config,tmp_path,monkeypatch,schema):
     from maidata.training.network import Pretrainer
     from maidata.training import checkpoint as pretrain
     upstream = Pretrainer(config)
     source = pretrain.source_identity()
     binding = dict(pretrain_chart_cache={'catalog.json':'fields'},pretrain_audio_cache={'catalog.json':'audio'})
-    payload = dict(schema=pretrain.SCHEMA,recipe=pretrain.recipe(config),source=source,binding=binding,
+    payload = dict(schema=schema,recipe=pretrain.recipe(config),source=source,binding=binding,
         completed_epochs=1,step=1,steps_by_epoch=[1]*6,scheduler_state={'last_epoch':1},model_state=upstream.state_dict())
     path = tmp_path/'upstream.ckpt'
     torch.save(payload,path)

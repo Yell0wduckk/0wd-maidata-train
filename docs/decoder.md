@@ -1,112 +1,68 @@
 # Decoder 模块与接口
 
-`maidata.decoder` 实现[设计正本](../../0wd-v3-refactor-docs/new-decoder.md)的网络、字段小头、时间概率、窗口输入与三类监督。默认六层、前两层 Router 共享段、后四层 dense MMoE；直接读取全曲 P0 与局部 Z/预测 plan12。网络不持有 Encoder、Draft、Planner、Physical 或数据文件。阶段二训练循环与checkpoint由独立的[`maidata.decoder_training`](decoder-training.md)接入；整曲生成调度由独立的[`maidata.inference`](maidata-inference.md)接入。
+`maidata.decoder` 实现主 M 的类型 Router、内容小头、独立字段查询和离散时间循环。当前语义以[局部查询与时间实施说明](draft-decoder-local-query-time384-plan.md)为准。默认六层，前两层共享 Router，后四层 dense MMoE；M 保留类型、NOTE kind→pad→flags、ROUTE→track_break 和时间的全部监督。R 不监督 pad 不改变 M 的 pad 预测。
 
-## 模块边界
+网络不持有 Encoder、Draft、Planner、Physical 或文件。阶段二由[`decoder_training`](decoder-training.md)联合训练独立 E_M/M；固定 E_D/D/P 提供 Z，训练默认读取准确对应 GT 谱面的 GT plan12。自由推理由 P 预测 plan12，见[整曲推理](maidata-inference.md)。
+
+## 模块和配置
 
 | 模块 | 职责 |
 |---|---|
-| `types` | 张量、投影 memory、不可变 self K/V 和分阶段结果 |
-| `embedding` | 五类输入、NOTE/ROUTE 配额、固定零 NA、连续时间编码 |
-| `attention / blocks / network` | 独立投影、绝对拍 RoPE、联合 Z/plan attention、Router、共享 FFN/MMoE |
-| `heads` | kind→pad→独立 flags、route→首段 track_break、三个时间参数头 |
-| `probability` | Logistic mixture、有限区间与尾部质量、基础支持归一化、显式采样 |
-| `windows / batching` | 完整起音组历史、窗口 teacher forcing、15%训练历史 dropout、张量整理与公共 Z 窗口选择 |
-| `supports` | 外部规则记录→基础/新增归责/原始拒绝支持；可不连续时间区间；窗口 oracle 适配 |
-| `losses / supervision` | 主监督、Physical、两项几何损失的独立 sum/count；不包含训练配方 |
-| `resources` | 从显式 NPZ 路径只读加载已有 Route-71 距离，不加载旧 Python 包或重建几何 |
-| `session` | 绑定调用者的 pending 字段、Router/后段结果、K/V 与规则快照，整体回退 |
+| `network / blocks / attention` | 因果历史、类型 Router、MMoE、消费方投影与绝对拍 RoPE |
+| `field_query` | 独立 Q/output、字段角色与进度条件、临时位置的音频/局部 Z 读取 |
+| `heads` | kind、pad、flags、route、track_break、三个独立 385 类时间头 |
+| `time.discrete / time.distribution` | 共用编码、written-BPM 位置、目标路径、完整合法域概率与删失集合 NLL |
+| `windows / batching / supports` | 真实起音历史、窗口边界、外部规则支持与张量整理 |
+| `losses / supervision` | 主监督、首次归责 Physical、两项几何的独立 sum/count |
+| `session` | 不可变 KV、pending 字段和完整规则状态的整体回退 |
 
-只有 `maidata.nn.position` 的无状态数学和 `maidata.chart/time` 的公共定义被复用。`batching.select_condition_windows` 调用 Draft 的公开纯张量窗口选择器，网络本身不导入 Draft。规则适配接收外部 AttributionState，Physical 不读取模型隐藏状态、音频、logits 或未来 GT 字段。
-
-## 配置与构建
-
-所有默认值在 [entry.CONFIG](../src/maidata/entry.py)，通过 [model.build_decoder](../src/maidata/model.py) 显式传给构造器。新增 `decoder_*` 参数独立于 Encoder/Draft 宽度；`audio_dim` 和 `latent_dim` 由各生产者配置传入，分别经过消费方投影。
+唯一架构配置位于 `entry.CONFIG`。默认 M 宽 256、6 层、Router 第 2 层、8 heads，前段 FFN1024，后段 4 个 FFN512 专家和 5 类 gate。NOTE 配额 `(64,128,16,16,16,8,8)`、ROUTE `(240,16)`；输入时间正弦编码仍用于已提交真实完整 token。三个输出头固定 385 类，旧 Logistic mixture 分量、中心、尺度配置已退出实际消费者。
 
 ```powershell
 $env:PYTHONPATH = (Join-Path (Get-Location) 'src')
 python -m maidata --component decoder
 ```
 
-默认 `dim=256 / layers=6 / router_layer=2 / heads=8`，前段 FFN1024、后段4个FFN512和五类gate、小头MLP256。NOTE配额 `(64,128,16,16,16,8,8)`，ROUTE `(240,16)`；两组各自求和为 Decoder 宽度。头维数须为偶数；层数、Router位置、heads、FFN、experts、配额、dropout、RoPE和时间分量数均可配置。常规数值默认 dropout0.1、LayerNorm eps1e-5、条件残差标量门初值1e-3；门是可学习直接乘数，沿用原版。
+## 主历史与独立字段查询
 
-时间输入正弦默认base10000/scale1。三个独立头默认K5，初始位置/尺度、reference和minimum_scale在同一CONFIG中，改变K须同步提供K个初始值。MOMENT/HOLD的reference1000ms，SLIDE为96tick；scale为`softplus(raw)*reference+minimum_scale`。不设置学习率、训练集、验证集或损失总系数默认值。
-
-## 前向与条件复用
-
-`TokenBatch` 的主要形状为 `[B,L]`；flags为`[B,L,5]`。NA ID为-1，合法0不作NA。时间输入已转换为M的秒值或duration拍值；`beats`是当前已知输入的绝对起音坐标，不能填下一目标的位置。`Memory`接受任何具有`values/beats/valid`的公开张量对象。True表示有效。
+`TokenBatch.beats` 是已知真实输入 token 的绝对拍坐标，用于主 self-attention/KV。它不能填待预测目标位置。`Decoder.begin(tokens, memory, cache=...)` 只接受已知前缀，不接受 next-type、字段 query、位置列表或 GT mask；`complete(routed, next_types)` 才选择后段内容分支。GT 类型不能通过临时查询选择泄漏给 Router。
 
 ```python
-from maidata.entry import CONFIG
-from maidata.model import build_decoder, decoder_time_distributions
-from maidata.decoder.batching import collate_windows
-
-decoder = build_decoder(CONFIG)
-tokens, next_types, supervised = collate_windows(examples, device=device)
-audio_kv = decoder.prepare_audio(full_p0)  # 每层、每个不同音频投影一次
-memory = decoder.prepare_memory(audio_kv, window_to_audio, local_z,
-                                predicted_plan12, plan_valid)
+audio_kv = decoder.prepare_audio(local_p0)
+memory = decoder.prepare_memory(audio_kv, window_to_audio, local_z, plan12, plan_valid)
 output = decoder(tokens, next_types, memory)
-# output.type_logits [B,L,5]；output.hidden [B,L,d_model]
+# indices [Q,2] 指向真实主序列 [window,row]，其余张量 [Q]
+field_h = output.field_reader(output, indices, field_query_beats,
+                             field_roles, origin_ticks, elapsed_ticks)
+logits = decoder.heads.time_logits(field_h, 'MOMENT')  # [Q,385]
 ```
 
-`prepare_memory`只计算一次共享Z/plan适配，再计算每层自己的K/V。Z逐拍投影、plan变成一个独立无位置条目；各自有效位独立。Z评分使用旋转后的Q/K，plan评分使用未旋转的Q/K，两组分数进入同一个softmax。输入不含difficulty/level，也不接受真值plan。
+字段查询各行独立，没有 query self-attention；增加后续 GT 查询不会改变早期查询。内容基态来自当前已知前缀，完整 route 链保留在其因果历史中。查询添加字段角色与已知累计进度，以独立 Q/output 读取已投影的最后一层音频/Z KV；K/V 仅按同参数版本准备一次并保留计算图，不重新运行主干。plan 已经条件化主前缀，不进入局部字段 Z 读取。
 
-所有投影保留计算图，不在模块内detach或冻结。相同参数版本和同次前向可共享`audio_kv`；更新权重、输入、坐标或mask后由调用者重新准备。`prepare_memory`的结果标识当前窗口条件；每个新窗重新prefill全部self-attention层。
+普通内容及 duration 查询选 `floor(q)-1..floor(q)+1` 三个 Z；MOMENT 选 `floor(q)..floor(q+4)`，仅依赖已知临时游标。缺失槽 mask，无循环补齐。字段音频只读取已提供的本地 bank；主干已有的因果历史与 Z/plan 条件范围保持。query Q 和 key 使用同一绝对拍坐标系。plan 的主干评分保持无时间 RoPE。
 
-整块训练可在 CPU 用 `batching.audio_key_spans/audio_query_layout` 准备歌曲 query 映射，作为 `prepare_memory(..., audio_layout=...)` 传入。此时各层直接保留唯一歌曲 K/V，按歌曲读取当前块的有效 query 后恢复窗口位置，不按窗口复制全曲 bank。layout 只属于该 token batch 的形状、有效位和 ownership；增量调用使用其自身对应的布局或普通窗口 memory。网络不读取 Dataset、采样计划或打包格式。
+NOTE 的 kind/pad/flags 复用同一字段基态，pad 与 flags 各有条件适配。pad 统一返回 33 槽，按钮行后 25 槽为负无穷；NA=-1 不与合法 0 混淆。ROUTE 与首段 track_break 复用路线查询；同类型内容重试不重跑主干。改选 Router 类型会从原前缀重算受影响的后段 KV。
 
-## 增量、内容阶段与回退
+## 384 tick 与 CONTINUE
 
-```python
-routed = decoder.begin(current_token_batch, memory, cache=previous_cache)
-# 对 routed.logits 应用语法、基础支持和所需的独立 Physical 拒绝，再选类型。
-completed = decoder.complete(routed, selected_next_types)
-# 按 selected_next_types 调用 decoder.heads；同类型改内容不再运行主干。
-next_cache = completed.cache
-```
+96 tick/拍不变，类别 `0..383` 表示余数 `1..384`，类别 `384` 是 CONT。正值 d 唯一编码为 `CONT * ((d-1)//384)` 加末余数 `(d-1)%384+1`。MOMENT/Slide 至少 1 tick，Hold 完整值至少 2 tick；Hold 的后续余数 1 合法。
 
-`begin`不接受下一类型或GT内容，只运行共享前段；`complete`加一次独立目标类型embedding并运行后段。训练右移GT类型仅传给后段。历史最后位置的后继是外部边界M，使用M的目标类型但不计监督。
+CONT 锁定本字段类型，累计 384 tick，只更新临时 field query；不追加主 self-KV、不产生 MOMENT/动作、不推进 Grammar/Physical/charged。短值合成完整时间后才向原规则层提交一次。三个独立时间头显式关闭 autocast，以 FP32 线性输出 logits；主干可使用 BF16。
 
-`ContentHeads`公开`kind`、`pad_logits`、`flag_logits`、`route`、`break_logits`和`time_parameters`。pad与flags阶段分别从同一个最终h出发，独立条件表不绑定输入embedding。flags按适用性调用/计损失；pad统一返回33槽，按钮行的后25槽为负无穷。几何距离不参与输入或路线分类权重。
+MOMENT 从当前真实游标或显式窗首边界开始。短值到达或越过窗尾 b 时关闭本窗；CONT 游标首次跨 b 时立即关闭，没有最终余数，也没有假起音。结果区分 `closed_by_continue`、控制下界和 query tick。下一窗保持最后真实起音及活动动作，重新注入边界并 prefill。
 
-三个时间头沿用旧仓库的精度与初始化：readout显式关闭autocast，以FP32执行linear并输出FP32参数，随后按时间概率模块进行FP64积分。新建Decoder时将时间头weight清零，bias保留配置指定的混合权重、中心与scale先验；加载checkpoint正常恢复已训练权重，不再次清零。时间头及其输入保持可微，主干仍可使用BF16。
+Hold query 从 NOTE 起音开始，Slide 从全局拍轴的 `onset+96` 启动位置开始。累计时长始终以 NOTE written BPM 转换为实际秒，再由完整 BPM 映射反算 query 拍位；跨 BPM 不直接加 `elapsed/96`。duration 完整合法域同时受本地 U 和整曲有效音频末尾约束。
 
-对同一个`routed`改选类型会从原前缀重算后段K/V；此前返回的缓存不原位更改。`DecodeSession`可绑定PhysicalState或AttributionState，快照同时记录pending字段、模型阶段与规则自身的完整快照；回退不以token数推算动作数。进入新窗的`reset_attention`同时确认调用者pending为空、规则语法允许结束，再清模型缓存；未完成音符或链时失败且保留原缓存，持久规则动作和最后真实起音始终保留。
+## 支持、概率与归约
 
-## 窗口、支持与损失
+新监督从精确原谱 v2 和完整 Physical 整数区间编译，不能从旧 4 tick duration 标签反推精确 tick。训练仅以 basic support 归一化，首次 penalty 位只用于 Physical loss；生成以同一完整完成的 raw 四类联合合法性作 hard mask。CONT 合法要求存在一个完整合法长值，不能分别按四类存在性拼接。
 
-`window_from_config`从真实整曲字段序列构造窗口。默认target16拍、stride16由外部采样计划负责；历史4拍按完整起音组保留，不设token预算。首组保留原始delta与绝对位置；历史为空仍从全曲最后真实起音算边界delta。训练整窗dropout概率0.15，验证不drop；drop仅改变输入，不改变目标和真实起音摘要。`history_prefix`也可消费推理已生成的真实起音组，旧窗口边界/终端不进入这些组。
+精确时间 loss 是规范路径各步 NLL 之和；右删失末步对兼容短值加 CONT 的集合概率取 NLL。一个原始时间字段只计一次主 loss 分母和一次 Physical 内容分母。Physical 展开全部可达 CONT 深度的短值叶，按 CONT 前缀概率相乘；首次跨窗 CONT 和跨窗短值是零罚终止叶，后续不再展开。稳定合法补集 logsumexp 与 FP32 epsilon floor 保留，避免 `1-q` 消减和全违规无穷梯度。
 
-终端标签保持独立`TimeTarget`，不进入模型输入或真实事件；U取名义音频窗口右边界，不裁到audio_end。时间候选包含所有U前的正tick格点与一个U尾部；最后有限cell延伸至U，与尾部无缝分界。窗内无音频候选由基础支持排除，达到窗尾的关闭候选不查询音符补全。
+NOTE 的 kind/pad 各 0.5，四类权重 `(1,1,4,1)/4`；flags 不连接 Physical 梯度。几何两项各按 ROUTE 数归约。所有窗口/分块先相加分子和计数，再使用逻辑 batch 的共同分母；内部查询成本与真实主序列长度分开记录。
 
-训练支持沿用`maidata.training-physical-original.v2`阶段记录格式，使用`penalty`新归责位；推理拒绝使用独立`physical`原始位。边界改变了查询游标和可选类型，不能把整曲原M/NOTE的缓存行直接贴到窗首。`supports.window_stages(example, attribution)`提供实际窗口oracle：调用者传入窗首之前的完整真实Physical状态，适配器临时注入边界、生成各阶段支持并最终恢复原快照。它不从裁剪历史重建动作、不修改缓存。既有缓存内满足相同前缀语义的支持行可直接传给loss；数据调度负责该映射，不在网络中读文件或批量重建。
+GT duration 超出本地 U 是明确延后的边界：缓存保留精确源值和旧完整支持，报告受影响窗口，训练读取时明确报 `UnsupportedDurationBoundary`；不截短、不删除 occurrence、不伪造标签。旧资产保持只读。
 
-duration使用字段层的4tick half-up标签、首尾裁剪cell与唯一代表tick；每个候选的基础支持、训练归责和推理拒绝均查询该代表tick。Physical对每类非法候选cell的质量求和，支持不连续区间，不假设单个safe_upper，也不在bucket内部增加其他可生成tick。GT保留精确整数tick，先检查其基础支持再映射bucket，不能借舍入接受超出音频范围的标签。Physical非法GT仍保留；实际生成使用原始拒绝支持，不以训练新增归责位替代硬拒绝。
+新完整轮 checkpoint 为 `maidata.decoder-training.v3`，架构身份 `maidata.decoder-field-query-tick384.v1`。旧 v1/v2 的时间头和 optimizer 不能冒充新架构完整轮 resume。新窗口为 `maidata.decoder-window-tensors.v3`；迁移和从零生产共用编译器，命令见[阶段二训练](decoder-training.md)。
 
-```python
-from maidata.decoder.supervision import decoder_loss
-from maidata.decoder.resources import load_route_distances
-
-geometry = load_route_distances(explicit_route71_npz).to(device)
-sums = decoder_loss(decoder.heads, output, examples, stages, timings, audio_ends,
-                    distributions=decoder_time_distributions(CONFIG), geometry=geometry)
-loss = sums.objective(physical_weight=physical_weight,
-                      judge_weight=judge_weight, trajectory_weight=trajectory_weight)
-```
-
-`DecoderLoss`可跨窗口或分块相加，最后才求均值。主监督按实际分类/时间决策计数；Physical按有效类型/内容单位计数，NOTE内部kind/pad各0.5，四类固定`(1,1,4,1)/4`；几何两项按ROUTE位置独立平均。有效零罚项保留Physical分母，flags完全不参与Physical梯度。使用逻辑batch分块反传时须先确定整个逻辑batch的分母，再按同一分母缩放各分子；不能先对每块求均值。
-
-阶段二训练对delta和duration采用离线合并的时间积分区间：相邻cell仅在基础合法、GT归属及四类新增归责一致时合并，保留非连续缺口和GT边界。直接对并集求Logistic质量，避免对全部可生成格逐格计算loss；生成候选、分布、归责和决策计数不变。见[训练概率与缓存](decoder-training.md)。
-
-## 验证范围
-
-定向CPU测试位于`tests/test_decoder_{network,time_windows,supervision,session}.py`，覆盖默认/非默认结构、K变化、NA与合法零、teacher/incremental一致、因果性与目标类型隔离、plan位置不变性、空mask、FP32及CPU BF16反向、真实字段/规则接口、窗尾与BPM、三套loss、跨模块梯度与冻结、链/分支快照。几何只读加载、旧数学对照和无旧包运行时依赖分别验证。
-
-```powershell
-$env:TEMP = (Join-Path (Get-Location) '.test-temp')
-$env:TMP = $env:TEMP
-python -m pytest tests/test_decoder_network.py tests/test_decoder_time_windows.py tests/test_decoder_supervision.py tests/test_decoder_session.py --basetemp .test-temp/decoder
-```
-
-未执行CUDA、正式训练、整曲生成、上传或缓存重建；CPU数值与接口检查不代表这些流程已验证。现有字段、Physical、音频和几何缓存合同不因本次网络/归约实现改变。
+CPU 定向测试覆盖 Router 隔离、并行/增量等价、独立字段读取、梯度、完整字段概率/归约、CONT 不写 KV/Physical、链/分支回退与完整轮恢复。CPU 证据不代表 CUDA 原 batch、吞吐、正式训练或真实权重评谱已经执行。

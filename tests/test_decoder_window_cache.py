@@ -11,6 +11,9 @@ import torch
 from maidata.chart import Moment, Note, Route, SlideDuration, HoldDuration
 from maidata.decoder.windows import real_onsets
 from maidata.decoder.batching import collate_windows
+from maidata.decoder.supports import window_stages
+from maidata.physical import PhysicalState
+from maidata.physical.attribution import AttributionState
 from maidata.decoder_training.export_windows import compile_window
 from maidata.decoder_training.window_cache import (WindowCache, SCHEMA, contract, tensor_pack,
     tensor_unpack, select_window, collate_prepared)
@@ -26,8 +29,8 @@ def threads():
 
 
 def test_compiled_history_dropout_chain_and_terminal_match_oracle(config, monkeypatch, tmp_path):
-    tokens = [Moment(0), Note.make('hold','A1'), HoldDuration(900),
-              Note.make('slide','A2'), Route(0,1), Route(1), SlideDuration(600),
+    tokens = [Moment(0), Note.make('hold','A1'), HoldDuration(48),
+              Note.make('slide','A2'), Route(0,1), Route(1), SlideDuration(24),
               Moment(6000), Note.make('tap','A1',ex=1), Moment(1000), Note.make('touch','C')]
     record, support, geo = field_fixture(monkeypatch,tokens,audio_end=12,bpm=60)
     chart = ChartSupports(record,support,geo)
@@ -44,7 +47,10 @@ def test_compiled_history_dropout_chain_and_terminal_match_oracle(config, monkey
         restored = tensor_unpack(torch.load(path,weights_only=True))
         cached.append(select_window(restored,dropped))
         w = example(chart,start,start+192,drop=dropped,audio_end=12)
-        wanted.append(dict(example=w,stages=chart.window(w)[0],timing=chart.timing,audio_end=12))
+        oracle = AttributionState(PhysicalState(chart.timing,geo,audio_end_seconds=12))
+        oracle.restore(chart.before_window(start))
+        oracle.duration_end_seconds = min(12,chart.timing.second(w.cap_tick))
+        wanted.append(dict(example=w,stages=window_stages(w,oracle),timing=chart.timing,audio_end=12))
     tokens, types, actual = collate_prepared(cached)
     expected_tokens, expected_types, _ = collate_windows([w['example'] for w in wanted],device='cpu')
     for f in fields(tokens):

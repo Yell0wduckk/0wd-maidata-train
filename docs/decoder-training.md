@@ -1,6 +1,6 @@
 # 主 Decoder 阶段二训练
 
-入口为 `python -m maidata.decoder_training`。本阶段**重新随机初始化音频 Encoder E_M 与主 Decoder M，联合更新两者**；始终读取阶段一 E_D/D/P 的固定离线全曲 Z。plan12默认读取P的预测，可显式切换成独立离线GT plan作对照。训练与验证构建E_M/M，不构建或运行教师E_D/D/P/R，不加载阶段一权重初始化E_M。E_M在线消费已验收Mel/aux32，M的谱面损失经音频K/V正常反传至E_M；固定Z/plan不会随E_M更新漂移，缺失条件不在线补算。
+入口为 `python -m maidata.decoder_training`。本阶段**重新随机初始化音频 Encoder E_M 与主 Decoder M，联合更新两者**；始终读取阶段一 E_D/D/P 的固定离线全曲 Z。plan12默认读取独立离线GT plan，使训练条件准确对应GT谱面；P预测plan保留为显式对照。训练与验证构建E_M/M，不构建或运行教师E_D/D/P/R，不加载阶段一权重初始化E_M。E_M在线消费已验收Mel/aux32，M的谱面损失经音频K/V正常反传至E_M；固定Z/plan不会随E_M更新漂移，缺失条件不在线补算。
 
 ## 模块与数据流
 
@@ -13,7 +13,9 @@
 | `decoder_training.preparation/transport` | worker 内整理去重映射、padding 和分块；按 dtype 打包 IPC、pin memory 与分块 H2D |
 | `decoder_training.export_windows/support_cache` | 离线恢复真实动作与首次归责账本，准备窗首、窗内和终端支持 |
 | `decoder_training.window_cache` | 读取已打包的输入与监督张量，执行历史 dropout、padding 和行索引平移 |
-| `decoder_training.intervals/compact_windows` | 从Physical区间直接生成loss积分区间；另支持已有窗口张量转换，不重查规则 |
+| `time.discrete/distribution` | 与Draft/迁移/推理共用的精确tick编码、CONT完整合法域、删失集合NLL |
+| `decoder_training.migrate_windows` | 从既有精确原谱和完整整数支持接入统一新窗口编译器 |
+| `decoder_training.intervals/compact_windows` | 仅保留为旧连续分布消费者的等义压缩工具，不是新CE迁移器 |
 | `decoder_training.network` | 持有独立 E_M/M；只编码所选局部 P0，再接入固定 Z/plan |
 | `decoder_training.shared_audio` | 仅用于多个 M 分块：累积音频 K/V 梯度，最后统一反传到真实 K/V 投影和 E_M |
 | `decoder_training.batching` | 按实际 M 输入长度连续分块，不改变 occurrence 顺序或裁剪历史 |
@@ -33,7 +35,7 @@
 
 ## Plan 条件来源与对照
 
-`decoder_train_plan_source`默认`predicted`，可选`gt`；CLI的`--plan-source`覆盖JSON。所选来源同时用于训练和validation，不做逐batch混合，不改变Z、谱面监督、历史dropout、采样实例或E_M/M初始化。
+`decoder_train_plan_source`默认`gt`，可显式选择`predicted`作对照；CLI的`--plan-source`覆盖JSON。所选来源同时用于训练和validation，不做逐batch混合，不改变Z、谱面监督、历史dropout、采样实例或E_M/M初始化。
 
 | 来源 | M接收的plan12 | 输入路径 |
 |---|---|---|
@@ -50,7 +52,7 @@ python -m maidata.decoder_training --config decoder-stage2.json --plan-source pr
 python -m maidata.decoder_training --config decoder-stage2.json --plan-source gt --gt-plan-cache GT_PLAN_CACHE --output GT_OUTPUT
 ```
 
-两种来源分别从同seed的新E_M/M、optimizer和scheduler开始。串行执行、12维字段顺序和比较口径见[Plan对照](decoder-plan-comparison.md)。GT validation同样使用真实统计条件，仅作oracle诊断；新曲自动推理仍由固定E_D/D/P提供预测plan，包括GT训练的checkpoint。GT训练用于比较准确统计条件的作用，不表示新曲自动取得真实谱面统计。
+两种来源分别从同seed的新E_M/M、optimizer和scheduler开始。串行执行、12维字段顺序和比较口径见[Plan对照](decoder-plan-comparison.md)。GT validation同样使用真实统计条件，仅作oracle诊断；新曲自动推理仍由固定E_D/D/P提供预测plan，包括GT训练的checkpoint。GT训练优先使用准确对应谱面的统计条件，不表示新曲自动取得真实谱面统计。
 
 ## 原谱、历史和 Physical
 
@@ -78,9 +80,13 @@ python -m maidata.decoder_training --config decoder-stage2.json --plan-source gt
 
 批量小头实现与 `decoder.supervision.decoder_loss` 逐行参考比较总和、计数和梯度。分块及梯度累积不采用窗口均值的平均。
 
-MOMENT（delta）、HOLD_DURATION、SLIDE_DURATION 的训练概率直接积分紧凑区间，不枚举全部 tick/cell。仅合并端点严格相接、GT归属相同、四类Physical新增归责位相同的基础合法cell；保留不连续支持的缺口、GT边界和无穷尾部。每个合并区间的Logistic质量等于原cell质量之和，因此基础归一化、GT NLL及四类Physical补集概率保持原数学定义。有效决策计数、NOTE五五分配和逻辑batch分母沿用合并前计数，不按合并后的区间数量计数。
+MOMENT、HOLD_DURATION、SLIDE_DURATION 各有独立385类头，类别0..383对应1..384 tick，384是CONT。精确GT编译为规范CONT路径，各步NLL相加，每条完整字段只计一次主loss分母；右删失末步对兼容短值和CONT求集合NLL。主类型只监督一次，CONT不增加主AR行数、Physical阶段或charged记录。
 
-区间端点、CDF质量及并集归约使用FP64，完成每个决策的概率归约后再输出FP32 loss；不在大量窄格的FP32 log概率上累加。模型主体精度与参数不变。紧凑区间只供loss积分，推理仍按原cell/代表tick生成，不改变可生成时间或Physical规则。末轮分类诊断保留accuracy；时间诊断使用GT cell的概率总和、NLL总和及计数，不对合并区域的质量做argmax冒充时间格准确率。
+训练提前编译全部可达CONT深度，不能只计算GT走过的路径。每层短值叶乘以前面CONT概率；首次跨窗CONT是独立零罚终止叶，不再展开。Physical使用完整叶分布的稳定合法补集logsumexp和FP32 epsilon floor，四类首次penalty位与raw拒绝位保持分开。basic决定训练归一化，不能先删除Physical违规概率再计算惩罚。不同长值分别违反不同类时，CONT硬合法性必须存在同一个完整四类皆合法完成。
+
+主历史`TokenBatch.beats`及self KV保持真实token坐标；独立`field_query`从主前缀内容基态读取已投影音频/局部Z。普通字段读取近邻三个Z，MOMENT读取由已知游标决定的有限前向五槽。NOTE的kind/pad/flags共享字段查询基态；时间各深度共享主前缀、重定位临时query，训练批量查询与逐步推理等价。Slide从启动位置开始，跨BPM经实际秒数反算拍位，保持NOTE written-BPM单位。类型Router不接收字段query或GT next-type位置/mask。
+
+时间头FP32输出，概率归约FP32；主网络仍支持BF16。末轮时间诊断记录完整GT路径/删失集合概率、NLL与原始字段计数，不以CONT子步数平均。内部查询成本另行统计，不改变8192主AR行预算或既有batch边界。
 
 ## 计算复用与传输
 
@@ -92,21 +98,23 @@ python -m maidata.decoder_training.export_windows --config decoder-stage2.json -
 
 将 `decoder_train_window_cache` 指向输出目录。该步骤复用已有字段、Physical，不重建源缓存或 P0/Z/plan；只处理计划中的基础窗和空尾窗，重复 occurrence 共用一份产物。每个窗口保存不压缩的 dtype 连续张量缓冲及轻量布局，新增产物在离线生成时检查一次落盘往返。历史长度和目标长度保存在 manifest。
 
-窗口导出直接从Physical整数区间生成v2时间积分张量，不先枚举逐tick候选或逐桶duration再压缩。只在基础合法性、四类新增归责或GT归属改变处切分，MOMENT窗尾和无穷尾部独立处理。duration按原四tick桶代表值映射支持，同时检查GT实际tick的基础合法性；完整BPM映射与原始有效选择数保持不变。时间张量生成成本随区间数量增长，不随候选tick总数增长。整谱Physical仍保留原区间与具体冲突证据，不能仅按四类mask相同就合并丢失首次归责账本。
+新窗口schema为`maidata.decoder-window-tensors.v3`。`export_windows.compile_window`从精确原谱v2和完整Physical整数区间构造字段条件、完整CONT树、精确目标/删失路径、原字段计数及独立查询成本。duration域按本地U和整曲音频边界相交；type/WiFi存在性按新域投影，缺少反事实候选区间时只补相关前缀并重新推进受影响首次归责。几何、真实动作、Mel/aux32、GT plan和split/occurrence复用。
 
-已生成的紧凑v2窗口语义不变，无需重建。已有v1窗口可直接转换到新目录：
+增量迁移从旧manifest选择窗口，但不读取旧4tick监督tensor猜精确duration；同样调用`compile_window`，旧资产只读，输出新目录：
 
 ```sh
-python -m maidata.decoder_training.compact_windows --source OLD_WINDOW_CACHE --output COMPACT_WINDOW_CACHE --workers 12
+python -m maidata.decoder_training.migrate_windows --config decoder-stage2.json --source-windows OLD_WINDOW_CACHE --output NEW_V3_WINDOW_CACHE --workers 12
 ```
 
-转换仅读取已完成的窗口张量，保留token、顺序、长度、计数及非时间监督；不读取字段、Physical、音频或P0/Z/plan。将 `decoder_train_window_cache` 改为新目录，从原完整轮checkpoint恢复，保留optimizer、scheduler和RNG；不改运行中的源码或原缓存。
+少量窗口可显式使用`--window-id ID`重复指定。从零生产先完成现有精确原谱及完整整数Physical生产，再运行同一`export_windows`。本次不默认执行整库迁移或新训练。旧`compact_windows`仅为旧v1/v2连续分布的等义压缩工具，不能生成新v3监督，也不能令旧checkpoint兼容新模型。
+
+超出本地U的GT duration精确值、源索引及完整支持保存在新产物中，manifest列出`unsupported_duration`；这些窗口不伪造训练labels，也不从计划删除。`select_window`明确抛`UnsupportedDurationBoundary`，说明自动延窗/续接机制尚未支持。这一已延后边界不能冒称已完成训练适配。
 
 DataLoader worker 读取所选窗口输入/监督、固定 Z/plan 与去重歌曲的 Mel/aux32，按 seed/epoch/occurrence 选择历史视图、平移标签索引、padding，再按 dtype 打包。所选Encoder窗口共用一份布局，M有效行与各计算块的attention布局也在worker根据输入坐标和mask准备；P0数值由训练进程中的E_M提供，不传输占位的完整隐藏bank。标签、合法 mask、Physical 罚项及其计数已离线确定。训练进程不做整谱解压、校验、规则重放或候选生成；不扫描输入张量的形状、有限值及归属。模型投影和概率运算的重复输入检查在训练/validation 调用中关闭；合法性 mask、概率归一化与梯度裁剪是实际计算，继续保留。
 
 IPC 使用现有 `training.transport` 的 dtype 连续缓冲实现，按需局部音频输入/布局、固定条件与每个 M 分块分别打包；只传轻量 occurrence 元数据，不传规则状态、TimingMap 或整棵 GT/支持对象。音频输入与固定条件传入设备一次，token/支持随当前分块传输和释放，避免把全曲所有候选同时放入显存。模型只消费公开张量，打包形式不进入网络接口。
 
-NOTE 输入、MMoE gate、kind→pad/flags 使用固定形状张量运算，避免 CUDA 布尔索引产生动态 `nonzero`；flags 的条件适配每个 NOTE 仅计算一次。常规 loss 统计在设备累积，输出 update/epoch 日志时统一回读；不逐步执行额外有限值断言。
+NOTE输入、MMoE gate和kind→pad/flags保持张量化；字段读取按窗口独立组织查询，NOTE字段基态及flags条件适配每个NOTE复用一次。该新读取路径尚未测量CUDA原batch成本。常规 loss 统计在设备累积，输出 update/epoch 日志时统一回读；不逐步执行额外有限值断言。
 
 有效音频与谱面行索引、小批SDPA布局均在worker整理现有张量时生成，并随dtype缓冲传输，不读取字段或Physical、不改离线缓存。每层四个LayerNorm、self-attn QKV、两路cross-attn query及三路输出投影、FFN专家与gate均只计算有效谱面行；条件K/V仅投影有效Z/plan槽。self-attn通过拼接现有Q/K/V权重执行一次线性投影，不改变参数名称或optimizer槽位。
 
@@ -121,7 +129,7 @@ Z/plan attention同时按query长度和有效key数分组；独立key mask保留
 | 条件准备 | 原路径读取冻结音频特征并按歌曲映射 | worker准备完整音频输入/布局和固定Z/plan；在线E_M只计算所选局部P0，不构造D/P或执行CPU layout fallback |
 | 采样与归约 | 原训练维护完整音频组、既有计划及逻辑 batch | 保留 occurrence 集合，全局随机窗口组批；内部计算块仍按共同分母反传 |
 
-原仓库对照路径为 `repos/main-new-audio-draft-beat/src/maimai_baseline`，仅作实现参考。当前网络和训练均不导入该包。小批attention和跳过padding会改变dropout随机数的消费顺序，保持相同分布语义；数值/梯度对照使用dropout=0，当前联合路径另以CPU FP32核对直接计算图。新v2完整轮checkpoint恢复E_M/M成套状态；只有M的旧v1不能用于联合训练续训。同版本完整轮恢复另用非零dropout验证。
+原仓库对照路径为 `repos/main-new-audio-draft-beat/src/maimai_baseline`，仅作实现参考。当前网络和训练均不导入该包。小批attention和跳过padding会改变dropout随机数的消费顺序，保持相同分布语义；数值/梯度对照使用dropout=0，当前联合路径另以CPU FP32核对直接计算图。新v3完整轮checkpoint恢复E_M/M成套状态；旧v1/v2时间头不兼容新字段查询架构。同版本完整轮恢复另用非零dropout验证。
 
 ## 配方与执行
 
@@ -151,14 +159,14 @@ python -m maidata.decoder_training --config decoder-stage2.json --cuda-check --c
 
 ## Checkpoint 与验证
 
-阶段二联合训练使用 schema `maidata.decoder-training.v2`，`model_state`同时保存`encoder.*`（E_M）和`decoder.*`（M）。训练读取D/P manifest中的原始生产者信息，`decoder_train_checkpoint`可缺省，不哈希checkpoint或加载教师权重。新训练从随机初始化的E_M/M开始；`--resume`恢复v2完整轮的两套权重、全部optimizer参数槽、scheduler、完整轮/step、所有RNG与DataLoader generator，同时记录教师来源、所选manifest、配置和输入来源。
+阶段二联合训练使用 schema `maidata.decoder-training.v3`，架构身份`maidata.decoder-field-query-tick384.v1`，`model_state`同时保存`encoder.*`（E_M）和`decoder.*`（M）。训练读取D/P manifest中的原始生产者信息，`decoder_train_checkpoint`可缺省，不哈希checkpoint或加载教师权重。新训练从随机初始化的E_M/M开始；`--resume`恢复v3完整轮的两套权重、全部optimizer参数槽、scheduler、完整轮/step、所有RNG与DataLoader generator，同时记录教师来源、所选manifest、配置和输入来源。
 
 checkpoint的recipe记录`decoder_train_plan_source`，GT缓存路径作为输入来源记录；恢复不因plan来源变化新增硬门禁。两种fresh对照应各自使用独立输出目录，不将第一项checkpoint用作第二项初始化或续训。
 
-旧`maidata.decoder-training.v1`只有M，缺少训练后的E_M及其optimizer状态，明确拒绝作为本方案完整轮续训；阶段一权重也不能作为v2续训输入。该区别属于真实模型/训练状态差异，不新增源码哈希、旧资产扫描或审批门禁。
+旧`maidata.decoder-training.v1/v2`缺少新字段读取/385类时间头及其optimizer状态，明确拒绝作为本方案完整轮续训；阶段一权重也不能作为v3续训输入。该区别属于真实模型/训练状态差异，不新增源码哈希、旧资产扫描或审批门禁。
 
 启动时读取缓存 manifest 和配置；不遍历旧载荷重新验收。源码版本仅作记录，不绑定 checkpoint，不生成或比较输入文件哈希。恢复不以源码、recipe、budget、计划、缓存身份或停止轮变更为由拒绝加载；是否继续某个 checkpoint 由用户和训练会话确定。接口加载所选模型、optimizer、scheduler、完整轮游标和 RNG；实际不匹配的参数张量由 PyTorch 的状态加载返回具体错误。恢复使用当前配置安排后续窗口和批次，并保留 checkpoint 中的 optimizer/scheduler 状态，不自行重置 warmup。
 
 每5轮及末轮 validation，重合只执行一次；完整诊断仅末轮。每轮按保存的 occurrence 集合与随机顺序消费，去重歌曲数与音频读取实例数分别记录。`last` 每个完整轮保存，`best` 只在轮末验证改善时更新，编号 checkpoint 每5轮及末轮保存；异常和轮内不保存 checkpoint。验证 loss 用于诊断及 checkpoint 记录，谱面质量仍由实际生成结果评估。
 
-CPU验证覆盖既有字段/Physical监督、历史dropout、空尾窗和独立损失归约；联合训练另覆盖真实小E_M/M更新、禁止D/P/R构造、固定Z/plan不带梯度、音频与条件映射、packed传输及worker布局。单M块直接反传、多块梯度桥与直接真实计算图比较分块/未分块和累积batch的loss、E_M/M梯度及更新，检查每batch E_M只前向和反向一次、Encoder布局仅准备一份且不执行checkpoint重算。v2恢复使用非零dropout逐位核对两模块、optimizer、scheduler和全部RNG，并拒绝旧v1。正式默认仍为12 workers；CPU测试不代表CUDA原batch、吞吐或正式训练已验证。
+CPU验证覆盖既有字段/Physical监督、历史dropout、空尾窗和独立损失归约；联合训练另覆盖真实小E_M/M更新、禁止D/P/R构造、固定Z/plan不带梯度、音频与条件映射、packed传输及worker布局。单M块直接反传、多块梯度桥与直接真实计算图比较分块/未分块和累积batch的loss、E_M/M梯度及更新，检查每batch E_M只前向和反向一次、Encoder布局仅准备一份且不执行checkpoint重算。v3恢复使用非零dropout逐位核对两模块、optimizer、scheduler和全部RNG，并拒绝旧v1/v2。正式默认仍为12 workers；CPU测试不代表CUDA原batch、吞吐或正式训练已验证。

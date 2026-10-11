@@ -1,4 +1,4 @@
-"""Capacity counts real R expansion and EOS across both selected data splits."""
+"""Query/substep cost retains base windows across both selected data splits."""
 import json
 
 from maidata.chart.codec import token_to_dict
@@ -20,7 +20,7 @@ def test_capacity_uses_selected_base_windows_and_validation_max(tmp_path, monkey
     windows = [dict(window_id=f'{key}:{i}', chart_id=key, start_tick=i * 384, end_tick=(i + 1) * 384)
                for key in ('a', 'b', 'not-selected') for i in range(2)]
     (tmp_path / 'windows.jsonl').write_text('\n'.join(json.dumps(row) for row in windows), encoding='utf-8')
-    # This occurrence file must not be read: oversampling does not change fixed R capacity.
+    # Cost measurement reads base windows, preserving existing occurrences.
     (tmp_path / 'occurrences.jsonl').write_text('not used', encoding='utf-8')
 
     def record(key, tokens, ticks, owners):
@@ -44,10 +44,14 @@ def test_capacity_uses_selected_base_windows_and_validation_max(tmp_path, monkey
     monkeypatch.setattr(capacity, 'load_chart', load)
     report, rows = capacity.measure_capacity(plan, split)
     assert reads == ['a.json.gz', 'b.json.gz']
-    assert report['query_rows'] == 8 and report['counts_include_segment_end']
-    assert report['splits']['train']['max'] == 4
-    assert report['splits']['validation']['max'] == 8
+    assert report['schema'] == 'maidata.draft-query-cost.v2'
+    assert report['max_query_substeps'] == 7
+    assert report['representation'] == 'relative-tick384-continue'
+    assert report['splits']['train']['max'] == 3
+    assert report['splits']['validation']['max'] == 7
     assert report['all']['windows'] == 4 and report['all']['empty_windows'] == 2
     assert report['max_windows'][0]['split'] == 'validation'
-    assert report['max_windows'][0]['row_types'] == dict(MOMENT=2, NOTE=2, ROUTE=2, SLIDE_DURATION=1, SEGMENT_END=1)
-    assert [row['query_rows'] for row in rows] == [4, 1, 8, 1]
+    assert report['max_windows'][0]['query_roles'] == dict(MOMENT=2, NOTE=2, ROUTE=2, SLIDE_DURATION=1)
+    assert [row['query_rows'] for row in rows] == [3, 1, 7, 1]
+    assert [row['query_cost'] for row in rows] == [7, 5, 11, 5]
+    assert [row['original_time_fields'] for row in rows] == [2, 1, 3, 1]

@@ -148,11 +148,14 @@ def test_unequal_window_chunks_share_global_denominators_and_gradients():
     length = len(examples[0].inputs)
     output = SimpleNamespace(hidden=torch.randn(2,length,24,requires_grad=True),
                              type_logits=torch.randn(2,length,5,requires_grad=True))
+    # This test isolates sum/count algebra from the independently tested reader.
+    reader = lambda out,index,*conditions: out.hidden[index[:,0],index[:,1]]
+    output.field_reader = reader
     matrix = (torch.arange(71)[:,None]-torch.arange(71)[None,:]).abs().float()/70
     kwargs = dict(distributions=decoder_time_distributions(config()),geometry=RouteGeometryLoss(matrix,matrix.square()))
     full = decoder_loss(model.heads,output,examples,stages,[timing]*2,[1.]*2,**kwargs)
     chunks = [decoder_loss(model.heads,SimpleNamespace(hidden=output.hidden[i:i+1],
-        type_logits=output.type_logits[i:i+1]),[example],[stages[i]],[timing],[1.],**kwargs)
+        type_logits=output.type_logits[i:i+1],field_reader=reader),[example],[stages[i]],[timing],[1.],**kwargs)
         for i, example in enumerate(examples)]
     assert chunks[0].main.count > chunks[1].main.count == 2  # Router plus terminal time
     assert chunks[0].judge.count == 1 and chunks[1].judge.count == 0

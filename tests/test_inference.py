@@ -51,8 +51,10 @@ def test_checkpoint_and_full_e_d_p_m_no_training_or_hash_dependencies(config, ge
     first = dict(schema='maidata.encoder-draft-training.v1', recipe=c, source={'commit': 'old-code'},
         model_state={name+'.'+key: value for name, m in zip(('encoder','draft','planner'), modules)
                      for key, value in m.state_dict().items()})
-    second = dict(schema='maidata.decoder-training.v1', recipe=c, source={'commit': 'different-code'},
-                  model_state=modules[3].state_dict())
+    decoder_encoder = build_model(c)
+    second = dict(schema='maidata.decoder-training.v3',architecture='maidata.decoder-field-query-tick384.v1',
+        recipe=c,source={'commit':'different-code'},model_state={name+'.'+key:value
+            for name,m in (('encoder',decoder_encoder),('decoder',modules[3])) for key,value in m.state_dict().items()})
     torch.save(first, tmp_path/'producer.ckpt')
     torch.save(second, tmp_path/'decoder.ckpt')
     models = load_models(tmp_path/'producer.ckpt', tmp_path/'decoder.ckpt', device='cpu')
@@ -65,7 +67,8 @@ def test_checkpoint_and_full_e_d_p_m_no_training_or_hash_dependencies(config, ge
         models.decoder.type_head.bias[0] = 100
         time_head = models.decoder.heads.times['MOMENT']
         time_head.weight.zero_()
-        time_head.bias.reshape(-1, 3)[:, 1] = 100
+        time_head.bias.fill_(-100)
+        time_head.bias[384] = 100
     timing = TimingMap([(0,120)])
     grid = item(0,c)['grid']
     with patch.object(models.encoder, 'prepare_song', wraps=models.encoder.prepare_song) as e, \
@@ -77,7 +80,7 @@ def test_checkpoint_and_full_e_d_p_m_no_training_or_hash_dependencies(config, ge
                                     1.2, device='cpu', options=GenerationOptions(temperature=0))
         assert (e.call_count,d.call_count,p.call_count)==(1,1,1)
     assert result.tokens == (Moment(0),)
-    assert len(windows)==2 and all(w['censored'] for w in windows)
+    assert len(windows)==2 and all(w['closed_by_continue'] for w in windows)
     assert all(w['boundary_delta_ms']==0 for w in windows)
     assert prepared.z.valid.all() and prepared.plans.shape==(2,12)
     assert not torch.equal(prepared.plans,torch.zeros_like(prepared.plans))
@@ -223,6 +226,40 @@ def test_sampler_mask_temperature_and_reproducible_retry():
         list(Sampler().order(torch.tensor([float('nan')])))
 
 
+def test_continuation_requeries_without_committing_kv_or_physical(config,geometry):
+    from dataclasses import replace
+    from maidata.physical.inference import InferencePhysicalState
+    model=build_decoder(config).eval()
+    timing=TimingMap([(0,120)])
+    prepared=conditions(config,timing,12.)
+    memory=model.prepare_memory(model.prepare_audio(prepared.audio),torch.tensor([0]),
+        prepared.z,prepared.plans[:1],prepared.plan_valid[:1])
+    physical=InferencePhysicalState(timing,geometry,audio_end_seconds=12.)
+    physical.inject_boundary(Moment(0),start_tick=0,window_end=768)
+    with torch.no_grad():
+        model.type_head.weight.zero_()
+        model.type_head.bias.fill_(-100)
+        model.type_head.bias[0]=100
+        model.heads.times['MOMENT'].weight.zero_()
+        model.heads.times['MOMENT'].bias.fill_(-100)
+        model.heads.times['MOMENT'].bias[384]=100
+    routed=model.begin(pack_tokens([[Moment(0)]],[[0.]],device='cpu'),memory)
+    seen=[]
+    original=model.query_fields
+    def capture(output,index,beats,roles,origins,elapsed):
+        seen.append((beats.tolist(),elapsed.tolist()))
+        return original(output,index,beats,roles,origins,elapsed)
+    before=physical.snapshot()
+    with patch.object(model,'query_fields',capture),patch.object(model,'complete',wraps=model.complete) as complete:
+        token,cache=next(Sampler(temperature=0).choices(model,routed,physical,timing,
+            decoder_time_distributions(config),end_tick=768,cap_tick=1152))
+    assert isinstance(token,TimeTarget) and token.closed_by_continue
+    assert token.lower_bound_tick==769 and token.query_tick==768
+    assert seen==[([0.],[0]),([4.],[384])]
+    assert complete.call_count==1 and physical.snapshot()==before
+    assert all(kv.valid.shape[1]==1 for kv in cache.layers)
+
+
 def test_actual_field_sampling_flags_route_and_time(config,geometry):
     model=build_decoder(config).eval()
     timing=TimingMap([(0,120)])
@@ -240,7 +277,12 @@ def test_actual_field_sampling_flags_route_and_time(config,geometry):
         assert route.track_break is not None
         physical.accept(Route(70,0))
         assert list(oracle.query_types())==['SLIDE_DURATION']
-        duration=next(sampler.contents(model,h,'SLIDE_DURATION',oracle,timing,specs,end_tick=288,cap_tick=384))
+        prepared=conditions(config,timing,2.)
+        memory=model.prepare_memory(model.prepare_audio(prepared.audio),torch.tensor([0]),
+            prepared.z,prepared.plans[:1],prepared.plan_valid[:1])
+        routed=model.begin(pack_tokens([[Route(70,0)]],[[0.]],device='cpu'),memory)
+        output=model.complete(routed,torch.full_like(routed.valid,4,dtype=torch.long))
+        duration=next(sampler.contents(model,h,'SLIDE_DURATION',oracle,timing,specs,end_tick=288,cap_tick=384,output=output))
         assert physical.query(duration).allowed
 
 
@@ -297,7 +339,8 @@ def test_generation_caps_repeated_notes_at_one_onset(config, geometry):
         model.heads.kind.bias[0] = 100
         head = model.heads.times['MOMENT']
         head.weight.zero_()
-        head.bias.reshape(-1,3)[:,1] = 100
+        head.bias.fill_(-100)
+        head.bias[384] = 100
     result,windows = generate(model,prepared,timing,geometry,config,ir_metadata(timing,1.),1.,
         device='cpu',options=GenerationOptions(temperature=0,max_tokens_per_moment=3,
                                               physical_hard_mask=False))

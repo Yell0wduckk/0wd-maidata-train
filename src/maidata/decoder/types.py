@@ -57,6 +57,7 @@ class DecoderMemory:
     condition: tuple[KV, ...]
     plan_index: int
     row_indices: Tensor | None = None
+    condition_beats: Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -82,3 +83,4 @@ class DecoderOutput:
     type_logits: Tensor
     hidden: Tensor
     cache: DecoderCache
+    field_reader: object = None

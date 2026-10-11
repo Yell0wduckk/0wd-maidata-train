@@ -41,7 +41,7 @@ def test_default_and_configurable_structure():
     assert len(default.layers[2].ffn.experts) == 4 and len(default.layers[2].ffn.gates) == 5
     assert default.embedding.route.weight.shape == (71, 240)
     assert default.heads.route.weight.shape == (71, 256)
-    assert default.heads.times['MOMENT'].out_features == 15
+    assert default.heads.times['MOMENT'].out_features == 385
     assert default.target_type.weight.data_ptr() != default.embedding.input_type.weight.data_ptr()
     assert default.layers[2].ffn.experts[0][0].weight.data_ptr() != default.layers[3].ffn.experts[0][0].weight.data_ptr()
     other = build_decoder(config())
@@ -185,15 +185,61 @@ def test_cpu_bfloat16_forward_backward(mode):
     assert torch.isfinite(loss) and all(p.grad is None or torch.isfinite(p.grad).all() for p in model.parameters())
 
 
-def test_default_forward_backward_and_changed_time_components():
+def test_default_forward_backward_and_fixed_time_vocabulary():
     model = build_decoder(CONFIG)
     tokens,audio,z,plan = inputs(model)
     out = model(tokens,torch.ones_like(tokens.types),prepare(model,audio,z,plan))
     out.type_logits.square().mean().backward()
     assert torch.isfinite(out.hidden).all() and model.embedding.kind.weight.grad.abs().sum()>0
-    c = config()
-    c['decoder_time_components'] = 3
-    c['decoder_time_distributions'] = {name:dict(v,initial_centers=v['initial_centers'][:3],
-        initial_scales=v['initial_scales'][:3]) for name,v in c['decoder_time_distributions'].items()}
-    other = build_decoder(c)
-    assert other.heads.time_parameters(torch.randn(2,24),'MOMENT').shape == (2,3,3)
+    other = build_decoder(config())
+    assert other.heads.time_logits(torch.randn(2,24),'MOMENT').shape == (2,385)
+
+
+def test_field_queries_are_independent_of_future_queries_and_do_not_write_history():
+    model = build_decoder(config()).eval()
+    tokens,audio,z,plan = inputs(model,gradients=True)
+    output = model(tokens,torch.ones_like(tokens.types),prepare(model,audio,z,plan))
+    indices = torch.tensor([[0,2],[0,2],[1,0]])
+    beats,roles,origin,elapsed = torch.tensor([0.,4.,2.]),torch.tensor([0,0,3]),torch.tensor([0,0,192]),torch.tensor([0,384,0])
+    history = tuple((kv.key.clone(),kv.value.clone()) for kv in output.cache.layers)
+    together = output.field_reader(output,indices,beats,roles,origin,elapsed)
+    separate = torch.cat([output.field_reader(output,indices[i:i+1],beats[i:i+1],roles[i:i+1],
+        origin[i:i+1],elapsed[i:i+1]) for i in range(3)])
+    torch.testing.assert_close(together,separate,atol=2e-6,rtol=2e-5)
+    assert not torch.allclose(together[0],together[1])
+    for (key,value),kv in zip(history,output.cache.layers):
+        torch.testing.assert_close(key,kv.key)
+        torch.testing.assert_close(value,kv.value)
+    together.square().sum().backward()
+    assert model.field_reader.audio.query.weight.grad.abs().sum()>0
+    assert model.field_reader.z.query.weight.grad.abs().sum()>0
+    assert audio.values.grad.abs().sum()>0 and z.values.grad.abs().sum()>0
+
+
+def test_batched_training_time_logits_match_incremental_cont_queries_across_bpm():
+    from maidata.time import TimingMap
+    from maidata.time.discrete import TimeQuery
+    model=build_decoder(config()).eval()
+    tokens,audio,z,plan=inputs(model)
+    memory=prepare(model,audio,z,plan)
+    types=torch.zeros_like(tokens.types)
+    types[0,:]=torch.tensor([1,3,1,2,2,4,0,1,0])
+    types[1,:2]=torch.tensor([1,0])
+    full=model(tokens,types,memory)
+    # Route-chain prefix at row5: the next SLIDE_DURATION is one original
+    # written-BPM field. It queries launch=1 beat, then 8 and16 after BPM240.
+    cache=None
+    for row in range(6):
+        step=model.complete(model.begin(tokens.slice(row,row+1),memory,cache=cache),types[:,row:row+1])
+        cache=step.cache
+    timing=TimingMap([(0,120),(2,240)])
+    elapsed=torch.tensor([0,384,768])
+    beats=torch.tensor([TimeQuery('SLIDE_DURATION',0,int(e)).query_beat(timing) for e in elapsed])
+    roles=torch.full((3,),4,dtype=torch.long)
+    origins=torch.zeros(3,dtype=torch.long)
+    training=full.field_reader(full,torch.tensor([[0,5]]).expand(3,-1),beats,roles,origins,elapsed)
+    inference=torch.cat([step.field_reader(step,torch.tensor([[0,0]]),beats[i:i+1],roles[i:i+1],
+        origins[i:i+1],elapsed[i:i+1]) for i in range(3)])
+    assert beats.tolist()==[1.,8.,16.]
+    torch.testing.assert_close(model.heads.time_logits(training,'SLIDE_DURATION'),
+        model.heads.time_logits(inference,'SLIDE_DURATION'),atol=3e-6,rtol=2e-5)

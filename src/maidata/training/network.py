@@ -21,5 +21,6 @@ class Pretrainer(nn.Module):
             batch.audio_windows.window_to_song, batch.coverages, p0_rate=self.config['fpn_rates'][0], layout=None if batch.layouts is None else batch.layouts['p0'])
         z = self.draft(bank, batch.draft_inputs)
         r, p = predict_auxiliary(z, batch.groups, batch.starts, batch.valid,
-                                self.reconstruction, self.planner, self.config, layouts=batch.layouts)
+                                self.reconstruction, self.planner, self.config, layouts=batch.layouts,
+                                queries=batch.reconstruction.queries)
         return auxiliary_losses(r, p, batch.reconstruction, batch.planner, self.config), (r, p, z)

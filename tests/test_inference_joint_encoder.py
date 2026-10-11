@@ -17,7 +17,7 @@ from maidata.model import build_model, build_draft, build_planner, build_decoder
 from maidata.time import TimingMap
 
 
-def checkpoints(config, tmp_path, *, schema='maidata.decoder-training.v2'):
+def checkpoints(config, tmp_path, *, schema='maidata.decoder-training.v3'):
     teacher = dict(encoder=build_model(config), draft=build_draft(config), planner=build_planner(config))
     encoder, decoder = build_model(config), build_decoder(config)
     # Emit empty windows, exercising real E/D/P/M without unbounded sampling.
@@ -26,20 +26,20 @@ def checkpoints(config, tmp_path, *, schema='maidata.decoder-training.v2'):
         decoder.type_head.bias.fill_(-100)
         decoder.type_head.bias[0] = 100
         decoder.heads.times['MOMENT'].weight.zero_()
-        decoder.heads.times['MOMENT'].bias.reshape(-1, 3)[:, 1] = 100
+        decoder.heads.times['MOMENT'].bias.fill_(-100)
+        decoder.heads.times['MOMENT'].bias[384] = 100
     producer = dict(schema='maidata.encoder-draft-training.v1', recipe=config,
                     model_state={name+'.'+key: value for name, module in teacher.items()
                                  for key, value in module.state_dict().items()})
-    state = (torch.nn.ModuleDict(dict(encoder=encoder, decoder=decoder)).state_dict()
-             if schema.endswith('.v2') else decoder.state_dict())
-    consumer = dict(schema=schema, recipe=config, model_state=state)
+    state = torch.nn.ModuleDict(dict(encoder=encoder, decoder=decoder)).state_dict()
+    consumer = dict(schema=schema,architecture='maidata.decoder-field-query-tick384.v1',recipe=config,model_state=state)
     paths = tmp_path/'ed.ckpt', tmp_path/'m.ckpt'
     torch.save(producer, paths[0])
     torch.save(consumer, paths[1])
     return paths, teacher, encoder, decoder, consumer
 
 
-@pytest.mark.parametrize('schema', ['maidata.decoder-training.v1', 'maidata.decoder-training.v2'])
+@pytest.mark.parametrize('schema', ['maidata.decoder-training.v3'])
 def test_inference_loads_correct_stage_specific_audio_weights(config, tmp_path, schema):
     paths, teacher, encoder, decoder, _ = checkpoints(config, tmp_path, schema=schema)
     models = load_models(*paths, device='cpu')
@@ -47,7 +47,7 @@ def test_inference_loads_correct_stage_specific_audio_weights(config, tmp_path, 
         assert all(torch.equal(value, getattr(models, name).state_dict()[key])
                    for key, value in teacher[name].state_dict().items())
     assert all(torch.equal(value, models.decoder.state_dict()[key]) for key, value in decoder.state_dict().items())
-    if schema.endswith('.v2'):
+    if schema.endswith('.v3'):
         assert models.decoder_encoder is not models.encoder
         assert all(torch.equal(value, models.decoder_encoder.state_dict()[key])
                    for key, value in encoder.state_dict().items())
@@ -107,7 +107,7 @@ def test_two_audio_encoders_share_only_inputs_and_layouts_not_draft_features(con
     assert {e['encoder'] for e in events if e['event'] == 'encoder_progress'} == {'draft', 'decoder'}
 
 
-def test_cli_v2_runs_both_encoders_and_reports_the_audio_source(config, tmp_path, geometry, capsys):
+def test_cli_v3_runs_both_encoders_and_reports_the_audio_source(config, tmp_path, geometry, capsys):
     paths, _, _, _, _ = checkpoints(config, tmp_path)
     arguments = ['--encoder-draft-checkpoint', str(paths[0]), '--decoder-checkpoint', str(paths[1]),
                  '--audio', str(tmp_path/'audio.wav'), '--grid', str(tmp_path/'grid.npz'), '--bpm', '120',
@@ -123,4 +123,11 @@ def test_cli_v2_runs_both_encoders_and_reports_the_audio_source(config, tmp_path
     assert 'Decoder encoder global audio: started' in captured.err
     report = json.loads((tmp_path/'result/generation.json').read_text(encoding='utf-8'))
     assert report['complete'] and report['checkpoints']['decoder_audio_encoder'] == 'stage_ii'
-    assert report['checkpoints']['decoder']['schema'] == 'maidata.decoder-training.v2'
+    assert report['checkpoints']['decoder']['schema'] == 'maidata.decoder-training.v3'
+
+
+@pytest.mark.parametrize('schema',['maidata.decoder-training.v1','maidata.decoder-training.v2'])
+def test_old_time_architecture_is_not_silently_loaded(config,tmp_path,schema):
+    paths,*_=checkpoints(config,tmp_path,schema=schema)
+    with pytest.raises(ValueError,match='v3 tick384'):
+        load_models(*paths,device='cpu')

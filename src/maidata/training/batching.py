@@ -3,7 +3,7 @@ import math
 
 
 def group_token_cost(group, config):
-    """Charge actual E window positions/G0 beats and fixed R query capacity.
+    """Preserve existing optimizer batch boundaries with their scheduling proxy.
 
     Overlapping Encoder context is computed per window; count it each time.
     Empty/tail R windows and multiple chart conditions still consume queries.
@@ -12,7 +12,7 @@ def group_token_cost(group, config):
     audio = (len(group['encoder_starts_beats']) * config['samples_per_beat'] *
              (config['audio_before_beats'] + config['target_beats'] + config['audio_after_beats'])
              + math.ceil(group['actual_audio_end_beat']) - group['first_beat'])
-    rows = group['occurrences'] * config['reconstruction_query_rows']
+    rows = group['occurrences'] * config['pretrain_batch_reference_rows']
     weights = [config['pretrain_audio_token_weight'], config['pretrain_row_token_weight']]
     if any(not math.isfinite(w) or w <= 0 for w in weights):
         raise ValueError('audio and row token weights must be finite and positive')

@@ -94,6 +94,8 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
             session.rules.close_window(token)
             session.cache = cache
             return tuple(accepted), dict(terminal_tick=token.absolute_tick, censored=token.censored,
+                closed_by_continue=token.closed_by_continue, terminal_lower_bound_tick=token.lower_bound_tick,
+                terminal_query_tick=token.query_tick,
                 backtracks=backtracks, physical_bypass=bypass,physical_fallback=physical_fallback,
                 **({'trace': trace} if options.trace else {}))
         decision = session.rules.query(token)
@@ -179,7 +181,8 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
             groups.extend(new)
         windows.append(dict(start_beat=start, end_beat=end_tick/96, history_tokens=history_count,
             boundary_delta_ms=boundary.delta_ms, generated_tokens=len(tokens), onsets=len(new),
-            plan12=conditions.plans[i].float().cpu().tolist(), **report))
+            plan12=conditions.plans[i].float().cpu().tolist(),
+            time_sampling='tick384-continue-substep-greedy' if options.temperature == 0 else 'tick384-continue-substep-sampling', **report))
         emit(progress, 'window_done', window=i+1, windows=len(conditions.starts), tokens=len(tokens),
              backtracks=report['backtracks'], cursor_beat=session.rules.grammar.state.cursor/96,
              onsets=len(new))

@@ -1,10 +1,9 @@
-"""Time priors and AMP readout match the original Decoder behavior."""
+"""Independent tick384 classification heads and precise AMP readout."""
 import pytest
 import torch
 from torch.nn import functional as F
 
-from maidata.decoder.probability import interval_log_probabilities
-from maidata.model import build_decoder, decoder_time_distributions
+from maidata.model import build_decoder
 from test_decoder_network import config
 
 
@@ -12,27 +11,17 @@ KINDS = ('MOMENT', 'HOLD_DURATION', 'SLIDE_DURATION')
 
 
 @pytest.mark.parametrize('kind', KINDS)
-def test_time_prior_is_independent_of_hidden_and_remains_trainable(kind):
+def test_time_head_has_fixed_vocabulary_and_updates_hidden_and_parameters(kind):
     torch.manual_seed(817)
     c = config()
     model = build_decoder(c)
     head = model.heads.times[kind]
-    spec = decoder_time_distributions(c)[kind]
     hidden = torch.randn(2, c['decoder_dim'], requires_grad=True)
-    raw = model.heads.time_parameters(hidden, kind)
-    assert torch.count_nonzero(head.weight) == 0
-    torch.testing.assert_close(raw[0], raw[1], rtol=0, atol=0)
-    torch.testing.assert_close(raw[..., 0], torch.zeros_like(raw[..., 0]), rtol=0, atol=0)
-    torch.testing.assert_close(raw[0, :, 1] * spec.reference,
-                               torch.tensor(spec.initial_centers), atol=1e-4, rtol=1e-6)
-    torch.testing.assert_close(F.softplus(raw[0, :, 2]) * spec.reference + spec.minimum_scale,
-                               torch.tensor(spec.initial_scales), atol=1e-4, rtol=1e-6)
-    lower = torch.tensor([[1., 30., 100.], [1., 30., 100.]], dtype=torch.float64)
-    upper = torch.tensor([[30., 100., 500.], [30., 100., 500.]], dtype=torch.float64)
+    raw = model.heads.time_logits(hidden,kind)
+    assert raw.shape == (2,385) and not torch.equal(raw[0],raw[1])
+    assert len({id(h.weight) for h in model.heads.times.values()})==3
     def objective():
-        lp = interval_log_probabilities(model.heads.time_parameters(hidden, kind), lower, upper,
-                                         torch.ones_like(lower, dtype=torch.bool), spec)
-        return -lp[:, 1].sum()
+        return F.cross_entropy(model.heads.time_logits(hidden,kind),torch.tensor([0,384]))
     optimizer = torch.optim.SGD(head.parameters(), lr=.01)
     objective().backward()
     assert head.weight.grad.abs().sum() > 0
@@ -54,7 +43,7 @@ def test_bf16_autocast_preserves_fp32_time_output_and_gradients(kind):
     with torch.no_grad():
         head.weight.normal_(std=.2)
     hidden = torch.randn(2, 3, head.in_features, dtype=torch.bfloat16, requires_grad=True)
-    expected = F.linear(hidden.float(), head.weight, head.bias).reshape(2, 3, 5, 3)
+    expected = F.linear(hidden.float(), head.weight, head.bias)
     with torch.autocast('cpu', dtype=torch.bfloat16):
         actual = model.heads.time_parameters(hidden, kind)
     assert actual.dtype == torch.float32

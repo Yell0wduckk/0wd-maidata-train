@@ -36,10 +36,14 @@ def test_cli_end_to_end_cpu(config,tmp_path,native_miacode,precision,capsys):
         modules[-1].heads.kind.bias[0]=100
         head=modules[-1].heads.times['MOMENT']
         head.weight.zero_()
-        head.bias.reshape(-1,3)[:,1]=100
+        head.bias.fill_(-100)
+        head.bias[384]=100
     torch.save(dict(schema='maidata.encoder-draft-training.v1',recipe=config,
         model_state={n+'.'+k:v for n,m in zip(('encoder','draft','planner'),modules) for k,v in m.state_dict().items()}),tmp_path/'ed.ckpt')
-    torch.save(dict(schema='maidata.decoder-training.v1',recipe=config,model_state=modules[-1].state_dict()),tmp_path/'m.ckpt')
+    decoder_encoder=build_model(config)
+    torch.save(dict(schema='maidata.decoder-training.v3',architecture='maidata.decoder-field-query-tick384.v1',
+        recipe=config,model_state={n+'.'+k:v for n,m in (('encoder',decoder_encoder),('decoder',modules[-1]))
+            for k,v in m.state_dict().items()}),tmp_path/'m.ckpt')
     np.savez(tmp_path/'grid.npz',**item(0,config)['grid'])
     with wave.open(str(tmp_path/'audio.wav'),'wb') as f:
         f.setparams((1,2,24000,0,'NONE','not compressed'))

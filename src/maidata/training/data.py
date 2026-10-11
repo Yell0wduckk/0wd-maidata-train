@@ -85,7 +85,8 @@ class AudioDataset(Dataset):
         for w in rows:
             key = w['chart_id']
             windows.append((w['window_id'], key, w['start_beat'],
-                reconstruction_target(charts[key], start_tick=w['start_tick'], target_beats=c['target_beats'], validate_input=False),
+                reconstruction_target(charts[key], start_tick=w['start_tick'], target_beats=c['target_beats'],
+                    audio_after_beats=c['audio_after_beats'], audio_end_seconds=meta['audio_end_seconds'], validate_input=False),
                 plans[key].window(w['start_tick'], w['end_tick'])))
         return dict(variant=variant, grid=grid, coverage=coverage, conditions=conditions, windows=windows)
 
@@ -138,7 +139,7 @@ def collate_audio(items, *, config, packed=False):
         torch.tensor([ownership[w[1]] for w in windows], dtype=torch.long),
         torch.tensor([w[2] for w in windows], dtype=torch.float32),
         torch.ones(len(windows), dtype=torch.bool),
-        collate_reconstruction([w[3] for w in windows], query_rows=config['reconstruction_query_rows'],
+        collate_reconstruction([w[3] for w in windows],
                                target_beats=config['target_beats'], device='cpu', validate_input=False),
         collate_planner([w[4] for w in windows], device='cpu', validate_input=False), [w[0] for w in windows], variants)
     from maidata.audio.layout import prepare_encoder_layout

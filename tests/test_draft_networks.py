@@ -12,6 +12,10 @@ from maidata.draft.types import BeatMemory, DraftInputs, WindowLatents
 from maidata.draft.windows import select_windows
 from maidata.draft.generator import DenseMoE
 from maidata.nn.position import apply_rope
+from maidata.draft.chart_data import ChartData, OnsetGroup
+from maidata.draft.targets import reconstruction_target, collate_reconstruction
+from maidata.chart.types import Note
+from maidata.time import TimingMap
 
 
 @pytest.fixture
@@ -21,8 +25,20 @@ def config():
                 draft_dropout=0., planner_dim=16, planner_heads=2, planner_mlp_dim=23,
                 planner_dropout=0., reconstruction_layers=2, reconstruction_dim=12,
                 reconstruction_heads=3, reconstruction_ffn_dim=25, reconstruction_dropout=0.,
-                reconstruction_query_rows=17, target_beats=3, reconstruction_before_beats=2,
+                target_beats=3, reconstruction_before_beats=2,
                 reconstruction_after_beats=1)
+
+
+def query_batch(windows, notes=1):
+    timing = TimingMap([(0, 120)])
+    targets = []
+    for start, valid in zip(windows.target_start.tolist(), windows.window_valid.tolist()):
+        chart = ChartData((OnsetGroup(int(start*96), (Note.make('tap', 'A1'),)*notes),),
+                          (), timing, 1000)
+        targets.append(reconstruction_target(chart, start_tick=int(start*96),
+                       target_beats=windows.target_beats) if valid else None)
+    return collate_reconstruction(targets, target_beats=windows.target_beats,
+                                  device=windows.memory.values.device).queries
 
 
 def inputs():
@@ -118,7 +134,7 @@ def test_nan_padding_and_dummy_windows_are_zero(config):
             for name, parameter in module.named_parameters():
                 if name.endswith('bias'):
                     parameter.fill_(.7)
-    plan, reconstruction = p(windows), r(windows)
+    plan, reconstruction = p(windows), r(windows, query_batch(windows))
     assert plan.valid.tolist() == [True, False]
     assert plan.plan_values[1].count_nonzero() == 0
     assert reconstruction.count_logits[1].count_nonzero() == 0
@@ -147,19 +163,25 @@ def test_planner_uses_target_only_with_relative_beat_rope(config):
 
 
 def test_reconstruction_has_no_row_interaction_and_relative_positions(config):
-    short = build_reconstruction(dict(config, reconstruction_query_rows=5)).eval()
-    long = build_reconstruction(dict(config, reconstruction_query_rows=17)).eval()
+    short = build_reconstruction(config).eval()
+    long = build_reconstruction(config).eval()
     long.load_state_dict(short.state_dict(), strict=True)
     windows = WindowLatents(BeatMemory(torch.randn(1, 6, 10), torch.arange(6)[None].float() - 1.5,
                                        torch.ones(1, 6, dtype=torch.bool)),
                             torch.tensor([0.]), 3, torch.tensor([True]))
-    a, b = short(windows), long(windows)
+    full_queries = query_batch(windows, notes=16)
+    short_queries = replace(full_queries, **{name: getattr(full_queries, name)[:, :5]
+                            for name in full_queries.__dataclass_fields__})
+    a, b = short(windows, short_queries), long(windows, full_queries)
     for name in a.field_logits:
         torch.testing.assert_close(a.field_logits[name], b.field_logits[name][:, :5])
     torch.testing.assert_close(a.count_logits, b.count_logits)
     shifted = replace(windows, target_start=windows.target_start + 12,
                       memory=replace(windows.memory, beats=windows.memory.beats + 12))
-    torch.testing.assert_close(a.field_logits['type'], short(shifted).field_logits['type'])
+    shifted_queries = replace(short_queries, beats=short_queries.beats+12,
+                              origins=short_queries.origins+12)
+    torch.testing.assert_close(a.field_logits['kind'],
+                               short(shifted, shifted_queries).field_logits['kind'])
     assert not any('self_attention' in name for name, _ in short.named_modules())
 
 
@@ -177,7 +199,7 @@ def test_rotary_reference_and_cpu_autocast(config):
         windows = select_windows(z, torch.tensor([0]), torch.tensor([-2.]), torch.tensor([True]),
                                  target_beats=3, before_beats=0, after_beats=0)
         plan = build_planner(config).eval()(windows)
-        reconstruction = build_reconstruction(config).eval()(windows)
+        reconstruction = build_reconstruction(config).eval()(windows, query_batch(windows))
     assert z.values.dtype == torch.float32 and torch.isfinite(z.values).all()
     assert plan.plan_values.dtype == torch.float32
     assert torch.isfinite(reconstruction.count_logits).all()
@@ -199,7 +221,7 @@ def test_empty_draft_batch_slot_cannot_revive_from_nan_padding(config):
 
 
 @pytest.mark.parametrize('overrides', [dict(draft_heads=5), dict(planner_heads=16),
-                                       dict(draft_expert_ffn_dim=0), dict(reconstruction_query_rows=None)])
+                                       dict(draft_expert_ffn_dim=0), dict(reconstruction_heads=5)])
 def test_configuration_rejects_mathematically_invalid_shapes(config, overrides):
     config.update(overrides)
     with pytest.raises(ValueError):

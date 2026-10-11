@@ -33,28 +33,22 @@ def build_planner(config):
 
 def build_reconstruction(config):
     from .draft.reconstruction import ReconstructionHead
-    if config['reconstruction_query_rows'] is None:
-        raise ValueError('set reconstruction_query_rows from new-field target lengths including SEGMENT_END')
-    keys = ('layers', 'dim', 'heads', 'ffn_dim', 'dropout', 'norm_eps', 'query_rows',
+    keys = ('layers', 'dim', 'heads', 'ffn_dim', 'dropout', 'norm_eps',
             'position_base', 'position_scale')
     return ReconstructionHead(latent_dim=config['draft_latent_dim'], target_beats=config['target_beats'],
                                **{key: config['reconstruction_' + key] for key in keys})
 
 
 def decoder_time_distributions(config):
-    from .decoder.probability import TimeDistribution
-    if set(config['decoder_time_distributions']) != {'MOMENT', 'HOLD_DURATION', 'SLIDE_DURATION'}:
-        raise ValueError('Decoder requires three independent time distribution configurations')
-    return {name: TimeDistribution(**values) for name, values in config['decoder_time_distributions'].items()}
+    """385-way categorical heads have no continuous mixture configuration."""
+    return {name: 'relative-tick384-continue' for name in ('MOMENT', 'HOLD_DURATION', 'SLIDE_DURATION')}
 
 
 def build_decoder(config):
     from .decoder.network import Decoder
     keys = ('dim', 'layers', 'router_layer', 'heads', 'shared_ffn_dim', 'expert_ffn_dim',
             'experts', 'readout_ffn_dim', 'dropout', 'norm_eps', 'rope_base', 'rope_position_scale',
-            'note_dims', 'route_dims', 'time_base', 'time_scale', 'time_components', 'condition_gate_init')
+            'note_dims', 'route_dims', 'time_base', 'time_scale', 'condition_gate_init')
     model = Decoder(audio_dim=config['d_model'], latent_dim=config['draft_latent_dim'],
                     **{key: config['decoder_' + key] for key in keys})
-    for name, spec in decoder_time_distributions(config).items():
-        spec.initialize(model.heads.times[name])
     return model

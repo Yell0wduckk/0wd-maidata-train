@@ -57,7 +57,7 @@ def small_chain():
         draft_layers=2, draft_dim=24, draft_heads=3, draft_experts=3, draft_expert_ffn_dim=29,
         draft_latent_dim=10, planner_dim=16, planner_heads=2, planner_mlp_dim=23, planner_dropout=0.,
         reconstruction_dim=12, reconstruction_heads=3, reconstruction_ffn_dim=25,
-        reconstruction_dropout=0., reconstruction_query_rows=12,
+        reconstruction_dropout=0.,
         reconstruction_before_beats=2, reconstruction_after_beats=1)
     timing = TimingMap([(0, 120)])
     coverage = song_coverage(timing, 1.2, first_beat=0, target_beats=3)
@@ -122,12 +122,12 @@ def test_trainable_chain_empty_tail_and_auxiliary_gradients():
     assert z.values.shape == (1, 6, 10) and z.valid.all()
     assert z.values[0, 3:].abs().sum() > 0  # No local audio, but a valid supervised tail.
     groups, starts, valid = torch.tensor([0, 0, 0]), torch.tensor([0., 3., 6.]), torch.tensor([True, True, False])
-    ro, po = predict_auxiliary(z, groups, starts, valid, r, p, config)
     chart = ChartData((OnsetGroup(0, (Note.make('tap', 'A1'),)),
                        OnsetGroup(120, (Note.make('touch', 'C'),))),
                       (PlanNote(0, 'tap', 1), PlanNote(120, 'touch', None)), timing, 3)
     rt = collate_reconstruction([reconstruction_target(chart, start_tick=s * 96, target_beats=3)
-                                 for s in (0, 3)] + [None], query_rows=12, target_beats=3, device='cpu')
+                                 for s in (0, 3)] + [None], target_beats=3, device='cpu')
+    ro, po = predict_auxiliary(z, groups, starts, valid, r, p, config, queries=rt.queries)
     labels = MusicPlanTargets(chart)
     pt = collate_planner([labels.window(0, 288), labels.window(288, 576), None], device='cpu')
     terms = auxiliary_losses(ro, po, rt, pt, config)
@@ -135,7 +135,7 @@ def test_trainable_chain_empty_tail_and_auxiliary_gradients():
     sum(term.mean for term in terms.values()).backward()
     for module in (e.spectral.stem, e.feature_fusion.project, e.song_tokenizer.project,
                    d.blocks[0].cross_attention.key, d.output, p.continuous,
-                   r.field_heads['field_type'], r.count_head):
+                   r.field_heads['field_kind'], r.count_head):
         assert module.weight.grad is not None
         assert torch.isfinite(module.weight.grad).all() and module.weight.grad.abs().sum() > 0
     assert terms['count'].count == 6 and terms['planner_category'].count == 2
@@ -174,7 +174,7 @@ def test_external_consumer_gradient_and_actual_freezing(condition_path):
 
 def test_default_network_shapes_and_decoupled_imports():
     d, p = build_draft(CONFIG).eval(), build_planner(CONFIG).eval()
-    r = build_reconstruction(dict(CONFIG, reconstruction_query_rows=9)).eval()
+    r = build_reconstruction(CONFIG).eval()
     audio = BeatMemory(torch.randn(1, 5, 256), torch.arange(5).float()[None], torch.ones(1, 5, dtype=torch.bool))
     inputs = DraftInputs(torch.arange(32).float()[None] + .5, torch.ones(1, 32, dtype=torch.bool),
                          torch.tensor([0]), torch.tensor([5]), torch.tensor([14.6]), torch.tensor([4.5]))
@@ -186,7 +186,14 @@ def test_default_network_shapes_and_decoupled_imports():
                             target_beats=16, before_beats=0, after_beats=0)
         assert z.values.shape == (1, 32, 128) and rw.memory.values.shape == (1, 48, 128)
         assert p(pw).plan_values.shape == (1, 12)
-        assert r(rw).count_logits.shape == (1, 16, 97)
+        empty_chart = ChartData((), (), TimingMap([(0, 120)]), 32)
+        labels = collate_reconstruction([reconstruction_target(empty_chart, start_tick=16*96,
+            target_beats=16)], target_beats=16, device='cpu')
+        output = r(rw, labels.queries)
+        assert output.count_logits.shape == (1, 16, 97)
+        assert all(v.shape == (1, labels.queries.valid.shape[1], 385)
+                   for v in output.time_predictions.values())
+        assert 'type' not in output.field_logits
     source = str(Path(__file__).resolve().parents[1] / 'src')
     env = dict(os.environ, PYTHONPATH=source)
     code = '''
@@ -194,7 +201,7 @@ import sys
 from maidata.entry import CONFIG
 from maidata.model import build_draft, build_reconstruction, build_planner
 build_draft(CONFIG)
-build_reconstruction(dict(CONFIG, reconstruction_query_rows=4))
+build_reconstruction(CONFIG)
 build_planner(CONFIG)
 from maidata.draft.chart_data import from_record
 from maidata.draft.supervision import predict_auxiliary

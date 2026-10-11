@@ -12,6 +12,8 @@ from .actions import materialize
 from .conflicts import Conflict, action_conflicts, branch_conflicts, capacity_conflicts
 from .state import Decision, PhysicalState
 from .support import CATEGORIES, duration_support, moment_support
+from maidata.time import duration_end, advance_ticks
+from .rules import EPS
 
 
 @dataclass(frozen=True)
@@ -85,6 +87,11 @@ class AttributionState:
     def __init__(self, physical):
         self.physical = physical
         self.charged = frozenset()
+        # Offline window compilation may restrict only the candidate duration
+        # domain. Source actions and audio identity always retain their values.
+        self.duration_end_seconds = None
+        self.duration_support_provider = None
+        self.route_evaluation_provider = None
 
     def snapshot(self):
         return AttributionSnapshot(self.physical.snapshot(), self.charged)
@@ -111,6 +118,11 @@ class AttributionState:
     def _action(self, completion, *, touch_repeat=True, deferred=False):
         p = self.physical
         basic = p._basic(completion)
+        duration = completion.track.duration_tick if completion.track else completion.duration_tick
+        if (not basic and duration is not None and self.duration_end_seconds is not None
+                and duration_end(p.timing, completion.tick, duration, slide=completion.track is not None)
+                > self.duration_end_seconds+EPS):
+            basic = ('duration_outside_local_audio',)
         if basic:
             return self._leaf(basic)
         action = materialize(completion, p.timing, p.geometry)
@@ -125,10 +137,16 @@ class AttributionState:
         other.grammar, other.actions = grammar, p.actions
         result = AttributionState(other)
         result.charged = self.charged
+        result.duration_end_seconds = self.duration_end_seconds
+        result.duration_support_provider = self.duration_support_provider
         return result
 
     def query(self, token, *, window_end=None, touch_repeat=True):
         p = self.physical
+        if isinstance(token, Route) and self.route_evaluation_provider is not None:
+            cached = self.route_evaluation_provider(self, token)
+            if cached is not None:
+                return cached
         try:
             grammar, completion = p._trial(token, window_end)
         except ValueError as exc:
@@ -172,7 +190,50 @@ class AttributionState:
         return {kind: project(self.query_positions(kind, touch_repeat=False).values()) for kind in KINDS}
 
     def _duration_values(self):
-        return duration_support(self.physical, query=self.query, record=lambda value: value)
+        p, s = self.physical, self.physical.grammar.state
+        support = (self.duration_support_provider(self)
+                   if self.duration_support_provider is not None else None)
+        if support is None:
+            return duration_support(p, query=self.query, record=lambda value: value,
+                                    end_seconds=self.duration_end_seconds)
+        # Reuse exact integer partitions and conflict witnesses. Rebuild only
+        # the responsibility ledger, which can move earlier under a local cap.
+        import math
+        lower, upper = support['domain']
+        slide = s.phase == 'chain'
+        if self.duration_end_seconds is not None:
+            origin = p.timing.second(s.cursor + (96 if slide else 0))
+            upper = min(upper, math.floor((self.duration_end_seconds-origin+EPS)
+                                        / p.timing.written_tick_seconds(s.cursor)))
+        from .support import _cuts, _times
+        origin = p.timing.second(s.cursor + (96 if slide else 0))
+        scale = p.timing.written_tick_seconds(s.cursor)
+        inherited_roots = [(advance_ticks(p.timing, t, -22)-origin)/scale
+                           for t in _times(p.actions)]
+        rows = []
+        for a, b, record in support['intervals']:
+            a, b = max(a, lower), min(b, upper)
+            if a > b:
+                continue
+            # An old charged witness can hide a penalty boundary when equal
+            # intervals were merged. Restore release/capacity crossings from
+            # cached action times without recomputing any route geometry.
+            cuts = _cuts(inherited_roots, a, b)
+            for begin, stop in zip(cuts, cuts[1:]):
+                tick = (begin+stop-1)//2
+                start = p.timing.second(s.cursor)
+                end = advance_ticks(p.timing, duration_end(p.timing, s.cursor, tick, slide=slide), 22)
+                spans = [(start, p.timing.second(s.cursor+2) if s.track_count == 0 else start),
+                         (p.timing.second(s.cursor+96), end)] if slide else [(start, end)]
+                inherited = capacity_conflicts(p.actions, spans)
+                value = self._leaf(record['basic'],
+                    frozenset(Conflict.from_record(c) for c in record['conflicts']),
+                    inherited=inherited, deferred=record['deferred'])
+                if rows and rows[-1][1]+1 == begin and rows[-1][2] == value:
+                    rows[-1][1] = stop-1
+                else:
+                    rows.append([begin, stop-1, value])
+        return dict(domain=[lower, upper], intervals=rows, outside_basic=support['outside_basic'])
 
     def _duration_projection(self):
         support = self._duration_values()
@@ -197,6 +258,10 @@ class AttributionState:
         return result
 
     def time_support(self, kind):
+        if kind != 'MOMENT':
+            support = self._duration_values()
+            return dict(support, intervals=[[a, b, value.record()]
+                         for a, b, value in support['intervals']])
         producer = moment_support if kind == 'MOMENT' else duration_support
         return producer(self.physical, query=self.query, record=Evaluation.record)
 

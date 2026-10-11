@@ -8,6 +8,8 @@
 
 独立的 `maidata.chart`、`maidata.time` 与 `maidata.physical` 已实现新字段的数据与规则层：IR编解码、Route-71连续链/分支、时间标签、Physical候选查询及动作回退。它们不实现可学习字段模块或Decoder网络，说明见[新字段与Physical](docs/chart-fields-physical.md)。
 
+当前R采用独立局部字段查询，保留一拍一个128维Z与目标全部16拍Planner；主M保留type/kind/pad/flags/route，Router、真实历史KV和临时字段位置分开。三种时间均使用385类`1..384+CONT`，CONT不增加真实事件或主KV。训练入口默认GT plan，自由推理用P预测。新v3监督从精确原谱和完整整数支持重新编译，增量/从零共用入口，见[迁移命令](docs/time384-cache-migration.md)。超本地音频窗GT duration保持精确记录并明确报告为延期边界。
+
 仅覆盖 Encoder 的模块、接口与验证要求见 [实施文档](../0wd-v3-refactor-docs/encoder-execution-plan.md)。
 
 ## 保留的旧模型与新 Encoder
@@ -29,6 +31,7 @@
 - [Draft D/R/P、窗口、标签与损失接口](docs/draft.md)
 - [Decoder、Router/MMoE、小头、窗口与损失接口](docs/decoder.md)
 - [主 Decoder 阶段二训练与恢复](docs/decoder-training.md)
+- [384 tick 时间监督缓存迁移与从零生产](docs/time384-cache-migration.md)
 - [当前模型整曲推理与可播放 maidata 导出](docs/maidata-inference.md)
 - [全官谱音频输入缓存](docs/encoder-audio-cache.md)
 - [新字段、时间与 Physical](docs/chart-fields-physical.md)
@@ -55,4 +58,4 @@ python -m maidata --show-config
 python -m maidata
 ```
 
-默认命令成功构建 `AudioEncoder`；`--component draft/planner/reconstruction` 分别构建独立组件，R需先在配置中填入新字段行容量。Decoder可通过`--component decoder`独立构建；阶段一训练使用`python -m maidata.training`，阶段二使用`python -m maidata.decoder_training`；整曲推理使用`python -m maidata.inference`，物化使用`python -m maidata.inference.materialize`。CPU验证命令见[Encoder入口](docs/maidata-entry.md#cpu-合成验证)及[Draft接口](docs/draft.md)；不代表CUDA、训练或整模型推理已验证。旧测试、fixture、权重、数据、缓存和运行产物没有复制；新测试按各模块范围维护。旧配置和远端launcher是来源参考，不是新实验默认命令。
+默认命令成功构建 `AudioEncoder`；`--component draft/planner/reconstruction` 分别构建独立组件，R使用独立局部查询，无固定行容量。Decoder可通过`--component decoder`独立构建；阶段一训练使用`python -m maidata.training`，阶段二使用`python -m maidata.decoder_training`；整曲推理使用`python -m maidata.inference`，物化使用`python -m maidata.inference.materialize`。CPU验证命令见[Encoder入口](docs/maidata-entry.md#cpu-合成验证)及[Draft接口](docs/draft.md)；不代表CUDA、训练或谱面质量已验证。旧测试、fixture、权重、数据、缓存和运行产物没有复制；新测试按各模块范围维护。旧配置和远端launcher是来源参考，不是新实验默认命令。

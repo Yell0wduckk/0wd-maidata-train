@@ -34,7 +34,7 @@
 
 `Grammar.close_window(target)`或`PhysicalState.close_window(target)`消费终端目标，不把它加入真实谱面，不替换最后真实起音，不提交动作。未完成NOTE/轨道禁止关闭；快照支持回到关闭之前。精确、整数格点的窗外MOMENT也可经带`window_end`的语法关闭窗口。
 
-`duration_cells(kind, lower, upper, timing=..., onset_tick=...)`返回4 tick桶的代表tick及积分边界：hold为毫秒，slide为tick；首尾按合法边界裁剪。`duration_target_bucket`使用half-up标签。原始整数时长保留，只有候选/标签层分桶；不实现概率头、CDF或loss。
+`duration_cells` / `duration_target_bucket`保留供旧连续窗口工具使用，其4 tick桶不能恢复精确源tick。新R/M使用`time.discrete`的`1..384+CONT`及精确整数支持：唯一编码、written-BPM临时query、窗尾关闭、右删失集合和本地duration cap由共享编译器处理，详见[缓存迁移](time384-cache-migration.md)。原谱token和Physical动作仍保存完整精确值，CONT不进入语义谱面。
 
 ## Physical 查询与状态
 

@@ -1,4 +1,4 @@
-"""Offline v1 window-tensor conversion; no chart/Physical/audio regeneration."""
+"""Legacy continuous-time v1→v2 compaction; never a tick384 CE migration."""
 from concurrent.futures import ProcessPoolExecutor
 import argparse
 import json
@@ -6,7 +6,9 @@ from pathlib import Path
 import torch
 
 from .intervals import compact_labels
-from .window_cache import SCHEMA, tensor_pack, tensor_unpack
+from .window_cache import tensor_pack, tensor_unpack
+
+SCHEMA = 'maidata.decoder-window-tensors.v2'
 
 
 def initialize():
@@ -39,6 +41,8 @@ def convert(source, destination, *, workers=12):
     if destination.exists() and any(destination.iterdir()):
         raise FileExistsError('compact output must be new or empty')
     original = json.loads((source/'manifest.json').read_text(encoding='utf-8'))
+    if original['schema'] not in ('maidata.decoder-window-tensors.v1', SCHEMA):
+        raise ValueError('legacy compaction accepts only continuous-time v1/v2 windows')
     destination.mkdir(parents=True, exist_ok=True)
     result = dict(original, schema=SCHEMA, complete=False, windows={},
                   time_support='merged-equal-target-and-physical-intervals')

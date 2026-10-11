@@ -8,13 +8,15 @@ from maidata.chart.types import (GENERATED_TYPES, KINDS, FLAGS, APPLICABLE, BUTT
                                 TOUCH_PADS, Note, Route, Moment)
 from maidata.chart.windows import TimeTarget
 from maidata.time import duration_end
-from .supports import categorical_support, time_candidates
-from .probability import categorical_log_probabilities, interval_log_probabilities
+from .supports import categorical_support
+from .probability import categorical_log_probabilities
 from .losses import Reduction, DecoderLoss, nll, physical_categories
+from maidata.time.discrete import compile_support_tree
+from maidata.time.distribution import time_path_nll, complete_field_log_probabilities
 
 
 def prediction_loss(heads, h, type_logits, target, stage, *, timing, window_end, cap_tick,
-                    audio_end_seconds, distributions, geometry):
+                    audio_end_seconds, distributions, geometry, time_states=None):
     """One supervised row; the result can be added across windows/chunks before mean."""
     device = h.device
     zero = h.sum() * 0
@@ -76,12 +78,18 @@ def prediction_loss(heads, h, type_logits, target, stage, *, timing, window_end,
             logits = heads.break_logits(h[None], torch.tensor([target.route_id], device=device))[0]
             discrete(logits, torch.ones(2, dtype=torch.bool, device=device), target.track_break)
     else:
-        candidates = time_candidates(stage, timing, kind=name, window_end=window_end, cap_tick=cap_tick, device=device)
-        raw = heads.time_parameters(h, name)
-        lp = interval_log_probabilities(raw, candidates.lower, candidates.upper, candidates.valid, distributions[name])
-        main = main + nll(lp, candidates.target_mask(target, timing, stage['cursor_tick']))
-        if candidates.choices > 1:
-            physical = physical + Reduction(physical_categories(lp, candidates.penalty), 1)
+        tree = compile_support_tree(stage,timing,kind=name,window_end=window_end,cap_tick=cap_tick,target=target)
+        if time_states is None or len(time_states) != len(tree.basic):
+            raise ValueError('time supervision requires a separate state at every reachable CONT query')
+        allowed = torch.tensor(tree.basic,device=device)
+        raw = heads.time_logits(time_states,name)
+        value = time_path_nll(raw,allowed,torch.tensor(tree.target,device=device),
+                              torch.tensor(tree.target_steps,device=device))
+        main = main + Reduction(value,1)
+        if (allowed.sum(-1)>1).any():
+            lp = complete_field_log_probabilities(raw,allowed,torch.tensor(tree.continuation_closes,device=device))
+            penalty = torch.tensor(tree.penalty,device=device)
+            physical = physical + Reduction(physical_categories(lp.flatten(),penalty.flatten(0,1)),1)
     return DecoderLoss(main, physical, judge, trajectory)
 
 
@@ -97,8 +105,24 @@ def decoder_loss(heads, output, examples, stages, timings, audio_ends, *, distri
             raise ValueError('missing known-prefix support rows')
         for row, (target, supervised) in enumerate(zip(example.targets, example.supervised)):
             if supervised:
-                result = result + prediction_loss(heads, output.hidden[batch, row], output.type_logits[batch, row],
+                stage = stages[batch][row]
+                name = 'MOMENT' if isinstance(target,TimeTarget) else target.type
+                device = output.hidden.device
+                index = torch.tensor([[batch,row]],device=device)
+                origin = stage['cursor_tick']
+                def query(beats,elapsed):
+                    size = len(beats)
+                    return output.field_reader(output,index.expand(size,-1),torch.tensor(beats,device=device),
+                        torch.full((size,),GENERATED_TYPES.index(name),device=device,dtype=torch.long),
+                        torch.full((size,),origin,device=device,dtype=torch.long),torch.tensor(elapsed,device=device))
+                if name in ('NOTE','ROUTE'):
+                    h,time_states = query([origin/96],[0])[0],None
+                else:
+                    tree = compile_support_tree(stage,timings[batch],kind=name,window_end=example.end_tick,
+                                                cap_tick=example.cap_tick,target=target)
+                    h,time_states = output.hidden[batch,row],query(tree.query_beats,tree.elapsed_ticks)
+                result = result + prediction_loss(heads, h, output.type_logits[batch, row],
                     target, stages[batch][row], timing=timings[batch], window_end=example.end_tick,
                     cap_tick=example.cap_tick, audio_end_seconds=audio_ends[batch],
-                    distributions=distributions, geometry=geometry)
+                    distributions=distributions, geometry=geometry,time_states=time_states)
     return result

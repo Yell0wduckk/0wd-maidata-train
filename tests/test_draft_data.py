@@ -19,7 +19,7 @@ from maidata.draft.targets import (reconstruction_target, collate_reconstruction
                                   required_query_rows)
 from maidata.draft.losses import reconstruction_loss, planner_loss
 from maidata.draft.types import ReconstructionOutput, PlannerOutput
-from maidata.draft.schema import ROW_TYPES, FIELD_SIZES, TIME_FIELDS
+from maidata.draft.schema import FIELD_SIZES, TIME_FIELDS
 
 
 def record():
@@ -40,37 +40,42 @@ def record():
 def test_new_field_rows_boundary_and_chain_ownership():
     chart = from_record(record())
     target = reconstruction_target(chart, start_tick=0, target_beats=3)
-    assert len(target.rows) == 14
-    assert [r.fields['type'] for r in target.rows] == [ROW_TYPES.index(name) for name in (
-        'MOMENT', 'NOTE', 'ROUTE', 'ROUTE', 'SLIDE_DURATION', 'ROUTE', 'SLIDE_DURATION',
-        'NOTE', 'MOMENT', 'NOTE', 'MOMENT', 'NOTE', 'HOLD_DURATION', 'SEGMENT_END')]
-    assert target.rows[0].times == {'moment_position_tick': 0}
-    assert target.rows[2].fields['track_break'] == 0
-    assert 'track_break' not in target.rows[3].fields
-    assert target.rows[5].fields['track_break'] == 1
-    assert target.rows[4].times == {'slide_duration_tick': 192}
+    assert len(target.rows) == 13
+    assert [r.query.role for r in target.rows] == [
+        'NOTE', 'ROUTE', 'ROUTE', 'SLIDE_DURATION', 'ROUTE', 'SLIDE_DURATION',
+        'NOTE', 'MOMENT', 'NOTE', 'MOMENT', 'NOTE', 'HOLD_DURATION', 'MOMENT']
+    assert target.rows[0].query.beat == 0  # Window-head NOTE needs no delta=0.
+    assert target.rows[1].fields['track_break'] == 0
+    assert 'track_break' not in target.rows[2].fields
+    assert target.rows[4].fields['track_break'] == 1
+    assert target.rows[3].times == {'slide_duration_tick': 192}
     assert target.moment_counts == (1, 1, 1)  # Two NOTE owners at beat zero are one MOMENT.
-    assert required_query_rows([len(target.rows), 1]) == 14
+    assert required_query_rows([len(target.rows), 1]) == 13
     batch = collate_reconstruction([target], query_rows=17, target_beats=3, device='cpu')
-    assert batch.fields['track_break'][0, 2] == 0
-    assert batch.fields['track_break'][0, 3] == -100
-    assert batch.fields['type'][0, 14:].eq(-100).all()
-    with pytest.raises(ValueError, match='cannot hold'):
-        collate_reconstruction([target], query_rows=13, target_beats=3, device='cpu')
+    assert batch.fields['track_break'][0, 1] == 0
+    assert batch.fields['track_break'][0, 2] == -100
+    assert batch.queries.valid.shape == (1, 13)
+    assert 'type' not in batch.fields and all('pad' not in n for n in batch.fields)
+    # Legacy capacity hints neither pad query inputs nor truncate real fields.
+    narrow = collate_reconstruction([target], query_rows=1, target_beats=3, device='cpu')
+    assert narrow.queries.valid.shape == batch.queries.valid.shape
+    assert target.rows[5].query.route_prefix == (70,)
     damaged = record()
     damaged['token_map'][3]['owner'] = 1
     with pytest.raises(ValueError, match='owner'):
         from_record(damaged)
 
 
-def test_empty_window_is_eos_and_zero_count_not_padding():
+def test_empty_window_is_terminal_moment_and_zero_count_not_padding():
     chart = from_record(record())
     empty = reconstruction_target(chart, start_tick=10 * 96, target_beats=3)
     labels = collate_reconstruction([empty, None], query_rows=7, target_beats=3, device='cpu')
     assert len(empty.rows) == 1 and empty.moment_counts == (0, 0, 0)
     assert labels.valid.tolist() == [True, False]
-    assert labels.fields['type'][0, 0] == ROW_TYPES.index('SEGMENT_END')
-    assert labels.fields['type'][1].eq(-100).all()
+    assert empty.rows[0].query.role == 'MOMENT'
+    assert labels.time_valid['moment_position_tick'][0, 0]
+    assert all(values.eq(-100).all() for values in labels.fields.values())
+    assert not labels.queries.valid[1].any()
     plan = MusicPlanTargets(chart).window(10 * 96, 13 * 96)
     assert plan.continuous == (0.,) * 8 and plan.category == 0
     assert collate_planner([plan, None], device='cpu').valid.tolist() == [True, False]
@@ -141,7 +146,7 @@ def test_metadata_level_and_audio_span_are_separate_from_chart_end(tmp_path):
     missing = record()
     del missing['metadata']['render_end_beat']
     parsed = from_record(missing)
-    assert len(reconstruction_target(parsed, start_tick=0, target_beats=3).rows) == 14
+    assert len(reconstruction_target(parsed, start_tick=0, target_beats=3).rows) == 13
     with pytest.raises(ValueError, match='source final'):
         MusicPlanTargets(parsed)
     assert from_record(missing, source_end_beat='17/2').source_end_beat == Fraction(17, 2)
@@ -159,7 +164,7 @@ def test_planner_recovers_missing_end_from_selected_source_only(tmp_path):
     missing['source'] = dict(source_path=str(path), difficulty='5')
     with patch.object(Path, 'read_text', side_effect=AssertionError('R must not read the source')):
         chart = from_record(missing)
-        assert len(reconstruction_target(chart, start_tick=0, target_beats=3).rows) == 14
+        assert len(reconstruction_target(chart, start_tick=0, target_beats=3).rows) == 13
     # Three full cells and two half cells, including the trailing empty cell.
     planner = MusicPlanTargets(chart)
     assert planner.source_end_beat == 4
@@ -221,22 +226,24 @@ def test_losses_support_na_empty_padding_and_independent_reduction():
     real = reconstruction_target(chart, start_tick=0, target_beats=3)
     empty = reconstruction_target(chart, start_tick=9 * 96, target_beats=3)
     target = collate_reconstruction([real, empty, None], query_rows=17, target_beats=3, device='cpu')
-    logits = {name: torch.zeros(3, 17, size, requires_grad=True) for name, size in FIELD_SIZES.items()}
-    times = {name: torch.zeros(3, 17, requires_grad=True) for name in TIME_FIELDS}
+    width = target.queries.valid.shape[1]
+    logits = {name: torch.zeros(3, width, size, requires_grad=True) for name, size in FIELD_SIZES.items()}
+    times = {name: torch.zeros(3, width, 385, requires_grad=True) for name in TIME_FIELDS}
     count = torch.zeros(3, 3, 97, requires_grad=True)
     output = ReconstructionOutput(logits, times, count, target.valid)
-    terms = reconstruction_loss(output, target, label_smoothing=.05, smooth_l1_beta=1.)
+    terms = reconstruction_loss(output, target, label_smoothing=.05)
     assert terms['classification'].count == sum((v != -100).sum() for v in target.fields.values())
-    assert terms['time'].count == 6 and terms['count'].count == 6
+    assert terms['time'].count == 7 and terms['count'].count == 6
     assert terms['count'].mean.item() == pytest.approx(math.log(97))
     sum(term.mean for term in terms.values()).backward()
     assert count.grad[1].abs().sum() > 0  # Extra empty target is supervised.
     assert count.grad[2].count_nonzero() == 0
-    assert logits['type'].grad[1, 0].abs().sum() > 0
-    assert logits['type'].grad[1, 1:].count_nonzero() == 0
-    assert logits['track_break'].grad[0, 3].count_nonzero() == 0  # Continuation NA.
-    assert logits['track_break'].grad[0, 2].abs().sum() > 0  # Applicable zero.
-    assert times['moment_position_tick'].grad[0, 8] < 0
+    assert all(value.grad[1].count_nonzero() == 0 for value in logits.values())
+    assert logits['track_break'].grad[0, 2].count_nonzero() == 0  # Continuation NA.
+    assert logits['track_break'].grad[0, 1].abs().sum() > 0  # Applicable zero.
+    assert times['moment_position_tick'].grad[0, 7, 95] < 0
+    assert times['moment_position_tick'].grad[1, 0].abs().sum() > 0  # Empty terminal.
+    assert all(value.grad[2].count_nonzero() == 0 for value in times.values())
 
     targets = collate_planner([MusicPlanTargets(chart).window(0, 288),
                                MusicPlanTargets(chart).window(864, 1152), None], device='cpu')
@@ -256,10 +263,10 @@ def test_losses_support_na_empty_padding_and_independent_reduction():
 def test_all_padding_losses_finite_zero_with_gradients():
     r = collate_reconstruction([None], query_rows=2, target_beats=3, device='cpu')
     output = ReconstructionOutput(
-        {name: torch.zeros(1, 2, size, requires_grad=True) for name, size in FIELD_SIZES.items()},
-        {name: torch.zeros(1, 2, requires_grad=True) for name in TIME_FIELDS},
+        {name: torch.zeros(1, 1, size, requires_grad=True) for name, size in FIELD_SIZES.items()},
+        {name: torch.zeros(1, 1, 385, requires_grad=True) for name in TIME_FIELDS},
         torch.zeros(1, 3, 97, requires_grad=True), r.valid)
-    terms = reconstruction_loss(output, r, label_smoothing=.05, smooth_l1_beta=1.)
+    terms = reconstruction_loss(output, r, label_smoothing=.05)
     p = collate_planner([None], device='cpu')
     prediction = PlannerOutput(torch.zeros(1, 8, requires_grad=True), torch.zeros(1, 4, requires_grad=True),
                                 torch.zeros(1, 12), p.valid)

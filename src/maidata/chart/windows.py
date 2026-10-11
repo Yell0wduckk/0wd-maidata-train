@@ -12,6 +12,9 @@ class TimeTarget:
     absolute_tick: float
     censored: bool
     closes_window: bool
+    closed_by_continue: bool = False
+    lower_bound_tick: float | None = None
+    query_tick: float | None = None
 
     def __post_init__(self):
         if (not math.isfinite(self.delta_ms) or self.delta_ms < 0

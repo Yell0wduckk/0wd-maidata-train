@@ -205,16 +205,30 @@ def test_convert_existing_window_without_opening_chart_or_physical(tmp_path):
         assert torch.equal(actual['tokens']['time'], expected['tokens']['time'])
 
 
-def test_final_time_diagnostic_reports_gt_mass_not_merged_region_argmax():
-    c = config()
-    model = build_decoder(c)
-    group = compact_time_group(dense_group())
-    labels = Prepared({'MOMENT': group}, {'main': 4, 'physical': 4, 'judge': 0, 'trajectory': 0},
-                      dict(indices=torch.empty(0, 2, dtype=torch.long), args=torch.empty(0, 2, dtype=torch.long)))
-    output = SimpleNamespace(hidden=torch.randn(1, 4, c['decoder_dim']), type_logits=torch.randn(1, 4, 5))
-    discrete, time = {}, {}
-    terms = loss(model.heads, output, labels, distributions=decoder_time_distributions(c), geometry=None,
-                 diagnostics=discrete, time_diagnostics=time)
-    assert not discrete and time['MOMENT']['count'] == 4
-    assert time['MOMENT']['nll_sum'] == float(terms.main.total.detach())
-    assert 0 < time['MOMENT']['probability_sum'] <= 4
+def test_final_time_diagnostic_reports_complete_path_probability_per_field():
+    from maidata.time.discrete import compile_support_tree
+    c=config()
+    model=build_decoder(c)
+    timing=TimingMap([(0,120)])
+    stage=dict(cursor_tick=0,moment=dict(domain=[1,1920],outside_basic='outside',
+        intervals=[[1,1920,decision()]]))
+    trees=[compile_support_tree(stage,timing,kind='MOMENT',window_end=1536,cap_tick=1920,
+        target=Moment(timing.delta_ms(0,tick))) for tick in (1,385,769,1200)]
+    group=dict(indices=torch.tensor([[0,i] for i in range(4)]),
+        allowed=torch.tensor([v.basic for v in trees]),penalty=torch.tensor([v.penalty for v in trees]),
+        target=torch.tensor([v.target for v in trees]),target_steps=torch.tensor([v.target_steps for v in trees]),
+        closes=torch.tensor([v.continuation_closes for v in trees]),query_beats=torch.tensor([v.query_beats for v in trees]),
+        elapsed=torch.tensor([v.elapsed_ticks for v in trees]),origins=torch.zeros(4,dtype=torch.long),
+        roles=torch.zeros(4,dtype=torch.long),main=torch.ones(4,dtype=torch.bool),scale=torch.ones(4),
+        args=torch.empty(4,0,dtype=torch.long),has_physical=True,owner_spans=[(0,0,4)])
+    labels=Prepared({'MOMENT':group},{'main':4,'physical':4,'judge':0,'trajectory':0},
+        dict(indices=torch.empty(0,2,dtype=torch.long),args=torch.empty(0,2,dtype=torch.long),
+             query_rows=torch.empty(0,dtype=torch.long)))
+    output=SimpleNamespace(hidden=torch.randn(1,4,c['decoder_dim']),type_logits=torch.randn(1,4,5))
+    output.field_reader=lambda out,index,*args,**kwargs: out.hidden[index[:,0],index[:,1]]
+    discrete,time={},{}
+    terms=loss(model.heads,output,labels,distributions=decoder_time_distributions(c),geometry=None,
+               diagnostics=discrete,time_diagnostics=time)
+    assert not discrete and time['MOMENT']['count']==4
+    assert time['MOMENT']['nll_sum']==float(terms.main.total.detach())
+    assert 0<time['MOMENT']['probability_sum']<=4

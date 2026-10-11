@@ -1,4 +1,4 @@
-"""Measure fixed R capacity from explicitly selected base windows and v2 charts."""
+"""Measure independent R query/substep cost on selected base windows."""
 import argparse
 from collections import Counter, defaultdict
 import json
@@ -18,7 +18,7 @@ def _read(path):
 def _summary(rows):
     lengths = sorted(row['query_rows'] for row in rows)
     return dict(charts=len({row['chart_id'] for row in rows}), windows=len(rows),
-                empty_windows=sum(n == 1 for n in lengths),
+                empty_windows=sum(not any(row['moment_counts']) for row in rows),
                 max=required_query_rows(lengths),
                 p50=lengths[math.ceil(.5 * len(lengths)) - 1],
                 p95=lengths[math.ceil(.95 * len(lengths)) - 1],
@@ -59,15 +59,18 @@ def measure_capacity(plan_path, split_path, *, chart_cache=None):
             if window['end_tick'] - window['start_tick'] != target_beats * 96:
                 raise ValueError('window length differs from the sampling plan')
             target = reconstruction_target(chart, start_tick=window['start_tick'], target_beats=target_beats)
-            counts = Counter(ROW_TYPES[row.fields['type']] for row in target.rows)
+            counts = Counter(row.query.role for row in target.rows)
             rows.append(dict(window_id=window['window_id'], chart_id=chart_id, split=owners[chart_id],
                              start_tick=window['start_tick'], end_tick=window['end_tick'],
-                             query_rows=len(target.rows), row_types=dict(counts)))
+                             query_rows=len(target.rows), query_cost=target.query_cost,
+                             original_time_fields=sum(r.first_time_step for r in target.rows),
+                             moment_counts=target.moment_counts, query_roles=dict(counts),
+                             deferred_durations=target.deferred_durations))
     summary = _summary(rows)
-    report = dict(schema='maidata.draft-capacity.v1', plan=str(plan_path.resolve()),
+    report = dict(schema='maidata.draft-query-cost.v2', plan=str(plan_path.resolve()),
                   split=str(split_path.resolve()), chart_cache=str(cache.resolve()),
                   target_beats=target_beats, target_stride_beats=plan['config']['target_stride_beats'],
-                  counts_include_segment_end=True, query_rows=summary['max'], all=summary,
+                  representation='relative-tick384-continue', max_query_substeps=summary['max'], all=summary,
                   splits={side: _summary([r for r in rows if r['split'] == side])
                           for side in ('train', 'validation')},
                   max_windows=[r for r in rows if r['query_rows'] == summary['max']])

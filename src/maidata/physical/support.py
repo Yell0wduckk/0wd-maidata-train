@@ -1,6 +1,7 @@
 """Exact integer support partitions from the interval rule change points.
 
-No duration search limit: the basic domain ends at the actual audio boundary.
+No duration search limit: the basic domain ends at the actual audio boundary,
+or an explicitly supplied local window boundary for offline window candidates.
 All time comparisons in rules.py are between fixed prefix times and affine
 candidate motion times (release uses the inverse global 22-tick map).
 Neighbouring integer ticks isolate equality and EPS cases at each crossing.
@@ -60,7 +61,7 @@ def _partition(roots, lower, upper, query, record=decision_record):
     return rows
 
 
-def duration_support(state, *, query=None, record=decision_record):
+def duration_support(state, *, query=None, record=decision_record, end_seconds=None):
     s, timing = state.grammar.state, state.timing
     slide = s.phase == 'chain'
     if s.phase not in ('chain', 'hold'):
@@ -69,7 +70,8 @@ def duration_support(state, *, query=None, record=decision_record):
     lower = 1 if slide else 2
     origin = timing.second(s.cursor+(96 if slide else 0))
     scale = timing.written_tick_seconds(s.cursor)
-    upper = math.floor((state.audio_end_seconds-origin+EPS)/scale)
+    end = state.audio_end_seconds if end_seconds is None else min(state.audio_end_seconds, end_seconds)
+    upper = math.floor((end-origin+EPS)/scale)
     if upper < lower:
         return dict(domain=[lower, upper], intervals=[], outside_basic='duration_outside_audio')
     _, c1 = state._trial(constructor(lower))

@@ -12,13 +12,12 @@ from maidata.inference.conditioning import prepare_conditions
 from maidata.time import TimingMap
 
 
-@pytest.mark.parametrize('schema', ['maidata.decoder-training.v1', 'maidata.decoder-training.v2'])
-def test_checkpoint_without_plan_source_defaults_to_predicted(config, tmp_path, schema):
+def test_checkpoint_without_plan_source_records_gt_default(config, tmp_path):
     legacy_config = dict(config)
     legacy_config.pop('decoder_train_plan_source', None)
-    paths, *_ = checkpoints(legacy_config, tmp_path, schema=schema)
+    paths, *_ = checkpoints(legacy_config, tmp_path)
     models = load_models(*paths, device='cpu')
-    assert models.provenance['training_plan_source'] == 'predicted'
+    assert models.provenance['training_plan_source'] == 'gt'
     assert models.provenance['inference_plan_source'] == 'predicted'
 
 

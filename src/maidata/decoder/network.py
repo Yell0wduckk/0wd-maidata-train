@@ -7,6 +7,7 @@ from .embedding import TokenEmbedding
 from .attention import ConditionAdapter
 from .blocks import DecoderBlock
 from .heads import ContentHeads
+from .field_query import FieldReader
 from .checks import require
 
 
@@ -14,11 +15,11 @@ class Decoder(nn.Module):
     def __init__(self, *, dim, audio_dim, latent_dim, layers, router_layer, heads,
                  shared_ffn_dim, expert_ffn_dim, experts, readout_ffn_dim, dropout,
                  norm_eps, rope_base, rope_position_scale, note_dims, route_dims,
-                 time_base, time_scale, time_components, condition_gate_init):
+                 time_base, time_scale, condition_gate_init):
         super().__init__()
         self.validate_inputs = True
         integers = (dim, audio_dim, latent_dim, layers, router_layer, heads, shared_ffn_dim,
-                    expert_ffn_dim, experts, readout_ffn_dim, time_components)
+                    expert_ffn_dim, experts, readout_ffn_dim)
         if any(type(v) is not int or v <= 0 for v in integers):
             raise ValueError('Decoder dimensions must be positive integers')
         if not 1 <= router_layer < layers or dim % heads or (dim // heads) % 2:
@@ -39,7 +40,9 @@ class Decoder(nn.Module):
             experts=None if i < router_layer else experts, dropout=dropout, norm_eps=norm_eps,
             rope_base=rope_base, rope_position_scale=rope_position_scale,
             condition_gate_init=condition_gate_init) for i in range(layers))
-        self.heads = ContentHeads(dim, readout_ffn_dim, norm_eps, time_components)
+        self.heads = ContentHeads(dim, readout_ffn_dim, norm_eps)
+        self.field_reader = FieldReader(dim, heads, dropout, norm_eps, rope_base, rope_position_scale)
+        self.architecture = 'maidata.decoder-field-query-tick384.v1'
 
     def prepare_audio(self, audio, *, indices=None):
         """Project unique song banks once per forward/parameter version; retain gradients."""
@@ -68,7 +71,7 @@ class Decoder(nn.Module):
         return DecoderMemory(tuple(select(kv) for kv in audio_kv),
             tuple(layer.condition_attn.project(condition, plan_index=z.values.shape[1], indices=condition_indices)
                   for layer in self.layers),
-            z.values.shape[1], None if audio_layout is None else audio_layout['valid_indices'])
+            z.values.shape[1], None if audio_layout is None else audio_layout['valid_indices'], condition.beats)
 
     def begin(self, tokens, memory, *, cache=None):
         """Run ONLY the shared front. No next type or content label is accepted."""
@@ -101,7 +104,11 @@ class Decoder(nn.Module):
                 memory.plan_index, types, None if old is None else old.layers[i], memory.row_indices)
             layers.append(kv)
         hidden = self.final_norm(x).masked_fill(~routed.valid[..., None], 0)
-        return DecoderOutput(routed.logits, hidden, DecoderCache(tuple(layers), memory))
+        return DecoderOutput(routed.logits, hidden, DecoderCache(tuple(layers), memory), self.query_fields)
+
+    def query_fields(self, output, indices, beats, roles, origins, elapsed, *, owner_spans=None):
+        return self.field_reader(output.hidden, output.cache.memory, indices, beats, roles, origins, elapsed,
+                                 owner_spans=owner_spans)
 
     def forward(self, tokens, next_types, memory):
         """Parallel causal teacher forcing, or fresh per-window history prefill."""
