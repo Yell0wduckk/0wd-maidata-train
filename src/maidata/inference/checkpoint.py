@@ -25,8 +25,8 @@ def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device):
     if producer.get('schema') not in ('maidata.encoder-draft-training.v1','maidata.encoder-draft-training.v2'):
         raise ValueError('expected an Encoder/Draft stage-I checkpoint')
     if (consumer.get('schema') != 'maidata.decoder-training.v4'
-            or consumer.get('architecture') != 'maidata.decoder-causal-cont-tick384.v1'):
-        raise ValueError('expected a v4 causal CONT Decoder checkpoint; field-query checkpoints are not resume-compatible')
+            or consumer.get('architecture') != 'maidata.decoder-causal-cont-tick384.v2'):
+        raise ValueError('expected a v4 causal CONT Decoder checkpoint with normalized-plan architecture v2; older architectures are not resume-compatible')
     # These are architecture/representation settings, not source or asset identities.
     keys = [k for k in producer['recipe'] if k in ENCODER_KEYS or k.startswith(('draft_', 'planner_'))]
     for key in keys:

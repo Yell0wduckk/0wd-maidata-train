@@ -32,7 +32,7 @@ def checkpoints(config, tmp_path, *, schema='maidata.decoder-training.v4'):
                     model_state={name+'.'+key: value for name, module in teacher.items()
                                  for key, value in module.state_dict().items()})
     state = torch.nn.ModuleDict(dict(encoder=encoder, decoder=decoder)).state_dict()
-    consumer = dict(schema=schema,architecture='maidata.decoder-causal-cont-tick384.v1',recipe=config,model_state=state)
+    consumer = dict(schema=schema,architecture='maidata.decoder-causal-cont-tick384.v2',recipe=config,model_state=state)
     paths = tmp_path/'ed.ckpt', tmp_path/'m.ckpt'
     torch.save(producer, paths[0])
     torch.save(consumer, paths[1])
@@ -129,5 +129,14 @@ def test_cli_v3_runs_both_encoders_and_reports_the_audio_source(config, tmp_path
 @pytest.mark.parametrize('schema',['maidata.decoder-training.v1','maidata.decoder-training.v2'])
 def test_old_time_architecture_is_not_silently_loaded(config,tmp_path,schema):
     paths,*_=checkpoints(config,tmp_path,schema=schema)
+    with pytest.raises(ValueError,match='v4 causal CONT'):
+        load_models(*paths,device='cpu')
+
+
+def test_unnormalized_cont_architecture_is_not_silently_loaded(config,tmp_path):
+    paths,*_=checkpoints(config,tmp_path)
+    payload = torch.load(paths[1],map_location='cpu',weights_only=False)
+    payload['architecture'] = 'maidata.decoder-causal-cont-tick384.v1'
+    torch.save(payload,paths[1])
     with pytest.raises(ValueError,match='v4 causal CONT'):
         load_models(*paths,device='cpu')

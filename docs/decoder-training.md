@@ -161,7 +161,7 @@ python -m maidata.decoder_training --config decoder-stage2.json --cuda-check --c
 
 ## Checkpoint 与验证
 
-阶段二联合训练使用 schema `maidata.decoder-training.v4`，架构身份`maidata.decoder-causal-cont-tick384.v1`，`model_state`同时保存`encoder.*`（E_M）和`decoder.*`（M）。训练读取D/P manifest中的原始生产者信息，`decoder_train_checkpoint`可缺省，不哈希checkpoint或加载教师权重。新训练从随机初始化的E_M/M开始；`--resume`恢复v4完整轮的两套权重、全部optimizer参数槽、scheduler、完整轮/step、所有RNG与DataLoader generator，同时记录教师来源、所选manifest、配置和输入来源。
+阶段二联合训练使用 schema `maidata.decoder-training.v4`，架构身份`maidata.decoder-causal-cont-tick384.v2`，`model_state`同时保存`encoder.*`（E_M）和`decoder.*`（M）。训练读取D/P manifest中的原始生产者信息，`decoder_train_checkpoint`可缺省，不哈希checkpoint或加载教师权重。新训练从随机初始化的E_M/M开始；`--resume`恢复v4完整轮的两套权重、全部optimizer参数槽、scheduler、完整轮/step、所有RNG与DataLoader generator，同时记录教师来源、所选manifest、配置和输入来源。
 
 checkpoint的recipe记录`decoder_train_plan_source`，GT缓存路径作为输入来源记录；恢复不因plan来源变化新增硬门禁。两种fresh对照应各自使用独立输出目录，不将第一项checkpoint用作第二项初始化或续训。
 

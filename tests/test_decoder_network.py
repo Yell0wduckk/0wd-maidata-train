@@ -53,9 +53,10 @@ def test_default_and_configurable_structure():
             build_decoder(dict(config(), **override))
 
 
-def test_parallel_incremental_causal_and_type_backtrack():
+@pytest.mark.parametrize('z_enabled', [False, True])
+def test_parallel_incremental_causal_and_type_backtrack(z_enabled):
     torch.manual_seed(55)
-    model = build_decoder(config()).eval()
+    model = build_decoder(dict(config(), decoder_z_cross_attention=z_enabled)).eval()
     tokens, audio, z, plan = inputs(model)
     memory = prepare(model, audio, z, plan)
     kinds = torch.arange(tokens.types.shape[1])[None].expand(2, -1) % 5

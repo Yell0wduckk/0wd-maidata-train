@@ -52,7 +52,7 @@ def test_checkpoint_and_full_e_d_p_m_no_training_or_hash_dependencies(config, ge
         model_state={name+'.'+key: value for name, m in zip(('encoder','draft','planner'), modules)
                      for key, value in m.state_dict().items()})
     decoder_encoder = build_model(c)
-    second = dict(schema='maidata.decoder-training.v4',architecture='maidata.decoder-causal-cont-tick384.v1',
+    second = dict(schema='maidata.decoder-training.v4',architecture='maidata.decoder-causal-cont-tick384.v2',
         recipe=c,source={'commit':'different-code'},model_state={name+'.'+key:value
             for name,m in (('encoder',decoder_encoder),('decoder',modules[3])) for key,value in m.state_dict().items()})
     torch.save(first, tmp_path/'producer.ckpt')

@@ -36,6 +36,11 @@ def test_disabled_z_is_inert_for_router_content_and_field_queries_but_plan_audio
     assert z.values.grad is None
     assert model.condition.z.weight.grad is None
     assert not hasattr(model,"field_reader")
+    for layer in model.layers:
+        for parameter in (*layer.condition_attn.query.parameters(), *layer.condition_attn.key.parameters()):
+            assert parameter.grad is None or torch.count_nonzero(parameter.grad) == 0
+        assert layer.condition_attn.value.weight.grad.abs().sum() > 0
+        assert layer.condition_gate.grad.abs() > 0
     for value in (audio.values, plan):
         assert value.grad is not None and torch.isfinite(value.grad).all() and value.grad.abs().sum() > 0
 

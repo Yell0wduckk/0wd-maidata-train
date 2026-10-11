@@ -6,6 +6,7 @@ from torch.nn import functional as F
 from maidata.nn.position import apply_rope
 from .types import KV, Memory, validate_memory
 from .checks import require
+from .condition_attention import attend as attend_condition
 
 
 class Attention(nn.Module):
@@ -72,8 +73,8 @@ class Attention(nn.Module):
             key = torch.cat((torch.cat((z, torch.zeros_like(z)), -1),
                              torch.cat((torch.zeros_like(plan), plan), -1)), 2)
             width = q.shape[-1]
-            y = F.scaled_dot_product_attention(torch.cat((q, raw), -1), key,
-                F.pad(kv.value, (0, width)), attn_mask=allowed, scale=1/math.sqrt(width),
+            y = attend_condition(torch.cat((q, raw), -1), key,
+                F.pad(kv.value, (0, width)), kv.valid, scale=1/math.sqrt(width),
                 dropout_p=self.dropout if self.training else 0.)[..., :width]
         y = y.transpose(1, 2).reshape(*valid.shape, self.dim)
         return self.output(y).masked_fill(~(valid & kv.valid.any(-1, keepdim=True))[..., None], 0)
@@ -121,7 +122,7 @@ class Attention(nn.Module):
 
 
 class ConditionAdapter(nn.Module):
-    def __init__(self, latent_dim, dim, z_cross_attention):
+    def __init__(self, latent_dim, dim, z_cross_attention, norm_eps):
         super().__init__()
         self.validate_inputs = True
         self.latent_dim = latent_dim
@@ -129,6 +130,7 @@ class ConditionAdapter(nn.Module):
         self.z = nn.Linear(latent_dim, dim)
         self.plan = nn.Sequential(nn.Linear(12, dim), nn.GELU(), nn.Linear(dim, dim))
         self.source = nn.Embedding(2, dim)
+        self.plan_norm = nn.LayerNorm(dim, eps=norm_eps)
 
     def forward(self, z, plan, plan_valid):
         if self.validate_inputs and self.z_cross_attention:
@@ -138,7 +140,7 @@ class ConditionAdapter(nn.Module):
             raise ValueError('plan requires [B,12] and independent validity [B]')
         if self.validate_inputs:
             require((torch.isfinite(plan) | ~plan_valid[:, None]).all(), 'valid plan values must be finite')
-        b = self.plan(plan.masked_fill(~plan_valid[:, None], 0)) + self.source.weight[1]
+        b = self.plan_norm(self.plan(plan.masked_fill(~plan_valid[:, None], 0)) + self.source.weight[1])
         if self.z_cross_attention:
             a = self.z(z.values.masked_fill(~z.valid[..., None], 0)) + self.source.weight[0]
             beats, valid = z.beats, z.valid

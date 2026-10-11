@@ -8,6 +8,8 @@
 
 `begin(tokens,memory,cache=...)` 不接受目标类型。`complete(routed,next_types)` 才选择后段分支；同类型内容重试复用输出，改选类型重新计算后段。`prepare_audio` 按同一参数版本投影音频一次，保留梯度。plan 无位置评分，Z 与音频采用绝对拍 RoPE。`decoder_z_cross_attention=false` 跳过 Z 适配，plan 与音频仍正常参与。
 
+条件 memory 的 plan MLP 输出加 source embedding 后通过独立 LayerNorm（使用 decoder_norm_eps），再进入各层 K/V 投影。GT 与 predicted plan 使用同一路径，Z 适配保持原样。条件 attention 对单有效 key 直接读取 V，训练 dropout 按 query/head 作用于标量权重；不执行 Q/K softmax，Q/K 无该分支损失梯度。零有效 key 输出零，多个有效 key 保留原联合 attention。dense、packed 和增量使用相同语义。
+
 ## 模型序列与位置
 
 五类目标为 MOMENT、NOTE、ROUTE、HOLD_DURATION、SLIDE_DURATION。输入额外包含 MOMENT_CONT、HOLD_CONT、SLIDE_CONT；三种 CONT 各占一个主序列及因果 KV 位置。Router 不增加类别；续接锁定原时间类型，不重复类型损失。
@@ -32,4 +34,4 @@
 
 每次 CONT 调用主干追加 KV，锁定时间类型；选择最终短值后组装完整 Moment/HoldDuration/SlideDuration，才调用真实规则接受。CONT 搜索使用不可变 KV 分支，失败可退回前缀，不污染 Physical。跨窗从真实谱面历史重新展开并 prefill；物化只接收真实谱面，不包含 CONT。
 
-新训练 checkpoint 为 `maidata.decoder-training.v4`，模型架构为 `maidata.decoder-causal-cont-tick384.v1`；旧 FieldReader checkpoint 不支持完整续训。精确源谱和完整 Physical 仍为 v2；模型序列缓存为 `maidata.model-chart-sequence.v1`，窗口为 `maidata.decoder-window-tensors.v5`。迁移见[缓存说明](time384-cache-migration.md)。
+新训练 checkpoint 为 `maidata.decoder-training.v4`，模型架构为 `maidata.decoder-causal-cont-tick384.v2`；旧 FieldReader 及未归一化 CONT v1 checkpoint 不支持完整续训，不迁移 optimizer。精确源谱和完整 Physical 仍为 v2；模型序列缓存为 `maidata.model-chart-sequence.v1`，窗口为 `maidata.decoder-window-tensors.v5`。迁移见[缓存说明](time384-cache-migration.md)。

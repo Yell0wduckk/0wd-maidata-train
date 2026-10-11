@@ -4,6 +4,7 @@ import torch
 from torch.nn import functional as F
 from maidata.nn.position import apply_rope
 from .types import KV
+from .condition_attention import attend as attend_condition
 
 
 def restore_rows(value, valid, indices):
@@ -61,7 +62,7 @@ def condition_attention(module, x, beats, valid, kv, plan_index, layout):
         key_width = kv.valid.shape[1] if key_width is None else key_width
         q = q.reshape(count, width, module.heads, 2*module.dim//module.heads).transpose(1, 2)
         k, v = [t.reshape(count, key_width, module.heads, 2*module.dim//module.heads).transpose(1, 2) for t in (k, v)]
-        y = F.scaled_dot_product_attention(q, k, v, attn_mask=mask.reshape(count, 1, 1, key_width),
+        y = attend_condition(q, k, v, mask.reshape(count, key_width),
             scale=1/math.sqrt(module.dim//module.heads), dropout_p=module.dropout if module.training else 0.)
         pieces.append(y[..., :module.dim//module.heads].transpose(1, 2).flatten(0, 1))
     selected = torch.cat(pieces).index_select(0, layout['restore']) if pieces else raw

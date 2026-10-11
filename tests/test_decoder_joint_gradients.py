@@ -165,7 +165,7 @@ def test_joint_checkpoint_restores_both_networks_optimizer_rng_and_rejects_m_onl
     payload = deepcopy(checkpoint.capture(model, opt, sched, epoch=1, step=1,
         best=1., metrics={}, **identity))
     assert payload['schema'] == 'maidata.decoder-training.v4'
-    assert payload['architecture']=='maidata.decoder-causal-cont-tick384.v1'
+    assert payload['architecture']=='maidata.decoder-causal-cont-tick384.v2'
     assert any(k.startswith('encoder.') for k in payload['model_state'])
     assert any(k.startswith('decoder.') for k in payload['model_state'])
     runner.update(model, [batch], opt, sched, c, distances())
@@ -188,3 +188,5 @@ def test_joint_checkpoint_restores_both_networks_optimizer_rng_and_rejects_m_onl
             checkpoint.restore(old,resumed,resumed_opt,resumed_sched,**identity)
     with pytest.raises(ValueError,match='causal CONT'):
         checkpoint.restore(dict(payload,architecture='wrong-head'),resumed,resumed_opt,resumed_sched,**identity)
+    with pytest.raises(ValueError,match='causal CONT'):
+        checkpoint.restore(dict(payload,architecture='maidata.decoder-causal-cont-tick384.v1'),resumed,resumed_opt,resumed_sched,**identity)

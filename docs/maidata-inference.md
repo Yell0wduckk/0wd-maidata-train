@@ -8,7 +8,7 @@
 
 - 显式指定两份权重：阶段一 `maidata.encoder-draft-training.v2` checkpoint 提供固定 E_D/D/P；阶段二 `maidata.decoder-training.v4` checkpoint 提供联合训练后的 E_M/M。R不构建、不运行；结构相同的旧阶段一v1可显式作为E_D/D/P组件来源。
 - 两套Encoder采用相同配置、独立参数；网络按checkpoint的`recipe`构建并严格加载，不把E_M替换成E_D，也不让D读取E_M的P0。当前加载器核对Encoder/Draft/Planner表示配置，不比较权重或源码哈希，不加载optimizer、训练计划或训练缓存清单。
-- M要求架构身份`maidata.decoder-causal-cont-tick384.v1`，并严格加载v4的E_M/M成套参数。旧v1/v2连续时间头不兼容本次独立CONT序列与385类头，不能仅修改schema后加载或冒充完整轮续训。
+- M要求架构身份`maidata.decoder-causal-cont-tick384.v2`，并严格加载v4的E_M/M成套参数。旧v1/v2连续时间头不兼容本次独立CONT序列与385类头，不能仅修改schema后加载或冒充完整轮续训。
 - 阶段二默认GT plan，预测plan保留为显式对照，见[plan对照](decoder-plan-comparison.md)。两类权重的自由推理都运行P并读取预测plan12，不读取真实谱面统计；`generation.json`来源信息分别记录`training_plan_source`与`inference_plan_source`，后者始终为`predicted`。
 - 音频、完整 BPM/first 时间映射、目标 difficulty_id 与精确数值 level。无需源谱、真实 planner 或谱面结束时间。
 - 二选一：`--grid` 直接读取既有训练格式音频 NPZ，或者 `--mel-stats` 使用训练时固定的 Mel 统计从原音频提取 Mel128/全曲 aux32。引用旧 Mel 的 grid 可用 `--mel-root` 搬迁路径。已验收 grid 按指定输入直接读取，不全量扫描或重哈希。

@@ -34,6 +34,8 @@ CPU验证覆盖独立查询/未来条件隔离、局部梯度范围、空拍coun
 
 ## 新 Decoder：网络、窗口与监督
 
+当前模型架构为 `maidata.decoder-causal-cont-tick384.v2`：plan MLP＋source embedding 后归一化，单有效条件 key 直接读取 V；checkpoint 容器保持 v4，旧 CONT v1 不作为完整续训输入。缓存、采样及裁剪不变。
+
 `maidata.decoder`独立实现五类目标与八类输入、前k层Router、后段dense MMoE、独立CONT输入、内容小头、三个385类时间头及主/Physical/几何loss，默认值只在`entry.CONFIG`维护。主M继续生成并监督type/kind/pad/flags/route；begin只读真实前缀，目标类型与Slide查询坐标不提前进入Router。CONT作为独立输入进入主self-KV，只有完整字段提交Physical；首次Slide仅调整后段音频/Z查询坐标。plan使用无位置评分，音频/Z使用绝对拍RoPE，双Encoder保持独立。接口见[Decoder模块](decoder.md)。
 
 三种时间共用`relative-tick384-continue`；时间CE/集合NLL和Physical按原字段计数，Physical只监督GT实际前缀步骤并按原字段平均，保留零罚窗尾叶；duration窗外短值仍按完整源区间处罚。written-BPM单位保留，Slide从启动位置读取，变BPM以实际秒数反算query。`begin/complete`分开类型决策与后段计算，teacher forcing和窗内增量路径共用参数；跨窗全部self K/V重新prefill。独立窗口适配保留原始历史delta、4拍裁剪之外的最后真实起音与名义U尾部标签。独立支持适配读取首次归责记录，或在调用者提供的完整Physical状态上生成当前窗支持；网络不执行规则查询、不读缓存。
