@@ -48,60 +48,41 @@ def model_prefix(kind='hold', origin=0):
     return model, routed, types
 
 
-def test_router_query_metadata_isolation_and_main_kv_invariance():
-    model, routed, types = model_prefix()
-    original_logits = routed.logits.clone()
-    output = model.complete(routed, types)
-    alternative = model.complete(routed, (types+2) % 5)
-    torch.testing.assert_close(output.type_logits, alternative.type_logits, rtol=0, atol=0)
-    keys = tuple(k.key.clone() for k in output.cache.layers)
-    # Changing field count, position, role and elapsed cannot reach begin().
-    for beats, roles in (([0.], [0]), ([8., 2., 5.], [3, 1, 4])):
-        count = len(beats)
-        output.field_reader(output, torch.tensor([[0, 1]]*count), torch.tensor(beats),
-            torch.tensor(roles), torch.zeros(count, dtype=torch.long),
-            torch.arange(count)*384)
-    torch.testing.assert_close(routed.logits, original_logits, rtol=0, atol=0)
-    for before, after in zip(keys, output.cache.layers):
-        torch.testing.assert_close(before, after.key, rtol=0, atol=0)
-        assert after.valid.shape[1] == 2
+def test_router_slide_coordinates_are_isolated_from_front_and_self_coordinates():
+    model,routed,types=model_prefix()
+    baseline=model.complete(routed,types)
+    changed=model.complete(replace(routed,slide_beats=routed.slide_beats+200),types)
+    torch.testing.assert_close(baseline.type_logits,changed.type_logits,rtol=0,atol=0)
+    torch.testing.assert_close(baseline.hidden,changed.hidden,rtol=0,atol=0)  # HOLD ignores Slide coordinates.
+    assert not hasattr(model,'field_reader')
 
 
-def test_generated_duration_cont_only_moves_temporary_query():
-    model, routed, types = model_prefix()
-    output = model.complete(routed, types)
-    timing = TimingMap([(0, 60), (4, 120)])
-    oracle = InferencePhysicalState(timing, geometry(), audio_end_seconds=20.)
-    oracle.inject_boundary(Moment(0), start_tick=0)
-    oracle.accept_source(Note.make('hold', 'A1'))
-    before = oracle.snapshot()
-    cache = tuple(k.key.clone() for k in output.cache.layers)
-    selected = [CONTINUE, CONTINUE, 0]
-    positions = []
-    def logits(hidden, kind):
-        result = torch.full((385,), -1000.)
-        result[selected.pop(0)] = 1000.
+def test_generated_duration_cont_appends_kv_without_physical_commit():
+    model,routed,types=model_prefix()
+    output=model.complete(routed,types)
+    timing=TimingMap([(0,60),(4,120)])
+    oracle=InferencePhysicalState(timing,geometry(),audio_end_seconds=20.)
+    oracle.inject_boundary(Moment(0),start_tick=0)
+    oracle.accept_source(Note.make('hold','A1'))
+    before=oracle.snapshot()
+    selected=[CONTINUE,CONTINUE,0]
+    positions=[]
+    def logits(hidden,kind):
+        result=torch.full((385,),-1000.)
+        result[selected.pop(0)]=1000.
         return result
-    reader = output.field_reader
-    def read(out, indices, beats, roles, origins, elapsed):
-        positions.append((float(beats[0]), int(elapsed[0])))
-        return reader(out, indices, beats, roles, origins, elapsed)
-    output = replace(output, field_reader=read)
-    sampler = Sampler(temperature=0)
-    with patch.object(model, 'begin', side_effect=AssertionError('CONT wrote main prefix')), \
-         patch.object(model, 'complete', side_effect=AssertionError('CONT routed again')), \
-         patch.object(model.heads, 'time_logits', side_effect=logits):
-        token = next(sampler.contents(model, output.hidden[0,-1], 'HOLD_DURATION', oracle,
-            timing, None, end_tick=1536, cap_tick=1920, output=output))
-    assert token == HoldDuration(769)
-    assert positions == [(0., 0), (4., 384), (12., 768)]
-    assert oracle.snapshot() == before
-    for old, new in zip(cache, output.cache.layers):
-        torch.testing.assert_close(old, new.key, rtol=0, atol=0)
-    # Only the assembled complete field can materialize one real action.
+    original=model.begin
+    def begin(batch,*args,**kw):
+        positions.append(float(batch.beats[0,0]))
+        return original(batch,*args,**kw)
+    with patch.object(model,'begin',begin),patch.object(model.heads,'time_logits',side_effect=logits):
+        token,cache=next(Sampler(temperature=0).contents(model,output.hidden[0,-1],'HOLD_DURATION',oracle,
+            timing,None,end_tick=1536,cap_tick=1920,output=output,return_cache=True))
+    assert token==HoldDuration(769) and positions==[4.,12.]
+    assert oracle.snapshot()==before
+    assert all(k.valid.shape[1]==4 for k in cache.layers)
     oracle.accept(token)
-    assert len(oracle.actions) == 1
-    assert oracle.actions[0].press_end > duration_end(timing, 0, 769)
+    assert len(oracle.actions)==1
 
 
 def test_generated_moment_cont_preserves_query_lower_bound_and_real_cursor():
@@ -195,11 +176,11 @@ def test_window_compiler_idempotence_preserves_exact_source_and_supported_domain
     source = next(v for v in restored['metadata']['exact_fields'] if v['target'].get('type') == 'HOLD_DURATION')
     assert source['source_token_index'] == 2 and source['target']['ticks'] == 385
     assert restored['metadata']['main_sequence_length'] == len(first['next_types'])
-    groups = first['labels']['groups']
-    actual_queries = sum(g['indices'].shape[0] for k, g in groups.items() if k in ('kind', 'route'))
-    actual_queries += sum(int(g['allowed'].any(-1).sum()) for g in groups.values()
-                          if 'target_steps' in g)
-    assert restored['metadata']['field_query_cost'] == actual_queries
+    groups=first['labels']['groups']
+    assert 'field_query_cost' not in restored['metadata']
+    assert groups['HOLD_DURATION']['allowed'].ndim==2
+    assert groups['HOLD_DURATION']['indices'].shape[0]==2
+    assert (first['tokens']['types']==6).sum()==1
 
 
 def test_draft_moment_queries_do_not_see_future_kind_count_or_position():

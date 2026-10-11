@@ -45,6 +45,7 @@ class WindowExample:
     cap_tick: float
     last_real_tick: int | None
     history_dropped: bool
+    timing: object = None
 
 
 def history_prefix(groups, timing, *, start_tick, history_beats, dropped):
@@ -88,7 +89,7 @@ def build_window(tokens, timing, *, sequence_start_tick, start_tick, end_tick,
     next_types = tuple(GENERATED_TYPES.index(t.type) if hasattr(t, 'type') else 0 for t in targets)
     return WindowExample(inputs, positions + tuple(current_beats), targets, next_types,
         tuple(i >= len(history) for i in range(len(inputs))), len(history), start_tick, end_tick,
-        end_tick + 96 * audio_after_beats, last, dropped)
+        end_tick + 96 * audio_after_beats, last, dropped, timing)
 
 
 def window_from_config(tokens, timing, config, *, sequence_start_tick, start_tick,

@@ -360,7 +360,6 @@ def test_real_dataset_reads_fields_supports_and_plan_without_rebuilding(config,t
         context = c['audio_before_beats'] + c['target_beats'] + c['audio_after_beats']
         cost = batch_cost([len({w['start'] for w in p['windows']})*context*c['fpn_rates'][0]
                            for p in parts],lengths,small)
-        cost['field_queries'] = sum(w['field_query_cost'] for w in ordered)
         assert cost==batch.budget_cost
     expected = [(r['window_id'],r['occurrence']) for r in plan.occurrences(3)]
     assert seen==expected

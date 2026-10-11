@@ -5,7 +5,8 @@ from maidata.chart.types import (Moment, Note, Route, KINDS, FLAGS, GENERATED_TY
 from .types import TokenBatch
 
 
-def pack_tokens(rows, positions, *, device):
+def pack_tokens(rows, positions, *, device, slide_positions=None):
+    from .sequence import INPUT_TYPES, ModelTime
     if not rows or any(not r or len(r) != len(b) for r, b in zip(rows, positions)) or len(rows) != len(positions):
         raise ValueError('tokens and known absolute positions must be aligned and nonempty')
     shape = (len(rows), max(map(len, rows)))
@@ -18,9 +19,11 @@ def pack_tokens(rows, positions, *, device):
     for batch, (row, coords) in enumerate(zip(rows, positions)):
         for i, (token, beat) in enumerate(zip(row, coords)):
             valid[batch, i] = True
-            types[batch, i] = GENERATED_TYPES.index(token.type)
+            types[batch, i] = INPUT_TYPES.index(token.type)
             beats[batch, i] = beat
-            if isinstance(token, Note):
+            if isinstance(token, ModelTime):
+                time[batch, i] = token.time_value
+            elif isinstance(token, Note):
                 kind[batch, i] = KINDS.index(token.kind)
                 pads = TOUCH_PADS if token.kind in ('touch', 'touch_hold') else BUTTON_PADS
                 pad[batch, i] = pads.index(token.pad)
@@ -31,10 +34,26 @@ def pack_tokens(rows, positions, *, device):
                 track_break[batch, i] = -1 if token.track_break is None else token.track_break
             else:
                 time[batch, i] = token.delta_ms / 1000 if isinstance(token, Moment) else token.ticks / 96
-    return TokenBatch(types, beats, valid, kind, pad, flags, route, track_break, time)
+    slides = torch.where(types >= 5,beats,beats + 1)
+    if slide_positions is not None:
+        for b, row in enumerate(slide_positions):
+            slides[b,:len(row)] = torch.tensor(row,device=device)
+    return TokenBatch(types, beats, valid, kind, pad, flags, route, track_break, time, slides.masked_fill(~valid,0))
 
 
-def collate_windows(examples, *, device):
+def collate_windows(examples, *, device, expand=True):
+    if expand and all(getattr(w,'timing',None) is not None for w in examples):
+        from .sequence import model_window
+        sequences=[model_window(w,w.timing) for w in examples]
+        batch=pack_tokens([s['tokens'] for s in sequences],[s['beats'] for s in sequences],device=device,
+                          slide_positions=[s['slide_beats'] for s in sequences])
+        types=torch.zeros_like(batch.types)
+        supervised=torch.zeros_like(batch.valid)
+        for i,(w,s) in enumerate(zip(examples,sequences)):
+            types[i,:len(s['tokens'])]=torch.tensor(s['next_types'],device=device)
+            supervised[i,s['last_rows'][w.boundary_index]:len(s['tokens'])]=True
+        return batch,types,supervised
+
     batch = pack_tokens([w.inputs for w in examples], [w.beats for w in examples], device=device)
     next_types = torch.zeros_like(batch.types)
     supervised = torch.zeros_like(batch.valid)

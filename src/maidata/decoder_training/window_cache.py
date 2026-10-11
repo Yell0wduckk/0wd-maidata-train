@@ -9,14 +9,14 @@ from torch.nn.functional import pad
 from maidata.decoder.types import TokenBatch
 from .supervision import Prepared, KEYS
 
-SCHEMA = 'maidata.decoder-window-tensors.v4'
+from .sequence_cache import SCHEMA
 CONFIG_KEYS = ('target_beats', 'audio_after_beats', 'chart_history_beats')
 
 
 def contract(config, binding):
     # Source assets retain their producer identities; path relocation is harmless.
     return dict(config={k: config[k] for k in CONFIG_KEYS},
-                time_representation='relative-tick384-continue',
+                time_representation='causal-token-tick384-continue', physical_objective='gt-prefix-step-mean',
                 duration_domain='full-source-support-observed-query-prefix',
                 inputs={k: binding[k] for k in ('plans', 'physical', 'geometry', 'slide_data',
                                                'pretrain_chart_cache')})
@@ -62,12 +62,10 @@ class WindowCache:
         path = self.root / 'manifest.json'
         meta = json.loads(path.read_text(encoding='utf-8'))
         if meta.get('schema') != SCHEMA:
-            raise ValueError('Decoder requires observed-prefix tick384 query windows (v4); recompile supervision from unchanged original-v2 fields/supports')
+            raise ValueError('Decoder requires causal CONT token windows (v5); recompile supervision from unchanged original-v2 fields/supports')
         self.windows = meta['windows']
         for plan in plans:
-            plan._lengths = {w['window_id']: tuple(self.windows[w['window_id']]['lengths']) for w in plan.windows}
-            plan._query_costs = {w['window_id']: self.windows[w['window_id']].get('field_query_cost')
-                                 for w in plan.windows}
+            plan._lengths = {w['window_id']: tuple(self.windows[w['window_id']]['logical_lengths']) for w in plan.windows}
         self.binding = str(path)
 
     def read(self, identity):
@@ -88,7 +86,7 @@ def select_window(value, dropped):
         tokens['time'][0] = 0
     return dict(tokens=tokens, next_types=value['next_types'][start:], labels=value['labels'],
                 offset=0 if dropped else history, length=len(tokens['types']), history_dropped=dropped,
-                field_query_cost=value.get('metadata', {}).get('field_query_cost'))
+                logical_length=sum(value['metadata']['logical_lengths']) if not dropped else value['metadata']['logical_lengths'][0])
 
 
 def collate_prepared(rows):
@@ -116,41 +114,17 @@ def collate_prepared(rows):
             groups.setdefault(key, []).append(g)
         flag_offset += len(labels['flags']['indices'])
     packed = {}
-    for key, parts in groups.items():
-        width = max(p['allowed'].shape[1] for p in parts)
-        g = {}
-        for name in parts[0]:
-            if name in ('owner_spans','query_rows'):
-                continue  # These CPU layouts are rebuilt after row concatenation.
-            if name == 'has_physical':
-                g[name] = any(p[name] for p in parts)
-                continue
-            values = [p[name] for p in parts]
-            if name in ('allowed','target','lower','upper','penalty','query_beats','elapsed','closes','target_steps'):
-                # Time groups carry [field, depth, 385, (category)]. Content
-                # groups retain [field, class]. Only the second axis is padded.
-                values = [pad(v, (0, 0)*(v.ndim-2)+(0, width-v.shape[1]),
-                              value=1 if name == 'upper' else 0) if v.ndim >= 2 else v for v in values]
-            g[name] = torch.cat(values)
-        owners = g['indices'][:,0].tolist()
-        spans = []
-        for i, owner in enumerate(owners):
-            if spans and spans[-1][0] == owner:
-                spans[-1] = [owner, spans[-1][1], i+1]
-            else:
-                spans.append([owner, i, i+1])
-        g['owner_spans'] = spans
-        packed[key] = g
-    lookup = {}
-    for key in ('kind','route'):
-        if key in packed:
-            for index in packed[key]['indices'].tolist():
-                lookup[tuple(index)] = len(lookup)
-    for key, group in packed.items():
-        if key != 'type' and 'target_steps' not in group:
-            group['query_rows'] = torch.tensor([lookup[tuple(index)] for index in group['indices'].tolist()],
-                                               dtype=torch.long)
-    flag_indices = torch.cat(flags)
-    flag_query_rows = torch.tensor([lookup[tuple(index)] for index in flag_indices.tolist()],dtype=torch.long)
-    return tokens, types, Prepared(packed, counts, dict(indices=flag_indices, args=torch.cat(args),
-                                                       query_rows=flag_query_rows))
+    for key,parts in groups.items():
+        group={}
+        field_offset=0
+        for part in parts:
+            if 'field_id' in part:
+                part=dict(part,field_id=part['field_id']+field_offset)
+                field_offset=int(part['field_id'].max())+1
+            for name,value in part.items():
+                if name=='has_physical':
+                    group[name]=group.get(name,False) or value
+                else:
+                    group.setdefault(name,[]).append(value)
+        packed[key]={k:(v if k=='has_physical' else torch.cat(v)) for k,v in group.items()}
+    return tokens,types,Prepared(packed,counts,dict(indices=torch.cat(flags),args=torch.cat(args)))

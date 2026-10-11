@@ -24,14 +24,16 @@ def prefill(decoder, memory, groups, timing, start_tick, history_beats, *, devic
     """Complete onset groups and their original deltas, never former control tokens."""
     history, positions, boundary, _ = history_prefix(groups, timing, start_tick=start_tick,
                                                     history_beats=history_beats, dropped=False)
-    cache = None
-    if history:
-        batch = pack_tokens([history], [positions], device=device)
-        following = (*history[1:], boundary)
-        from maidata.chart.types import GENERATED_TYPES
-        next_types = torch.tensor([[GENERATED_TYPES.index(t.type) for t in following]], device=device)
-        cache = decoder(batch, next_types, memory).cache
-    return boundary, cache, len(history)
+    from maidata.decoder.sequence import expand_inputs, family
+    from maidata.chart.types import GENERATED_TYPES
+    seq=expand_inputs((*history,boundary),(*positions,start_tick/96),timing,boundary_index=len(history))
+    cache=None
+    if len(seq['tokens'])>1:
+        batch=pack_tokens([seq['tokens'][:-1]],[seq['beats'][:-1]],device=device,
+                          slide_positions=[seq['slide_beats'][:-1]])
+        next_types=torch.tensor([[GENERATED_TYPES.index(family(t)) for t in seq['tokens'][1:]]],device=device)
+        cache=decoder(batch,next_types,memory).cache
+    return boundary,cache,len(seq['tokens'])-1
 
 
 def decode_window(decoder, memory, session, boundary, sampler, distributions, timing, *,
@@ -44,7 +46,11 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
 
     def frame(token):
         snapshot = session.snapshot()
-        batch = pack_tokens([[token]], [[session.rules.grammar.state.cursor / 96]], device=device)
+        from maidata.decoder.sequence import expand_inputs
+        seq=expand_inputs([token],[session.rules.grammar.state.cursor/96],timing,
+                          boundary_index=0 if token is boundary else None)
+        batch=pack_tokens([[seq['tokens'][-1]]],[[seq['beats'][-1]]],device=device,
+                          slide_positions=[[seq['slide_beats'][-1]]])
         routed = decoder.begin(batch, memory, cache=session.cache)
         oracle = session.rules
         if not isinstance(oracle, InferencePhysicalState):

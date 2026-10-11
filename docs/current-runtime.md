@@ -1,5 +1,6 @@
 # 当前源码状态与实现边界
 
+当前主 Decoder 变更以 [独立 CONT 序列合同](decoder-cont-token-plan.md) 为准：删除 FieldReader，CONT 写入主 KV，窗口升级 v5。
 本文件区分已实现的新 `maidata` 音频 Encoder 和独立副本保留的旧模型。Encoder 规格位于[设计正本](../../0wd-v3-refactor-docs/new-audio-encoder.md)，模块、张量协议和 aux32 生产约定位于[实施文档](../../0wd-v3-refactor-docs/encoder-execution-plan.md)。来源与复制排除项见 [import-and-layout](import-and-layout.md)。
 
 ## 新 maidata：独立音频 Encoder
@@ -33,21 +34,21 @@ CPU验证覆盖独立查询/未来条件隔离、局部梯度范围、空拍coun
 
 ## 新 Decoder：网络、窗口与监督
 
-`maidata.decoder`独立实现五类输入、前k层Router、后段dense MMoE、字段读取、内容小头、三个385类时间头及主/Physical/几何loss，默认值只在`entry.CONFIG`维护。主M继续生成并监督type/kind/pad/flags/route；begin只读真实前缀，后续字段query坐标和mask不提前进入Router。主self-KV坐标与临时字段query分开，CONT只重读字段、不写主KV或Physical。plan使用无位置评分，音频/Z使用绝对拍RoPE，双Encoder保持独立。接口见[Decoder模块](decoder.md)。
+`maidata.decoder`独立实现五类目标与八类输入、前k层Router、后段dense MMoE、独立CONT输入、内容小头、三个385类时间头及主/Physical/几何loss，默认值只在`entry.CONFIG`维护。主M继续生成并监督type/kind/pad/flags/route；begin只读真实前缀，目标类型与Slide查询坐标不提前进入Router。CONT作为独立输入进入主self-KV，只有完整字段提交Physical；首次Slide仅调整后段音频/Z查询坐标。plan使用无位置评分，音频/Z使用绝对拍RoPE，双Encoder保持独立。接口见[Decoder模块](decoder.md)。
 
-三种时间共用`relative-tick384-continue`；时间CE/集合NLL和Physical按原字段计数，Physical覆盖可观测的完整单CONT查询树及零罚窗尾叶；duration窗外短值仍按完整源区间处罚。written-BPM单位保留，Slide从启动位置读取，变BPM以实际秒数反算query。`begin/complete`分开类型决策与后段计算，teacher forcing和窗内增量路径共用参数；跨窗全部self K/V重新prefill。独立窗口适配保留原始历史delta、4拍裁剪之外的最后真实起音与名义U尾部标签。独立支持适配读取首次归责记录，或在调用者提供的完整Physical状态上生成当前窗支持；网络不执行规则查询、不读缓存。
+三种时间共用`relative-tick384-continue`；时间CE/集合NLL和Physical按原字段计数，Physical只监督GT实际前缀步骤并按原字段平均，保留零罚窗尾叶；duration窗外短值仍按完整源区间处罚。written-BPM单位保留，Slide从启动位置读取，变BPM以实际秒数反算query。`begin/complete`分开类型决策与后段计算，teacher forcing和窗内增量路径共用参数；跨窗全部self K/V重新prefill。独立窗口适配保留原始历史delta、4拍裁剪之外的最后真实起音与名义U尾部标签。独立支持适配读取首次归责记录，或在调用者提供的完整Physical状态上生成当前窗支持；网络不执行规则查询、不读缓存。
 
 CPU验证覆盖默认与非默认架构、并行/增量一致、目标类型隔离、plan位置与空mask、FP32/CPU BF16反向、真实字段/规则支持、非单调时间概率、独立归约、跨Encoder/D/P梯度与实际冻结、链/分支快照。训练循环和checkpoint位于独立的`maidata.decoder_training`；整曲生成由独立`maidata.inference`调度，本次只对显式选定少量真实窗口重编译v3缓存，未运行CUDA或整库迁移。
 
 阶段二已接入原谱v2字段/Physical、全局打乱的既有Decoder occurrence、GT历史与确定性15% history dropout；保持仍有效的完整物理动作，训练读取离线窗口支持。当前重新随机初始化音频Encoder E_M与M并联合更新；每batch按audio_variant去重读取已验收Mel/aux32，E_M只编码当前监督窗所需的前4＋目标16＋后4拍局部窗口，同曲同起点共享P0。G0按曲准备一次；选中的局部窗口统一批量编码，不使用activation checkpoint反向重算，Encoder布局仅准备和传输一份。M音频attention只读取对应局部P0；新checkpoint记录window范围，推理使用同一范围。Z始终读取阶段一E_D/D/P的固定离线缓存；plan12默认读取GT原谱统计小缓存，显式`--plan-source predicted`可选择固定P预测，训练与validation使用相同来源。训练不构建或运行教师E_D/D/P/R，也不从阶段一权重初始化E_M。固定条件缺失不在线补算；导出与消费模块独立。GT缓存生产、两组独立fresh训练及远端串行launcher见[plan对照](decoder-plan-comparison.md)。
 
-默认row budget8192、累积1、warmup200，全部可配置，音频成本另行记录，本次不改变组批预算。M计算块使用整个逻辑update的独立分母；单M块直接反传真实音频图，多M块才通过音频K/V梯度桥收集各块梯度，最后只反传真实E_M及音频投影一次，E_M/M共同裁剪和更新。worker准备Encoder/P0/M布局，训练不解压整谱或查询Physical，不重新验收旧输入、不哈希生产者checkpoint。联合训练checkpoint为`maidata.decoder-training.v3`，保存成套E_M/M、optimizer、scheduler、完整轮和全部RNG；旧v1/v2连续时间头不能作为新架构完整轮续训。源码/配方/budget/计划身份不作为额外恢复门禁。保留workers12、完整轮checkpoint、每5轮及末轮validation与原batch CUDA测量入口；本次性能修复的CPU梯度与恢复验证、CUDA原batch成本记录由独立修复报告提供。其余未确定配方保持None，见[阶段二训练](decoder-training.md)。
+默认row budget8192、累积1、warmup200，全部可配置，音频成本另行记录，本次不改变组批预算。M计算块使用整个逻辑update的独立分母；单M块直接反传真实音频图，多M块才通过音频K/V梯度桥收集各块梯度，最后只反传真实E_M及音频投影一次，E_M/M共同裁剪和更新。worker准备Encoder/P0/M布局，训练不解压整谱或查询Physical，不重新验收旧输入、不哈希生产者checkpoint。联合训练checkpoint为`maidata.decoder-training.v4`，保存成套E_M/M、optimizer、scheduler、完整轮和全部RNG；旧v1/v2连续时间头及v3字段读取分支不能作为新架构完整轮续训。源码/配方/budget/计划身份不作为额外恢复门禁。保留workers12、完整轮checkpoint、每5轮及末轮validation与原batch CUDA测量入口；本次性能修复的CPU梯度与恢复验证、CUDA原batch成本记录由独立修复报告提供。其余未确定配方保持None，见[阶段二训练](decoder-training.md)。
 
-统一新窗口编译器从精确原谱v2和完整Physical整数区间生产`maidata.decoder-window-tensors.v4`监督，增量与从零入口共用；完整源资产和迁移不变。GT duration、真实动作与历史保持完整，监督到跨音频窗CONT或窗内发出的最后短值；旧v3局部cap监督需重编译标签，不能混用。迁移命令见[缓存迁移](time384-cache-migration.md)。E/D/P权重变化后的神经特征需重新前向导出。
+统一新窗口编译器从精确原谱v2和完整Physical整数区间生产`maidata.decoder-window-tensors.v5`监督，增量与从零入口共用；完整源资产和迁移不变。GT duration、真实动作与历史保持完整，监督到跨音频窗CONT或窗内发出的最后短值；旧v3局部cap监督需重编译标签，不能混用。迁移命令见[缓存迁移](time384-cache-migration.md)。E/D/P权重变化后的神经特征需重新前向导出。
 
 ## 当前整曲推理与物化
 
-`python -m maidata.inference`显式加载阶段一E_D/D/P与阶段二v3的E_M/M权重。固定E_D产生Draft的P0并计算全曲Z/预测plan；独立E_M产生M的全曲P0，参数与隐藏表示分开。GT plan训练的M自由推理仍读取P预测，报告分别记录训练和推理plan来源。读取配套grid或使用固定Mel统计提取音频，按新字段规则维护真实起音组、边界MOMENT、跨窗活动动作与完整规则快照。两套Encoder各自按曲复用准备结果，D/P及M音频投影整次生成复用；各窗重新prefill历史，始终覆盖音频及一个完整空尾窗。旧连续时间头不兼容新385类架构。Physical硬约束默认开启，trace默认关闭；路径、温度、种子与生成上限可配置。
+`python -m maidata.inference`显式加载阶段一E_D/D/P与阶段二v4的E_M/M权重。固定E_D产生Draft的P0并计算全曲Z/预测plan；独立E_M产生M的全曲P0，参数与隐藏表示分开。GT plan训练的M自由推理仍读取P预测，报告分别记录训练和推理plan来源。读取配套grid或使用固定Mel统计提取音频，按新字段规则维护真实起音组、边界MOMENT、跨窗活动动作与完整规则快照。两套Encoder各自按曲复用准备结果，D/P及M音频投影整次生成复用；各窗重新prefill历史，始终覆盖音频及一个完整空尾窗。旧连续时间头不兼容新385类架构。Physical硬约束默认开启，trace默认关闭；路径、温度、种子与生成上限可配置。
 
 `python -m maidata.inference.materialize`独立调用MiaCode render/dump，核对新字段与时间轴后输出`maidata.txt`和`track.<音频扩展名>`。两入口不导入旧模型包、不增加源码哈希门禁。小型真实E/D/P/M已完成CPU FP32/BF16到MiaCode的端到端测试；真实训练checkpoint的CUDA生成与谱面质量未验收。命令、跨窗合同和模块边界见[推理与物化](maidata-inference.md)。
 

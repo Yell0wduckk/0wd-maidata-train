@@ -25,11 +25,8 @@ def test_disabled_z_is_inert_for_router_content_and_field_queries_but_plan_audio
         assert not memory.condition[0].valid[:, :-1].any()
         assert memory.condition[0].valid[:, -1].all()
         out = model(tokens, torch.ones_like(tokens.types), memory)
-        fields = model.query_fields(out, torch.tensor([[0, 1], [1, 1]]), torch.tensor([0., 2.]),
-                                    torch.tensor([1, 0]), torch.tensor([0., 192.]), torch.tensor([0., 0.]))
-        return torch.cat((out.hidden.flatten(), out.type_logits.flatten(), fields.flatten()))
-    with patch.object(model.condition.z, 'forward', side_effect=AssertionError('Z projection used')), \
-         patch.object(model.field_reader.z, 'forward', side_effect=AssertionError('Z field attention used')):
+        return torch.cat((out.hidden.flatten(),out.type_logits.flatten()))
+    with patch.object(model.condition.z,'forward',side_effect=AssertionError('Z projection used')):
         result = evaluate(z, plan)
         changed = replace(z, values=torch.full_like(z.values, float('nan')),
                           beats=z.beats+1000, valid=~z.valid)
@@ -38,7 +35,7 @@ def test_disabled_z_is_inert_for_router_content_and_field_queries_but_plan_audio
         result.square().mean().backward()
     assert z.values.grad is None
     assert model.condition.z.weight.grad is None
-    assert model.field_reader.z.query.weight.grad is None
+    assert not hasattr(model,"field_reader")
     for value in (audio.values, plan):
         assert value.grad is not None and torch.isfinite(value.grad).all() and value.grad.abs().sum() > 0
 

@@ -40,10 +40,11 @@ class DecoderBlock(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.typed = experts is not None
 
-    def forward(self, x, beats, valid, audio, condition, plan_index, types, previous, row_indices=None):
+    def forward(self, x, beats, valid, audio, condition, plan_index, types, previous, row_indices=None, *, cross_beats=None):
+        cross_beats = beats if cross_beats is None else cross_beats
         layout = audio.query_layout
         if layout is not None and previous is None and tuple(valid.shape) == layout['shape'] and 'rows' in layout:
-            return self.packed(x, beats, valid, audio, condition, plan_index, types, layout)
+            return self.packed(x, beats, valid, audio, condition, plan_index, types, layout, cross_beats)
         if layout is not None and (previous is not None or tuple(valid.shape) != layout['shape']):
             # Incremental decoding after a packed prefill uses the ordinary cache API.
             mapping = layout['mapping']
@@ -52,8 +53,8 @@ class DecoderBlock(nn.Module):
             row_indices = None
         y, kv = self.self_attn.self_attention(self.norms[0](x), beats, valid, previous)
         x = x + self.dropout(y)
-        x = x + self.dropout(self.audio_attn(self.norms[1](x), beats, valid, audio))
-        x = x + self.condition_gate * self.condition_attn(self.norms[2](x), beats, valid, condition,
+        x = x + self.dropout(self.audio_attn(self.norms[1](x), cross_beats, valid, audio))
+        x = x + self.condition_gate * self.condition_attn(self.norms[2](x), cross_beats, valid, condition,
                                                          plan_index=plan_index)
         if row_indices is None:
             normalized = self.norms[3](x)
@@ -68,17 +69,18 @@ class DecoderBlock(nn.Module):
             y = y.new_zeros(flat.shape).index_copy(0, row_indices, y).reshape_as(x)
         return (x + y).masked_fill(~valid[..., None], 0), kv
 
-    def packed(self, x, beats, valid, audio, condition, plan_index, types, layout):
+    def packed(self, x, beats, valid, audio, condition, plan_index, types, layout, cross_beats):
         indices = layout['valid_indices']
         rows = x.flatten(0, 1).index_select(0, indices)
         positions = beats.flatten().index_select(0, indices)
         y, kv = packed_attention.self_attention(self.self_attn, self.norms[0](rows), positions, valid, layout['rows'])
         rows = rows + self.dropout(y)
+        query_positions = cross_beats.flatten().index_select(0, indices)
         raw = self.audio_attn.split(self.audio_attn.query(self.norms[1](rows))[None])
-        q = apply_rope(raw, positions[None], self.audio_attn.base, self.audio_attn.scale)
+        q = apply_rope(raw, query_positions[None], self.audio_attn.base, self.audio_attn.scale)
         rows = rows + self.dropout(self.audio_attn.mapped(q, valid, audio, packed=True))
         rows = rows + self.condition_gate * packed_attention.condition_attention(
-            self.condition_attn, self.norms[2](rows), positions, valid, condition, plan_index, layout['condition_rows'])
+            self.condition_attn, self.norms[2](rows), query_positions, valid, condition, plan_index, layout['condition_rows'])
         normalized = self.norms[3](rows)
         y = (self.ffn(normalized, types.flatten().index_select(0, indices))
              if self.typed else self.ffn(normalized))

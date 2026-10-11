@@ -21,7 +21,7 @@ class TokenEmbedding(nn.Module):
         self.flags = nn.ModuleList(nn.Embedding(2, d) for d in note_dims[2:])
         self.route = nn.Embedding(71, route_dims[0])
         self.track_break = nn.Embedding(2, route_dims[1])
-        self.input_type = nn.Embedding(5, dim)
+        self.input_type = nn.Embedding(8, dim)
         self.register_buffer('applicable', torch.tensor(
             [[f in APPLICABLE[k] for f in FLAGS] for k in KINDS]), persistent=False)
 
@@ -37,7 +37,7 @@ class TokenEmbedding(nn.Module):
         if self.validate_inputs and (tokens.flags.dtype != torch.long):
             raise ValueError('invalid token type/flag dtype')
         if self.validate_inputs:
-            require(((t >= 0) & (t <= 4) | ~valid).all(), 'invalid token type')
+            require(((t >= 0) & (t <= 7) | ~valid).all(), 'invalid token type')
         if self.validate_inputs:
             require(((torch.isfinite(tokens.beats) & torch.isfinite(tokens.time)) | ~valid).all(),
                     'valid token coordinates must be finite')
@@ -66,4 +66,4 @@ class TokenEmbedding(nn.Module):
             self.track_break(b.clamp(0, 1)).masked_fill(b[..., None] < 0, 0)), -1)
         times = sinusoidal(tokens.time.masked_fill(~valid, 0), self.dim, self.base, self.scale).to(notes.dtype)
         out = torch.where(note[..., None], notes, torch.where(route[..., None], routes, times))
-        return (out + self.input_type(t.clamp(0, 4))).masked_fill(~valid[..., None], 0)
+        return (out + self.input_type(t.clamp(0, 7))).masked_fill(~valid[..., None], 0)

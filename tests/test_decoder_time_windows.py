@@ -45,8 +45,11 @@ def test_history_original_delta_empty_crop_dropout_and_shift():
     validation = window(tokens, timing, 32, dropout=1., training=False)
     assert validation.inputs[0] == empty.inputs[0]
     batch, kinds, loss = collate_windows([w, empty], device='cpu')
-    assert loss.sum() == sum(w.supervised)+1 and batch.valid[1].sum() == 1
-    assert kinds[0, w.boundary_index-1] == 0
+    from maidata.decoder.sequence import model_window
+    expanded=model_window(w,timing)
+    assert batch.valid[1].sum()==4  # Empty terminal emits three CONT inputs before closure.
+    assert loss.sum()==len(expanded['tokens'])-expanded['last_rows'][w.boundary_index]+4
+    assert kinds[0,expanded['last_rows'][w.boundary_index]-1]==0
 
 
 @pytest.mark.parametrize('next_tick,censored', [(32*96, False), (34*96, False), (36*96, True), (40*96, True)])

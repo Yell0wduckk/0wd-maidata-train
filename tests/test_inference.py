@@ -52,7 +52,7 @@ def test_checkpoint_and_full_e_d_p_m_no_training_or_hash_dependencies(config, ge
         model_state={name+'.'+key: value for name, m in zip(('encoder','draft','planner'), modules)
                      for key, value in m.state_dict().items()})
     decoder_encoder = build_model(c)
-    second = dict(schema='maidata.decoder-training.v3',architecture='maidata.decoder-field-query-tick384.v1',
+    second = dict(schema='maidata.decoder-training.v4',architecture='maidata.decoder-causal-cont-tick384.v1',
         recipe=c,source={'commit':'different-code'},model_state={name+'.'+key:value
             for name,m in (('encoder',decoder_encoder),('decoder',modules[3])) for key,value in m.state_dict().items()})
     torch.save(first, tmp_path/'producer.ckpt')
@@ -176,12 +176,14 @@ def test_prefill_targets_are_following_new_field_types(config):
     timing = TimingMap([(0,120)])
     with torch.inference_mode():
         boundary,cache,count = prefill(model,memory,groups,timing,192,4,device='cpu')
-        tokens = pack_tokens([[Moment(500),Note.make('hold','A1'),HoldDuration(900),boundary]],[[1,1,1,2]],device='cpu')
-        types = torch.tensor([[1,3,0,1]])
+        from maidata.decoder.sequence import expand_inputs,family
+        seq=expand_inputs([Moment(500),Note.make('hold','A1'),HoldDuration(900),boundary],[1,1,1,2],timing,boundary_index=3)
+        tokens=pack_tokens([seq['tokens']],[seq['beats']],device='cpu',slide_positions=[seq['slide_beats']])
+        types=torch.tensor([[GENERATED_TYPES.index(family(t)) for t in seq['tokens'][1:]]+[1]])
         full = model(tokens,types,memory)
-        step = model.complete(model.begin(tokens.slice(3,4),memory,cache=cache),types[:,3:])
+        step = model.complete(model.begin(tokens.slice(count,count+1),memory,cache=cache),types[:,count:])
     torch.testing.assert_close(full.hidden[:,-1:],step.hidden,atol=2e-6,rtol=2e-5)
-    assert count==3
+    assert count==5
 
 
 def test_rollback_restores_pending_fields_actions_and_model_cache(config,geometry):
@@ -226,7 +228,7 @@ def test_sampler_mask_temperature_and_reproducible_retry():
         list(Sampler().order(torch.tensor([float('nan')])))
 
 
-def test_continuation_requeries_without_committing_kv_or_physical(config,geometry):
+def test_continuation_appends_kv_without_committing_physical(config,geometry):
     from dataclasses import replace
     from maidata.physical.inference import InferencePhysicalState
     model=build_decoder(config).eval()
@@ -245,19 +247,19 @@ def test_continuation_requeries_without_committing_kv_or_physical(config,geometr
         model.heads.times['MOMENT'].bias[384]=100
     routed=model.begin(pack_tokens([[Moment(0)]],[[0.]],device='cpu'),memory)
     seen=[]
-    original=model.query_fields
-    def capture(output,index,beats,roles,origins,elapsed):
-        seen.append((beats.tolist(),elapsed.tolist()))
-        return original(output,index,beats,roles,origins,elapsed)
+    original=model.begin
+    def capture(batch,*args,**kwargs):
+        seen.append((batch.types.tolist(),batch.beats.tolist()))
+        return original(batch,*args,**kwargs)
     before=physical.snapshot()
-    with patch.object(model,'query_fields',capture),patch.object(model,'complete',wraps=model.complete) as complete:
+    with patch.object(model,'begin',capture),patch.object(model,'complete',wraps=model.complete) as complete:
         token,cache=next(Sampler(temperature=0).choices(model,routed,physical,timing,
             decoder_time_distributions(config),end_tick=768,cap_tick=1152))
     assert isinstance(token,TimeTarget) and token.closed_by_continue
     assert token.lower_bound_tick==769 and token.query_tick==768
-    assert seen==[([0.],[0]),([4.],[384])]
-    assert complete.call_count==1 and physical.snapshot()==before
-    assert all(kv.valid.shape[1]==1 for kv in cache.layers)
+    assert seen==[([[5]],[[4.]])]
+    assert complete.call_count==2 and physical.snapshot()==before
+    assert all(kv.valid.shape[1]==2 for kv in cache.layers)
 
 
 def test_actual_field_sampling_flags_route_and_time(config,geometry):

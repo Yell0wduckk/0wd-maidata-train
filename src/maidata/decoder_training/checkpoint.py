@@ -12,8 +12,8 @@ from .plan import read_json
 from .recipe import PATH_KEYS, restore_optimizer
 
 
-SCHEMA = 'maidata.decoder-training.v3'
-ARCHITECTURE = 'maidata.decoder-field-query-tick384.v1'
+SCHEMA = 'maidata.decoder-training.v4'
+ARCHITECTURE = 'maidata.decoder-causal-cont-tick384.v1'
 PLANNER_KEYS = ('planner_dim','planner_heads','planner_mlp_dim','planner_dropout','planner_norm_eps')
 
 
@@ -123,7 +123,7 @@ def restore(payload, model, opt, sched, *, config, binding, source, producer, st
     # The user/training operator selects the checkpoint. Source, budget, recipe,
     # plan and cache provenance are recorded, not used as resume vetoes.
     if payload.get('schema') != SCHEMA or payload.get('architecture') != ARCHITECTURE:
-        raise ValueError('stage-II resume requires a v3 tick384 field-query checkpoint with Encoder and M states')
+        raise ValueError('stage-II resume requires a v4 causal CONT checkpoint with Encoder and M states')
     _load(model,payload['model_state'])
     restore_optimizer(opt, payload['optimizer_state'])
     sched.load_state_dict(payload['scheduler_state'])

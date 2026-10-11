@@ -102,7 +102,7 @@ def test_dataset_reads_gt_once_per_variant_without_replaying_charts(config, tmp_
     torch.save(dict(gt, window_ids=list(gt['window_index'])), tmp_path/'0.pt')
     (tmp_path/'manifest.json').write_text(json.dumps(dict(groups={'0': {'path': '0.pt'}})))
     windows = {w['identity'][0]: dict(history=w['offset'], tokens=w['tokens'],
-        next_types=w['next_types'], labels=w['labels']) for w in item['windows']}
+        next_types=w['next_types'], labels=w['labels'], metadata=dict(logical_lengths=[w['length']-w['offset'],w['offset']])) for w in item['windows']}
     rows = [dict(window_id=w['identity'][0], occurrence=w['identity'][1], chart_id=w['chart_id'],
                  start_beat=w['start'], sequence_index=i) for i, w in enumerate(item['windows'])]
     selected = (0, 1, 5)

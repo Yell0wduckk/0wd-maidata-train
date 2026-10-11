@@ -189,7 +189,7 @@ def test_convert_existing_window_without_opening_chart_or_physical(tmp_path):
     labels = dict(groups={'MOMENT': dense_group()}, counts={'main': 4, 'physical': 4, 'judge': 0, 'trajectory': 0},
                   flags=dict(indices=torch.empty(0, 2, dtype=torch.long), args=torch.empty(0, 2, dtype=torch.long)))
     value = dict(history=2, tokens={'time': torch.arange(7.), 'types': torch.zeros(7, dtype=torch.long)},
-                 next_types=torch.zeros(7, dtype=torch.long), labels=labels)
+                 next_types=torch.zeros(7, dtype=torch.long), labels=labels,metadata=dict(logical_lengths=[5,2]))
     torch.save(tensor_pack(value), source/'a.pt')
     row = dict(path='a.pt', lengths=[5, 2], chart_id='1:5')
     with patch('maidata.chart_cache.cache.load_chart', side_effect=AssertionError('chart access')), \
@@ -214,18 +214,22 @@ def test_final_time_diagnostic_reports_complete_path_probability_per_field():
         intervals=[[1,1920,decision()]]))
     trees=[compile_support_tree(stage,timing,kind='MOMENT',window_end=1536,cap_tick=1920,
         target=Moment(timing.delta_ms(0,tick))) for tick in (1,385,769,1200)]
-    group=dict(indices=torch.tensor([[0,i] for i in range(4)]),
-        allowed=torch.tensor([v.basic for v in trees]),penalty=torch.tensor([v.penalty for v in trees]),
-        target=torch.tensor([v.target for v in trees]),target_steps=torch.tensor([v.target_steps for v in trees]),
-        closes=torch.tensor([v.continuation_closes for v in trees]),query_beats=torch.tensor([v.query_beats for v in trees]),
-        elapsed=torch.tensor([v.elapsed_ticks for v in trees]),origins=torch.zeros(4,dtype=torch.long),
-        roles=torch.zeros(4,dtype=torch.long),main=torch.ones(4,dtype=torch.bool),scale=torch.ones(4),
-        args=torch.empty(4,0,dtype=torch.long),has_physical=True,owner_spans=[(0,0,4)])
+    entries=[]
+    from maidata.decoder_training.sequence_cache import step_penalty
+    for field,tree in enumerate(trees):
+        active=[d for d,v in enumerate(tree.target_steps) if v]
+        source=dict(allowed=torch.tensor(tree.basic)[None],penalty=torch.tensor(tree.penalty)[None],
+                    closes=torch.tensor(tree.continuation_closes)[None])
+        for d in active:
+            entries.append(dict(indices=torch.tensor([0,len(entries)]),allowed=torch.tensor(tree.basic[d]),
+                target=torch.tensor(tree.target[d]),penalty=step_penalty(source,0,d),
+                main=torch.tensor(True),scale=torch.tensor(1/len(active)),args=torch.empty(0,dtype=torch.long),
+                field_id=torch.tensor(field)))
+    group={k:torch.stack([v[k] for v in entries]) for k in entries[0]}
+    group['has_physical']=True
     labels=Prepared({'MOMENT':group},{'main':4,'physical':4,'judge':0,'trajectory':0},
-        dict(indices=torch.empty(0,2,dtype=torch.long),args=torch.empty(0,2,dtype=torch.long),
-             query_rows=torch.empty(0,dtype=torch.long)))
-    output=SimpleNamespace(hidden=torch.randn(1,4,c['decoder_dim']),type_logits=torch.randn(1,4,5))
-    output.field_reader=lambda out,index,*args,**kwargs: out.hidden[index[:,0],index[:,1]]
+        dict(indices=torch.empty(0,2,dtype=torch.long),args=torch.empty(0,2,dtype=torch.long)))
+    output=SimpleNamespace(hidden=torch.randn(1,len(entries),c['decoder_dim']),type_logits=torch.randn(1,len(entries),5))
     discrete,time={},{}
     terms=loss(model.heads,output,labels,distributions=decoder_time_distributions(c),geometry=None,
                diagnostics=discrete,time_diagnostics=time)

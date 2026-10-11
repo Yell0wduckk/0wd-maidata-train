@@ -12,7 +12,6 @@ from .supports import categorical_support
 from .probability import categorical_log_probabilities
 from .losses import Reduction, DecoderLoss, nll, physical_categories
 from maidata.time.discrete import compile_support_tree
-from maidata.time.distribution import time_path_nll, complete_field_log_probabilities
 
 
 def prediction_loss(heads, h, type_logits, target, stage, *, timing, window_end, cap_tick,
@@ -80,51 +79,27 @@ def prediction_loss(heads, h, type_logits, target, stage, *, timing, window_end,
     else:
         tree = compile_support_tree(stage,timing,kind=name,window_end=window_end,cap_tick=cap_tick,target=target,
                                     audio_end_seconds=audio_end_seconds)
-        if time_states is None or len(time_states) != len(tree.basic):
-            raise ValueError('time supervision requires a separate state at every reachable CONT query')
-        allowed = torch.tensor(tree.basic,device=device)
-        raw = heads.time_logits(time_states,name)
-        value = time_path_nll(raw,allowed,torch.tensor(tree.target,device=device),
-                              torch.tensor(tree.target_steps,device=device))
-        main = main + Reduction(value,1)
-        if (allowed.sum(-1)>1).any():
-            lp = complete_field_log_probabilities(raw,allowed,torch.tensor(tree.continuation_closes,device=device))
-            penalty = torch.tensor(tree.penalty,device=device)
-            physical = physical + Reduction(physical_categories(lp.flatten(),penalty.flatten(0,1)),1)
+        active=[i for i,v in enumerate(tree.target_steps) if v]
+        if time_states is None or len(time_states)!=len(active):
+            raise ValueError('time supervision requires actual GT-prefix token states')
+        from maidata.decoder_training.sequence_cache import step_penalty
+        allowed=torch.tensor(tree.basic,device=device)[active]
+        logits=heads.time_logits(time_states,name)
+        lp=categorical_log_probabilities(logits,allowed)
+        target_mask=torch.tensor(tree.target,device=device)[active]
+        main=main+Reduction(-torch.logsumexp(lp.masked_fill(~target_mask,-torch.inf),-1).sum(),1)
+        choices=allowed.sum(-1)>1
+        group=dict(allowed=torch.tensor(tree.basic)[None],penalty=torch.tensor(tree.penalty)[None],
+                   closes=torch.tensor(tree.continuation_closes)[None])
+        if choices.any():
+            penalty=torch.stack([step_penalty(group,0,d) for d in active]).to(device)
+            values=physical_categories(lp,penalty)
+            physical=physical+Reduction(values[choices].mean(0),1)
     return DecoderLoss(main, physical, judge, trajectory)
 
 
 def decoder_loss(heads, output, examples, stages, timings, audio_ends, *, distributions, geometry):
-    """Logical-batch sum/count; history, padding and injected boundaries are excluded."""
-    zero = output.hidden.sum() * 0
-    result = DecoderLoss(Reduction(zero, 0), Reduction(zero.expand(4), 0),
-                         Reduction(zero, 0), Reduction(zero, 0))
-    if not len(examples) == len(stages) == len(timings) == len(audio_ends) == len(output.hidden):
-        raise ValueError('supervision batch mismatch')
-    for batch, example in enumerate(examples):
-        if len(stages[batch]) != len(example.inputs):
-            raise ValueError('missing known-prefix support rows')
-        for row, (target, supervised) in enumerate(zip(example.targets, example.supervised)):
-            if supervised:
-                stage = stages[batch][row]
-                name = 'MOMENT' if isinstance(target,TimeTarget) else target.type
-                device = output.hidden.device
-                index = torch.tensor([[batch,row]],device=device)
-                origin = stage['cursor_tick']
-                def query(beats,elapsed):
-                    size = len(beats)
-                    return output.field_reader(output,index.expand(size,-1),torch.tensor(beats,device=device),
-                        torch.full((size,),GENERATED_TYPES.index(name),device=device,dtype=torch.long),
-                        torch.full((size,),origin,device=device,dtype=torch.long),torch.tensor(elapsed,device=device))
-                if name in ('NOTE','ROUTE'):
-                    h,time_states = query([origin/96],[0])[0],None
-                else:
-                    tree = compile_support_tree(stage,timings[batch],kind=name,window_end=example.end_tick,
-                                                cap_tick=example.cap_tick,target=target,
-                                                audio_end_seconds=audio_ends[batch])
-                    h,time_states = output.hidden[batch,row],query(tree.query_beats,tree.elapsed_ticks)
-                result = result + prediction_loss(heads, h, output.type_logits[batch, row],
-                    target, stages[batch][row], timing=timings[batch], window_end=example.end_tick,
-                    cap_tick=example.cap_tick, audio_end_seconds=audio_ends[batch],
-                    distributions=distributions, geometry=geometry,time_states=time_states)
-    return result
+    """Use the same compiled GT-prefix labels as the offline window consumer."""
+    from maidata.decoder_training.supervision import prepare,loss
+    rows=[dict(example=w,stages=s,timing=t,audio_end=e) for w,s,t,e in zip(examples,stages,timings,audio_ends,strict=True)]
+    return loss(heads,output,prepare(rows),distributions=distributions,geometry=geometry)

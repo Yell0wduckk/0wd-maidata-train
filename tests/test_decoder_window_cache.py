@@ -75,7 +75,7 @@ def test_window_manifest_supplies_lengths_and_reads_only_tensors(config,tmp_path
     plan = SimpleNamespace(windows=[row])
     config = dict(config,decoder_train_window_cache=str(tmp_path))
     meta = dict(schema=SCHEMA,complete=True,contract=contract(config,binding),
-        windows={'a':dict({k:v for k,v in row.items() if k!='window_id'},path='a.pt',lengths=[3,2])})
+        windows={'a':dict({k:v for k,v in row.items() if k!='window_id'},path='a.pt',lengths=[5,4],logical_lengths=[3,2])})
     (tmp_path/'manifest.json').write_text(json.dumps(meta),encoding='utf-8')
     torch.save(tensor_pack(dict(values=torch.arange(7))),tmp_path/'a.pt')
     cache = WindowCache([plan],config,binding)
@@ -87,7 +87,7 @@ def test_window_manifest_supplies_lengths_and_reads_only_tensors(config,tmp_path
 def test_previous_v3_local_cap_labels_are_not_read_as_observed_prefix(config, tmp_path):
     (tmp_path/'manifest.json').write_text(json.dumps(dict(schema='maidata.decoder-window-tensors.v3')),
                                          encoding='utf-8')
-    with pytest.raises(ValueError, match='observed-prefix'):
+    with pytest.raises(ValueError, match='causal CONT'):
         WindowCache([], dict(config,decoder_train_window_cache=str(tmp_path)), {})
 
 

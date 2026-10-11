@@ -15,7 +15,6 @@ class Chunk:
     labels: object
     audio_layout: dict
     cost: int
-    query_cost: int = 0
 
     def to(self, device):
         from maidata.training.data import map_tensors
@@ -25,9 +24,6 @@ class Chunk:
 def prepare_batch(batch, config):
     batch.chunks = []
     batch.budget_cost = batch_cost(batch.audio_lengths, [w['length'] for w in batch.windows], config)
-    # CONT depth is internal field work, never a new causal history row. Keep
-    # the accepted batch boundaries and report its separate compute count.
-    batch.budget_cost['field_queries'] = sum(w.get('field_query_cost') or 0 for w in batch.windows)
     conditions = batch.conditions
     spans = audio_key_spans(conditions.audio.valid, validate=False)
     for indices in window_chunks(batch.windows, config['decoder_train_chunk_token_budget']):
@@ -39,8 +35,7 @@ def prepare_batch(batch, config):
         condition_valid = torch.cat((conditions.decoder_z.valid[unique], conditions.plan_valid[unique, None]), -1)
         batch.chunks.append(Chunk(index, tokens, types, labels,
             audio_query_layout(tokens.valid, audio, len(conditions.audio.values), spans=spans,
-                               condition_valid=condition_valid, validate=False), tokens.valid.numel(),
-            sum(w.get('field_query_cost') or 0 for w in rows)))
+                               condition_valid=condition_valid, validate=False), tokens.valid.numel()))
     batch.token_budget = config['decoder_train_chunk_token_budget']
     # Transport only tensors + small occurrence metadata. Rule objects, complete
     # support dictionaries and GT token trees stay inside the worker.

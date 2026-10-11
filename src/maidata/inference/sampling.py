@@ -35,7 +35,7 @@ class Sampler:
         return not d.basic_errors and (not self.physical_hard_mask or not d.physical)
 
     def contents(self, decoder, h, kind, oracle, timing, distributions, *, end_tick, cap_tick,
-                 moment_remaining=None, output=None):
+                 moment_remaining=None, output=None, return_cache=False):
         heads, device = decoder.heads, h.device
         if kind == 'NOTE':
             kinds = oracle.query_kinds()
@@ -52,16 +52,16 @@ class Sampler:
                     # joint support also excludes a short hold beyond audio_end.
                     scores = torch.stack([sum(logits[FLAGS.index(f), getattr(n, f)] for f in applicable) for n in options])
                     for f in self.order(scores, [self.allowed(oracle.query(n)) for n in options]):
-                        yield options[f]
+                        yield (options[f],output.cache) if return_cache else options[f]
         elif kind == 'ROUTE':
             first = oracle.physical.grammar.state.phase in ('route', 'track_done')
             candidates = [Route(i, 0 if first else None) for i in range(71)]
             for r in self.order(heads.route(h), [self.allowed(oracle.query(n)) for n in candidates]):
                 if first:
                     for b in self.order(heads.break_logits(h, torch.tensor(r, device=device))):
-                        yield Route(r, b)
+                        yield (Route(r,b),output.cache) if return_cache else Route(r,b)
                 else:
-                    yield candidates[r]
+                    yield (candidates[r],output.cache) if return_cache else candidates[r]
         else:
             cursor = oracle.physical.grammar.state.cursor
             support = oracle.time_support(kind)
@@ -71,30 +71,34 @@ class Sampler:
             if output is None:
                 raise ValueError('time generation requires a reusable completed main prefix')
             tree = compile_support_tree(stage,timing,kind=kind,window_end=end_tick,cap_tick=cap_tick,target=None)
-            index = torch.tensor([[0,output.hidden.shape[1]-1]],device=device)
-            role = torch.tensor([GENERATED_TYPES.index(kind)],device=device)
-            origin = torch.tensor([cursor],device=device)
-            def visit(depth, query):
-                # No begin/complete call, KV write, Grammar mutation or Physical
-                # commit occurs along this one temporary CONT chain.
-                qh = output.field_reader(output,index,torch.tensor([query.query_beat(timing)],device=device),
-                    role,origin,torch.tensor([query.elapsed_ticks],device=device))[0]
+            from maidata.decoder.batching import pack_tokens
+            from maidata.decoder.sequence import continue_token
+            def emit(token, current):
+                return (token,current.cache) if return_cache else token
+            def visit(depth, query, current):
+                qh=current.hidden[0,-1]
                 valid = tree.hard[depth] if self.physical_hard_mask else tree.basic[depth]
                 for choice in self.order(heads.time_logits(qh,kind),valid):
                     value = query.advance(choice,window_end_tick=end_tick)
                     if value.closed_by_continue:
-                        lower = value.lower_bound_tick
-                        yield TimeTarget(timing.delta_ms(cursor,lower),lower,False,True,True,lower,
-                                         cursor+value.query.elapsed_ticks)
+                        lower=value.lower_bound_tick
+                        yield emit(TimeTarget(timing.delta_ms(cursor,lower),lower,False,True,True,lower,
+                                              cursor+value.query.elapsed_ticks),current)
                     elif choice == CONTINUE:
-                        yield from visit(depth+1,value.query)
+                        token=continue_token(kind,timing,cursor,value.query.elapsed_ticks)
+                        beat=value.query.query_beat(timing)
+                        batch=pack_tokens([[token]],[[beat]],device=device,slide_positions=[[beat]])
+                        types=torch.full_like(batch.types,GENERATED_TYPES.index(kind))
+                        routed=decoder.begin(batch,current.cache.memory,cache=current.cache)
+                        following=decoder.complete(routed,types)
+                        yield from visit(depth+1,value.query,following)
                     elif kind == 'MOMENT':
-                        tick = cursor+value.complete_ticks
-                        delta = timing.delta_ms(cursor,tick)
-                        yield (TimeTarget(delta,tick,False,True) if value.closes_window else Moment(delta))
+                        tick=cursor+value.complete_ticks
+                        delta=timing.delta_ms(cursor,tick)
+                        yield emit(TimeTarget(delta,tick,False,True) if value.closes_window else Moment(delta),current)
                     else:
-                        yield (HoldDuration if kind == 'HOLD_DURATION' else SlideDuration)(value.complete_ticks)
-            yield from visit(0,TimeQuery(kind,cursor))
+                        yield emit((HoldDuration if kind=='HOLD_DURATION' else SlideDuration)(value.complete_ticks),current)
+            yield from visit(0,TimeQuery(kind,cursor),output)
 
     def choices(self, decoder, routed, oracle, timing, distributions, *, end_tick, cap_tick,
                 moment_remaining=None):
@@ -110,14 +114,7 @@ class Sampler:
         for index in self.order(routed.logits[0, -1], allowed):
             target_type = torch.full_like(routed.valid, index, dtype=torch.long)
             result = decoder.complete(routed, target_type)
-            cursor = oracle.physical.grammar.state.cursor
             h = result.hidden[0,-1]
-            if GENERATED_TYPES[index] in ('NOTE','ROUTE'):
-                query_index = torch.tensor([[0,result.hidden.shape[1]-1]],device=result.hidden.device)
-                h = result.field_reader(result,query_index,
-                    torch.tensor([cursor/96],device=result.hidden.device),torch.tensor([index],device=result.hidden.device),
-                    torch.tensor([cursor],device=result.hidden.device),torch.tensor([0],device=result.hidden.device))[0]
-            for token in self.contents(decoder, h, GENERATED_TYPES[index], oracle,
-                                       timing, distributions, end_tick=end_tick, cap_tick=cap_tick,
-                                       moment_remaining=moment_remaining,output=result):
-                yield token, result.cache
+            yield from self.contents(decoder,h,GENERATED_TYPES[index],oracle,timing,distributions,
+                end_tick=end_tick,cap_tick=cap_tick,moment_remaining=moment_remaining,
+                output=result,return_cache=True)

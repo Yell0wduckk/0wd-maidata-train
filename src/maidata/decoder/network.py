@@ -7,7 +7,6 @@ from .embedding import TokenEmbedding
 from .attention import ConditionAdapter
 from .blocks import DecoderBlock
 from .heads import ContentHeads
-from .field_query import FieldReader
 from .checks import require
 
 
@@ -43,9 +42,7 @@ class Decoder(nn.Module):
             rope_base=rope_base, rope_position_scale=rope_position_scale,
             condition_gate_init=condition_gate_init) for i in range(layers))
         self.heads = ContentHeads(dim, readout_ffn_dim, norm_eps)
-        self.field_reader = FieldReader(dim, heads, dropout, norm_eps, rope_base, rope_position_scale,
-                                        z_cross_attention)
-        self.architecture = 'maidata.decoder-field-query-tick384.v1'
+        self.architecture = 'maidata.decoder-causal-cont-tick384.v1'
 
     def prepare_audio(self, audio, *, indices=None):
         """Project unique song banks once per forward/parameter version; retain gradients."""
@@ -89,7 +86,7 @@ class Decoder(nn.Module):
                 memory.plan_index, None, None if cache is None else cache.layers[i], memory.row_indices)
             front.append(kv)
         return RouterOutput(x, self.type_head(self.router_norm(x)), tokens.beats, tokens.valid,
-                            tuple(front), memory, cache)
+                            tuple(front), memory, cache, tokens.slide_beats)
 
     def complete(self, routed, next_types):
         """Reusing routed with a new type recomputes ALL affected back-layer K/V."""
@@ -100,18 +97,15 @@ class Decoder(nn.Module):
                     'next types must be aligned valid five-class IDs')
         types = next_types.masked_fill(~routed.valid, 0)
         x = (routed.hidden + self.target_type(types)).masked_fill(~routed.valid[..., None], 0)
+        query_beats = torch.where(types == 4, routed.slide_beats, routed.beats)
         memory, old = routed.memory, routed.previous
         layers = list(routed.front_kv)
         for i in range(self.router_layer, len(self.layers)):
             x, kv = self.layers[i](x, routed.beats, routed.valid, memory.audio[i], memory.condition[i],
-                memory.plan_index, types, None if old is None else old.layers[i], memory.row_indices)
+                memory.plan_index, types, None if old is None else old.layers[i], memory.row_indices, cross_beats=query_beats)
             layers.append(kv)
         hidden = self.final_norm(x).masked_fill(~routed.valid[..., None], 0)
-        return DecoderOutput(routed.logits, hidden, DecoderCache(tuple(layers), memory), self.query_fields)
-
-    def query_fields(self, output, indices, beats, roles, origins, elapsed, *, owner_spans=None):
-        return self.field_reader(output.hidden, output.cache.memory, indices, beats, roles, origins, elapsed,
-                                 owner_spans=owner_spans)
+        return DecoderOutput(routed.logits, hidden, DecoderCache(tuple(layers), memory))
 
     def forward(self, tokens, next_types, memory):
         """Parallel causal teacher forcing, or fresh per-window history prefill."""

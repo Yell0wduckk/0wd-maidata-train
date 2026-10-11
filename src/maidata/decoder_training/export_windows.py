@@ -22,11 +22,11 @@ from maidata.chart.windows import TimeTarget
 from maidata.chart.types import HoldDuration, SlideDuration, Moment
 from maidata.training.checkpoint import digest_file
 from .support_cache import ChartSupports
-from .supervision import prepare
+from .source_labels import prepare
 from .window_cache import SCHEMA, contract, tensor_pack
 
 
-def compile_window(chart, row, config, audio_end, onsets):
+def source_window(chart, row, config, audio_end, onsets):
     example = window_from_config(chart.tokens, chart.timing, config, sequence_start_tick=chart.start_tick,
         start_tick=row['start_tick'], audio_end_seconds=audio_end, training=False, rng=random.Random(0), onsets=onsets)
     if example.end_tick != row['end_tick']:
@@ -46,7 +46,7 @@ def compile_window(chart, row, config, audio_end, onsets):
     # The GT action and candidate ledger retain the complete source duration.
     # Only query supervision stops at the local observation boundary.
     stages, audit = chart.window(example)
-    tokens, types, _ = collate_windows([example], device='cpu')
+    tokens, types, _ = collate_windows([example], device='cpu', expand=False)
     labels = prepare([dict(example=example, stages=stages,
                            timing=chart.timing, audio_end=audio_end)])
     # Store the shared supervision once; history dropout changes only input and
@@ -75,6 +75,13 @@ def compile_window(chart, row, config, audio_end, onsets):
             duration_window_crossings=crossings, support_reuse=audit))
 
 
+def compile_window(chart, row, config, audio_end, onsets):
+    from .sequence_cache import expand_window
+    example = window_from_config(chart.tokens, chart.timing, config, sequence_start_tick=chart.start_tick,
+        start_tick=row["start_tick"], audio_end_seconds=audio_end, training=False, rng=random.Random(0), onsets=onsets)
+    return expand_window(source_window(chart,row,config,audio_end,onsets),example,chart.timing)
+
+
 def initialize(config, hashes):
     global CONFIG, HASHES, GEOMETRY
     torch.set_num_threads(1)
@@ -92,6 +99,10 @@ def export_chart(task):
         raise ValueError('field/Physical ownership differs')
     chart = ChartSupports(record, support, GEOMETRY)
     onsets = real_onsets(chart.tokens, chart.timing, sequence_start_tick=chart.start_tick)
+    from .sequence_cache import chart_sequence,write_asset
+    root=Path(c['decoder_train_window_cache'])
+    sequence=dict(chart_sequence(record),source_chart=relative)
+    seq=write_asset(root/'sequences'/f'{key.replace(chr(58),chr(45))}.pt',sequence,root)
     result = {}
     for row in rows:
         value = compile_window(chart, row, c, audio_end, onsets)
@@ -109,10 +120,10 @@ def export_chart(task):
         result[row['window_id']] = dict(
             **{k: row[k] for k in ('chart_id','audio_variant','start_tick','end_tick')},
             lengths=[len(value['next_types'])-value['history'], value['history']],
-            field_query_cost=value['metadata']['field_query_cost'],
+            logical_lengths=value['metadata']['logical_lengths'],
             duration_window_crossings=value['metadata']['duration_window_crossings'],
             path='windows/'+name, bytes=path.stat().st_size, sha256=digest_file(path))
-    return result
+    return key,result,seq
 
 
 def export(config, *, workers=12, window_ids=None, source_windows=None):
@@ -128,7 +139,7 @@ def export(config, *, workers=12, window_ids=None, source_windows=None):
     if source_windows is not None:
         previous = json.loads((Path(source_windows)/'manifest.json').read_text(encoding='utf-8-sig'))
         if previous['schema'] not in ('maidata.decoder-window-tensors.v1', 'maidata.decoder-window-tensors.v2',
-                                      'maidata.decoder-window-tensors.v3'):
+                                      'maidata.decoder-window-tensors.v3', 'maidata.decoder-window-tensors.v4'):
             raise ValueError('migration source must be a previous v1/v2/v3 window cache')
         if window_ids is None:
             window_ids = set(previous['windows'])
@@ -151,14 +162,15 @@ def export(config, *, workers=12, window_ids=None, source_windows=None):
             tasks.append((key, chart['chart_cache_path'], rows,
                           plan.groups[rows[0]['audio_variant']]['audio_end_seconds']))
     (root/'windows').mkdir(parents=True)
-    meta = dict(schema=SCHEMA, complete=False, contract=contract(config, binding), windows={},
-                time_support='exact-integer-intervals-relative-tick384-continue',
+    meta = dict(schema=SCHEMA, complete=False, contract=contract(config, binding), windows={}, sequences={},
+                time_support='exact-integer-intervals-gt-prefix-step-mean',
                 source_windows=None if source_windows is None else str(Path(source_windows).resolve()),
                 selected_window_ids=None if selected is None else sorted(selected))
     write_json(root/'manifest.json', meta)
     with ProcessPoolExecutor(max_workers=workers, initializer=initialize, initargs=(config, hashes)) as pool:
-        for n, result in enumerate(pool.map(export_chart, tasks), 1):
+        for n, (key,result,seq) in enumerate(pool.map(export_chart, tasks), 1):
             meta['windows'].update(result)
+            meta['sequences'][key]=seq
             print(json.dumps(dict(charts=n,total_charts=len(tasks),windows=len(meta['windows']))), flush=True)
     meta['complete'] = True
     write_json(root/'manifest.json', meta)

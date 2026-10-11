@@ -36,6 +36,12 @@ class TokenBatch:
     track_break: Tensor
     time: Tensor  # delta seconds for M; beats for durations
 
+    slide_beats: Tensor | None = None
+
+    def __post_init__(self):
+        if self.slide_beats is None:
+            object.__setattr__(self, "slide_beats", torch.where(self.types >= 5,self.beats,self.beats + 1))
+
     def slice(self, start, stop):
         return TokenBatch(**{f.name: getattr(self, f.name)[:, start:stop] for f in fields(self)})
 
@@ -76,6 +82,7 @@ class RouterOutput:
     front_kv: tuple[KV, ...]
     memory: DecoderMemory
     previous: DecoderCache | None
+    slide_beats: Tensor
 
 
 @dataclass(frozen=True)
@@ -83,4 +90,3 @@ class DecoderOutput:
     type_logits: Tensor
     hidden: Tensor
     cache: DecoderCache
-    field_reader: object = None

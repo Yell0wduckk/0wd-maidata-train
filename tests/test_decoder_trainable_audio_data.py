@@ -47,7 +47,7 @@ def test_dataset_reads_one_existing_grid_and_dp_per_selected_variant(config, tmp
     loaded = {}
     for w in item['windows']:
         loaded[w['identity'][0]] = dict(history=w['offset'], tokens=w['tokens'],
-                                       next_types=w['next_types'], labels=w['labels'])
+                                       next_types=w['next_types'], labels=w['labels'],metadata=dict(logical_lengths=[w['length']-w['offset'],w['offset']]))
     calls = dict(dp=0, windows=[])
 
     class Cache:

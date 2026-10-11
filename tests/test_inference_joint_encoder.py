@@ -17,7 +17,7 @@ from maidata.model import build_model, build_draft, build_planner, build_decoder
 from maidata.time import TimingMap
 
 
-def checkpoints(config, tmp_path, *, schema='maidata.decoder-training.v3'):
+def checkpoints(config, tmp_path, *, schema='maidata.decoder-training.v4'):
     teacher = dict(encoder=build_model(config), draft=build_draft(config), planner=build_planner(config))
     encoder, decoder = build_model(config), build_decoder(config)
     # Emit empty windows, exercising real E/D/P/M without unbounded sampling.
@@ -32,14 +32,14 @@ def checkpoints(config, tmp_path, *, schema='maidata.decoder-training.v3'):
                     model_state={name+'.'+key: value for name, module in teacher.items()
                                  for key, value in module.state_dict().items()})
     state = torch.nn.ModuleDict(dict(encoder=encoder, decoder=decoder)).state_dict()
-    consumer = dict(schema=schema,architecture='maidata.decoder-field-query-tick384.v1',recipe=config,model_state=state)
+    consumer = dict(schema=schema,architecture='maidata.decoder-causal-cont-tick384.v1',recipe=config,model_state=state)
     paths = tmp_path/'ed.ckpt', tmp_path/'m.ckpt'
     torch.save(producer, paths[0])
     torch.save(consumer, paths[1])
     return paths, teacher, encoder, decoder, consumer
 
 
-@pytest.mark.parametrize('schema', ['maidata.decoder-training.v3'])
+@pytest.mark.parametrize('schema', ['maidata.decoder-training.v4'])
 def test_inference_loads_correct_stage_specific_audio_weights(config, tmp_path, schema):
     paths, teacher, encoder, decoder, _ = checkpoints(config, tmp_path, schema=schema)
     models = load_models(*paths, device='cpu')
@@ -47,7 +47,7 @@ def test_inference_loads_correct_stage_specific_audio_weights(config, tmp_path, 
         assert all(torch.equal(value, getattr(models, name).state_dict()[key])
                    for key, value in teacher[name].state_dict().items())
     assert all(torch.equal(value, models.decoder.state_dict()[key]) for key, value in decoder.state_dict().items())
-    if schema.endswith('.v3'):
+    if schema.endswith('.v4'):
         assert models.decoder_encoder is not models.encoder
         assert all(torch.equal(value, models.decoder_encoder.state_dict()[key])
                    for key, value in encoder.state_dict().items())
@@ -123,11 +123,11 @@ def test_cli_v3_runs_both_encoders_and_reports_the_audio_source(config, tmp_path
     assert 'Decoder encoder global audio: started' in captured.err
     report = json.loads((tmp_path/'result/generation.json').read_text(encoding='utf-8'))
     assert report['complete'] and report['checkpoints']['decoder_audio_encoder'] == 'stage_ii'
-    assert report['checkpoints']['decoder']['schema'] == 'maidata.decoder-training.v3'
+    assert report['checkpoints']['decoder']['schema'] == 'maidata.decoder-training.v4'
 
 
 @pytest.mark.parametrize('schema',['maidata.decoder-training.v1','maidata.decoder-training.v2'])
 def test_old_time_architecture_is_not_silently_loaded(config,tmp_path,schema):
     paths,*_=checkpoints(config,tmp_path,schema=schema)
-    with pytest.raises(ValueError,match='v3 tick384'):
+    with pytest.raises(ValueError,match='v4 causal CONT'):
         load_models(*paths,device='cpu')
