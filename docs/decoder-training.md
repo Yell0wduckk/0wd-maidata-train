@@ -1,5 +1,7 @@
 # 主 Decoder 阶段二训练
 
+另有显式的 [`maidata.decoder_training.adapt` 适配入口](decoder-frozen-adaptation.md)：冻结 E/D、读取全曲 P0/Z，从已有 M checkpoint 初始化并只更新 M，开启 Z attention。以下默认 joint 路径的在线局部音频、scratch E/M 规则不适用于该入口。
+
 入口为 `python -m maidata.decoder_training`。本阶段**重新随机初始化音频 Encoder E_M 与主 Decoder M，联合更新两者**；始终读取阶段一 E_D/D/P 的固定离线全曲 Z。plan12默认读取独立离线GT plan，使训练条件准确对应GT谱面；P预测plan保留为显式对照。训练与验证构建E_M/M，不构建或运行教师E_D/D/P/R，不加载阶段一权重初始化E_M。E_M在线消费已验收Mel/aux32，M的谱面损失经音频K/V正常反传至E_M；固定Z/plan不会随E_M更新漂移，缺失条件不在线补算。
 
 ## 模块与数据流
@@ -33,7 +35,7 @@
 输入batch只有一个M计算块时，直接沿真实音频K/V、E_M与M计算图反传，不构造梯度桥。多个M计算块才通过音频K/V梯度桥汇总FP32梯度，逐块释放M图，最后统一反传真实投影与E_M图一次。所有块及累积batch完成后，E_M/M共同裁剪并执行一次optimizer/scheduler更新。离线Z/plan无梯度，更新后重新计算在线音频。保留完整GT历史、监督字段、Physical支持和逻辑loss分母。
 
 
-固定条件由 `decoder_train_dp_cache` 显式提供，沿用 [D/P 导出](frozen-dp-cache.md)格式；在线音频使用 `decoder_train_audio_cache` 与 `decoder_train_mel_root` 的既有输入。`decoder_train_p0_cache` 仅保留为可选离线导出路径，阶段二训练不读取 P0 缓存。启动只读取所需索引与原生产者元数据，不重新验收旧资产，不读取或哈希生产者 checkpoint。配套输入由用户和训练会话选定，读取时不重复扫描 shape、dtype、有限值、拍坐标、mask 或归属。P0/Z 保持原始绝对位置，完整空尾 Z/plan 有效；不同歌曲的 batch padding 与 Z 上下文范围外的槽无效。
+固定条件由 `decoder_train_dp_cache` 显式提供，沿用 [D/P 导出](frozen-dp-cache.md)格式；在线音频使用 `decoder_train_audio_cache` 与 `decoder_train_mel_root` 的既有输入。默认 joint 路径不读取 `decoder_train_p0_cache`；该路径由显式 cached 适配入口消费。joint 启动只读取所需索引与原生产者元数据，不重新验收旧资产，不读取或哈希生产者 checkpoint。配套输入由用户和训练会话选定，读取时不重复扫描 shape、dtype、有限值、拍坐标、mask 或归属。P0/Z 保持原始绝对位置，完整空尾 Z/plan 有效；不同歌曲的 batch padding 与 Z 上下文范围外的槽无效。
 
 ## Plan 条件来源与对照
 

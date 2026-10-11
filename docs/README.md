@@ -10,6 +10,7 @@
 | [drafter-frozen-p0-training](drafter-frozen-p0-training.md) | 主M ckpt45冻结Encoder导出P0、cached/joint双入口及D/R/P 50/100轮交接 |
 | [decoder](decoder.md) | 独立Decoder、Router/MMoE、内容小头、时间概率、窗口与监督归约 |
 | [decoder-training](decoder-training.md) | 新 Encoder 与 Decoder 联训、固定 D/P 条件、窗口与 Physical 监督、完整轮恢复 |
+| [decoder-frozen-adaptation](decoder-frozen-adaptation.md) | 从 M ckpt45 初始化、冻结 E/D、读取 P0/Z 缓存，只更新 M 并开启 Z attention |
 | [time384-cache-migration](time384-cache-migration.md) | 精确原谱v2/完整Physical到v3字段查询监督的增量迁移与从零生产 |
 | [新 encoder 设计](../../0wd-v3-refactor-docs/new-audio-encoder.md) | G₀ / S / L、共享块、局部三尺度及边界 |
 | [Encoder 实施文档](../../0wd-v3-refactor-docs/encoder-execution-plan.md) | 已实现模块、完整张量协议、验证范围与 aux32 生产约定 |

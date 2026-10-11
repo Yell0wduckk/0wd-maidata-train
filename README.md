@@ -33,6 +33,7 @@
 - [冻结主 Decoder ckpt45 的 P0 与 Drafter 50/100 轮训练](docs/drafter-frozen-p0-training.md)
 - [Decoder、Router/MMoE、小头、窗口与损失接口](docs/decoder.md)
 - [主 Decoder 阶段二训练与恢复](docs/decoder-training.md)
+- [冻结 Encoder/Drafter、读取 P0/Z 的 Decoder 适配入口](docs/decoder-frozen-adaptation.md)
 - [384 tick 时间监督缓存迁移与从零生产](docs/time384-cache-migration.md)
 - [当前模型整曲推理与可播放 maidata 导出](docs/maidata-inference.md)
 - [全官谱音频输入缓存](docs/encoder-audio-cache.md)

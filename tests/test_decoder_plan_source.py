@@ -128,6 +128,7 @@ def test_dataset_reads_gt_once_per_variant_without_replaying_charts(config, tmp_
 
 def test_recipe_requires_gt_cache_only_when_selected(config, tmp_path):
     c = dict(config, **{key: str(tmp_path/key) for key in recipe.PATH_KEYS})
+    c['decoder_train_init_checkpoint'] = None
     c['decoder_train_gt_plan_cache'] = None
     recipe.validate(c)
     with pytest.raises(ValueError, match='decoder_train_gt_plan_cache'):

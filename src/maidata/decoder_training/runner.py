@@ -98,9 +98,12 @@ def update(model, batches, opt, sched, config, geometry, *, audit=False):
     sched.step()
     changed = {name:sum(not torch.equal(a,b) for a,b in zip(before[name],m.parameters()))
                for name,m in model.named_children()} if audit else {}
-    if audit and (set(changed) != {'encoder','decoder'} or
-                  any(not gradients[name] or not changed[name] for name in changed)):
-        raise ValueError('joint stage II must construct and update Encoder and M')
+    if audit:
+        for name, module in model.named_children():
+            trainable = any(p.requires_grad for p in module.parameters())
+            if (trainable and (not gradients[name] or not changed[name]) or
+                    not trainable and (gradients[name] or changed[name])):
+                raise ValueError(f'{name}: gradient/update differs from joint/cached ownership')
     return metrics,dict(gradient_norm=float(norm),gradients=gradients,changed_parameter_tensors=changed,
                         chunks=len(costs),padded_token_costs=costs,
                         batch_costs=[b.budget_cost for b in batches])
@@ -148,6 +151,10 @@ def write_json(path, value):
 
 
 def run(config, *, resume=None, cuda_check=False, check_step=0):
+    initial = None
+    if config['decoder_train_audio_mode'] == 'cached':
+        from .adaptation import prepare
+        config, initial = prepare(config, resume)
     recipe.validate(config)
     device = torch.device(config['decoder_train_device'])
     if device.type == 'cuda' and (not torch.cuda.is_available() or
@@ -163,6 +170,12 @@ def run(config, *, resume=None, cuda_check=False, check_step=0):
     binding,hashes = checkpoint.data_provenance(config),{}
     cache = FrozenCache(plans,config,binding)
     config = condition_config(config, cache)
+    if config['decoder_train_audio_mode'] == 'cached':
+        from maidata.training.frozen_p0 import FrozenP0
+        from .adaptation import bind_conditions
+        p0 = FrozenP0(config['decoder_train_p0_cache'])
+        bind_conditions(cache, p0)
+        binding['frozen_p0'] = p0.identity
     windows = WindowCache(plans,config,binding)
     producer = checkpoint.cache_producer(cache.producer,config,binding)
     binding['frozen_conditions'] = cache.binding
@@ -175,17 +188,21 @@ def run(config, *, resume=None, cuda_check=False, check_step=0):
     if not resume:
         recipe.seed(config)
     model = DecoderTrainer(config)
+    if initial is not None and not resume:
+        from .adaptation import initialize
+        initialize(model, initial, config['decoder_train_init_checkpoint'])
     model.to(device)
     geometry = load_route_distances(config['decoder_train_route_distances']).to(device)
     opt = recipe.optimizer(model.parameters(),config)
     sched = recipe.scheduler(opt,steps,config)
     completed,step,best,restored = 0,0,None,[None,None]
     if resume:
-        payload = torch.load(resume,map_location='cpu',weights_only=False)
+        payload = initial if initial is not None else torch.load(resume,map_location='cpu',weights_only=False)
         completed,step,best = checkpoint.restore(payload,model,opt,sched,config=config,binding=binding,
             source=source,producer=producer,steps=steps,loaders=loaders)
         restored = [r if started else None for r,started in zip(payload['loader_rng'],payload['loader_started'])]
         del payload
+    del initial
     if cuda_check:
         if not 0 <= check_step < steps[0]:
             raise ValueError('CUDA check step outside first epoch')
@@ -206,7 +223,9 @@ def run(config, *, resume=None, cuda_check=False, check_step=0):
         metrics,audit = update(model,batches,opt,sched,config,geometry,audit=True)
         torch.cuda.synchronize(device)
         report = dict(metrics=metrics.report(config),**audit,component_forward_calls=calls,
-            conditioning='online_audio_fixed_draft_plan',encoder_initialization='scratch',
+            conditioning='cached_p0_fixed_draft_plan' if model.cached else 'online_audio_fixed_draft_plan',
+            encoder_initialization='frozen_p0_snapshot' if model.cached else 'scratch',
+            initialization=model.initialization,
             plan_source=config['decoder_train_plan_source'],
             constructed_components=list(dict(model.named_children())),
             data_wait_seconds=data_seconds,
@@ -221,7 +240,8 @@ def run(config, *, resume=None, cuda_check=False, check_step=0):
         return dict(completed_epochs=completed,step=step)
     output.mkdir(parents=True,exist_ok=True)
     write_json(output/('resume.json' if resume else 'run.json'),dict(config=config,source=source,binding=binding,
-        producer=producer,steps_by_epoch=steps,resume=str(resume) if resume else None,starting_completed_epochs=completed))
+        producer=producer,steps_by_epoch=steps,resume=str(resume) if resume else None,starting_completed_epochs=completed,
+        initialization=model.initialization, audio_producer=model.audio_producer))
     for epoch in range(completed+1,config['decoder_train_stop_after_epochs']+1):
         start = time.perf_counter()
         loaders[0].batch_sampler.epoch = epoch

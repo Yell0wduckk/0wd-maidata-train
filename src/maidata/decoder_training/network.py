@@ -1,4 +1,4 @@
-"""Stage II trains a fresh audio Encoder and M with fixed Draft/Plan conditions."""
+"""Joint E/M training or cached frozen-E adaptation, with fixed Draft/Plan."""
 from dataclasses import replace
 import torch
 from torch import nn
@@ -11,17 +11,32 @@ class DecoderTrainer(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.encoder = build_model(config)
+        self.cached = config['decoder_train_audio_mode'] == 'cached'
+        self.audio_producer = None
+        self.initialization = None
+        if self.cached:
+            from maidata.training.frozen_p0 import FrozenP0
+            cache = FrozenP0(config['decoder_train_p0_cache'])
+            cache.load_encoder(self.encoder)
+            self.audio_producer = cache.identity
         self.decoder = build_decoder(config)
         self.distributions = decoder_time_distributions(config)
         for module in self.modules():
             if hasattr(module, 'validate_inputs'):
                 module.validate_inputs = False
 
+    def train(self, mode=True):
+        super().train(mode)
+        if self.cached:
+            self.encoder.eval()
+        return self
+
     def conditions(self, batch):
-        inputs = batch.online_audio
-        local = self.encoder(inputs.songs, inputs.windows)
-        audio = local.P0
-        conditions = replace(batch.conditions, audio=Memory(audio.values, audio.beats, audio.valid))
+        conditions = batch.conditions
+        if not self.cached:
+            inputs = batch.online_audio
+            audio = self.encoder(inputs.songs, inputs.windows).P0
+            conditions = replace(conditions, audio=Memory(audio.values, audio.beats, audio.valid))
         # Fixed D/P caches may have BF16 values while this run uses FP32.
         device = conditions.audio.values.device.type
         if torch.is_autocast_enabled(device):

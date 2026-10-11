@@ -75,8 +75,11 @@ def load_producer(model, config, binding, *, payload=None):
     for name in ('encoder','draft','planner'):
         state = {k[len(name)+1:]:v for k,v in payload['model_state'].items() if k.startswith(name+'.')}
         _load(getattr(model,name),state)
-    return dict(sha256=digest_file(path),schema=payload['schema'],completed_epochs=payload['completed_epochs'],
+    identity = dict(sha256=digest_file(path),schema=payload['schema'],completed_epochs=payload['completed_epochs'],
                 step=payload['step'],recipe=payload['recipe'],source=payload['source'],binding=payload['binding'])
+    if payload.get('audio_producer') is not None:
+        identity['audio_producer'] = payload['audio_producer']
+    return identity
 
 
 def data_provenance(config):
@@ -120,7 +123,8 @@ def capture(model, opt, sched, *, epoch, step, config, binding, source, producer
         scheduler_state=sched.state_dict(),completed_epochs=epoch,step=step,recipe=recipe(config),binding=binding,
         source=source,producer=producer,steps_by_epoch=steps,rng=rng_state(),
         loader_rng=[l.generator.get_state() for l in loaders],loader_started=[l._iterator is not None for l in loaders],
-        best_validation_loss=best,metrics=metrics)
+        best_validation_loss=best,metrics=metrics, audio_producer=model.audio_producer,
+        initialization=model.initialization)
     return result
 
 
@@ -129,7 +133,12 @@ def restore(payload, model, opt, sched, *, config, binding, source, producer, st
     # plan and cache provenance are recorded, not used as resume vetoes.
     if payload.get('schema') != SCHEMA or payload.get('architecture') != ARCHITECTURE:
         raise ValueError('stage-II resume requires a v4 causal CONT checkpoint with normalized-plan architecture v2 and Encoder/M states')
+    if payload['recipe'].get('decoder_train_audio_mode', 'joint') != config['decoder_train_audio_mode']:
+        raise ValueError('joint/cached optimizer ownership differs; use weight initialization for adaptation')
+    if model.cached and (payload.get('audio_producer') != model.audio_producer or payload['producer'] != producer):
+        raise ValueError('adaptation resume requires the same frozen P0 and Z producers')
     _load(model,payload['model_state'])
+    model.initialization = payload.get('initialization')
     restore_optimizer(opt, payload['optimizer_state'])
     sched.load_state_dict(payload['scheduler_state'])
     for loader,state in zip(loaders,payload['loader_rng']):

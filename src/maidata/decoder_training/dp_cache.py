@@ -55,7 +55,8 @@ class CachedP0Dataset(Dataset):
         bank = BeatMemory(*(payload[k].unsqueeze(0) for k in ('values','beats','valid')))
         keys, conditions = meta['chart_ids'], []
         for key in keys:
-            record = load_chart(Path(self.config['decoder_train_chart_cache'])/self.charts[key]['chart_cache_path'])
+            record = load_chart(Path(self.config['decoder_train_chart_cache'])/self.charts[key]['chart_cache_path'],
+                                validate_input=False)
             source = dict(record['source'])
             if source['chart_id'] != key or source['audio_variant'] != variant:
                 raise ValueError('chart condition ownership differs')
@@ -108,8 +109,9 @@ def export(config, p0_root, output):
     if output.exists() and any(output.iterdir()):
         raise FileExistsError('D/P output must be new or empty')
     device = torch.device(config['decoder_train_device'])
-    if device.type != 'cuda' or config['decoder_train_precision'] != 'bf16' or not torch.cuda.is_bf16_supported():
-        raise ValueError('export requires CUDA bf16')
+    if device.type == 'cuda' and (not torch.cuda.is_available() or
+            config['decoder_train_precision'] == 'bf16' and not torch.cuda.is_bf16_supported()):
+        raise ValueError('requested CUDA/bf16 export runtime is unavailable')
     p0 = json.loads((p0_root/'manifest.json').read_text())
     if p0['schema'] != P0_SCHEMA or not p0['complete'] or p0['precision'] != config['decoder_train_precision']:
         raise ValueError('P0 cache is incomplete or incompatible')
@@ -117,32 +119,47 @@ def export(config, p0_root, output):
              for side in ('train','validation')]
     splits = {side:[g['audio_variant'] for g in plan['audio_groups']]
               for side,plan in zip(('train','validation'),plans)}
-    if splits != p0['splits']:
+    external_encoder = 'encoder' in p0
+    # Stage-I and M plans can order the same audio groups differently. Banks are
+    # keyed by variant, so only split membership matters for external frozen E.
+    if (any(set(splits[side]) != set(p0['splits'][side]) for side in splits) if external_encoder
+            else splits != p0['splits']):
         raise ValueError('P0 split binding differs')
-    binding = {key:{name:digest_file(Path(config[key.replace('pretrain_','decoder_train_')])/name)
-                   for name in ('catalog.json','production-summary.json')}
-               for key in ('pretrain_chart_cache','pretrain_audio_cache')}
+    # The new frozen-E Drafter checkpoint binds the existing stage-II P0 by
+    # recorded identities. Do not rehash accepted audio/chart catalogs or banks.
+    binding = {} if external_encoder else {
+        key:{name:digest_file(Path(config[key.replace('pretrain_','decoder_train_')])/name)
+             for name in ('catalog.json','production-summary.json')}
+        for key in ('pretrain_chart_cache','pretrain_audio_cache')}
     model, producer, teacher = load_export_producer(config,binding)
-    if producer != p0['producer'] or binding != p0['normalization'] or p0['p0_rate'] != teacher['fpn_rates'][0]:
+    if external_encoder:
+        from maidata.training.frozen_p0 import FrozenP0
+        from maidata.model import ENCODER_KEYS
+        frozen = FrozenP0(p0_root)
+        if (producer.get('audio_producer') != frozen.identity or
+                json.loads(json.dumps({k: teacher[k] for k in ENCODER_KEYS})) != frozen.encoder_config):
+            raise ValueError('Drafter checkpoint was not trained on the selected frozen P0')
+    elif producer != p0['producer'] or binding != p0['normalization'] or p0['p0_rate'] != teacher['fpn_rates'][0]:
         raise ValueError('P0 producer or normalization differs')
     draft, planner = model.draft.to(device).eval(), model.planner.to(device).eval()
     # Encoder and Decoder stay on CPU and are never forwarded.
     dataset = CachedP0Dataset(teacher,p0_root,p0,plans)
     workers = config['decoder_train_workers']
     loader = DataLoader(dataset,batch_size=None,num_workers=workers,persistent_workers=workers>0,
-        worker_init_fn=worker_init,pin_memory=True,
+        worker_init_fn=worker_init,pin_memory=device.type == 'cuda',
         generator=torch.Generator().manual_seed(config['decoder_train_seed']))
     output.mkdir(parents=True,exist_ok=True)
     report = dict(schema=SCHEMA,complete=False,producer=producer,normalization=binding,
         z_representation=Z_REPRESENTATION,z_width=teacher['draft_latent_dim'],
-        p0_manifest_sha256=digest_file(p0_root/'manifest.json'),p0_root=str(p0_root),
+        p0_manifest_sha256=None if external_encoder else digest_file(p0_root/'manifest.json'),p0_root=str(p0_root),
         precision=config['decoder_train_precision'],workers=workers,splits=splits,groups={},
-        plans={side:{name:digest_file(Path(config['decoder_train_'+side+'_plan'])/name)
+        plans={} if external_encoder else {side:{name:digest_file(Path(config['decoder_train_'+side+'_plan'])/name)
                      for name in ('plan.json',plan['files']['windows'])}
                for side,plan in zip(('train','validation'),plans)},
         source=config.get('_export_source_commit'),encoder_forward_calls=0,decoder_forward_calls=0)
     write_json(output/'manifest.json',report)
-    torch.cuda.reset_peak_memory_stats(device)
+    if device.type == 'cuda':
+        torch.cuda.reset_peak_memory_stats(device)
     started = time.perf_counter()
     for raw in loader:
         batch = raw.to(device)
@@ -163,9 +180,11 @@ def export(config, p0_root, output):
         print(json.dumps(dict(completed=len(report['groups']),total=len(dataset),
             variant=batch['variant'],seconds=time.perf_counter()-started)),flush=True)
         del batch,z,target,plan
-    torch.cuda.synchronize(device)
+    if device.type == 'cuda':
+        torch.cuda.synchronize(device)
     report.update(complete=True,seconds=time.perf_counter()-started,
-        peak_allocated=torch.cuda.max_memory_allocated(device),peak_reserved=torch.cuda.max_memory_reserved(device),
+        peak_allocated=torch.cuda.max_memory_allocated(device) if device.type == 'cuda' else 0,
+        peak_reserved=torch.cuda.max_memory_reserved(device) if device.type == 'cuda' else 0,
         bytes=sum(r['bytes'] for r in report['groups'].values()),
         charts=sum(len(r['chart_to_group']) for r in report['groups'].values()),
         windows=sum(r['windows'] for r in report['groups'].values()))

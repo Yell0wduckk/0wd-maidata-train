@@ -41,6 +41,10 @@ class DecoderDataset(Dataset):
     def __init__(self, plan, config, field_hashes, cache, windows):
         self.plan, self.config = plan, config
         self.cache, self.windows = cache, windows
+        self.p0 = None
+        if config['decoder_train_audio_mode'] == 'cached':
+            from maidata.training.frozen_p0 import FrozenP0
+            self.p0 = FrozenP0(config['decoder_train_p0_cache'])
         self.gt_plan = None
         if config['decoder_train_plan_source'] == 'gt':
             from .gt_plan_cache import GTPlanCache
@@ -54,11 +58,15 @@ class DecoderDataset(Dataset):
         c, plan = self.config, self.plan
         rows = plan.rows(variant, epoch, selection[0] if selection else None)
         dp = self.cache.read(variant)
-        grid = load_grid(Path(c['decoder_train_audio_cache'])/'grids'/f'{variant}.npz',
-                         mel_root=c['decoder_train_mel_root'], validate_input=False)
-        meta = plan.groups[variant]
-        coverage = song_coverage(TimingMap.from_audio_timing(meta['timing'], validate_input=False),
-            meta['audio_end_seconds'], first_beat=int(grid['first_beat']), target_beats=c['target_beats'])
+        bank, grid = None, None
+        if self.p0 is not None:
+            bank, coverage = self.p0.read(variant)
+        else:
+            grid = load_grid(Path(c['decoder_train_audio_cache'])/'grids'/f'{variant}.npz',
+                             mel_root=c['decoder_train_mel_root'], validate_input=False)
+            meta = plan.groups[variant]
+            coverage = song_coverage(TimingMap.from_audio_timing(meta['timing'], validate_input=False),
+                meta['audio_end_seconds'], first_beat=int(grid['first_beat']), target_beats=c['target_beats'])
         windows, loaded = [], {}
         for row in rows:
             key, identity = row['chart_id'], row['window_id']
@@ -68,6 +76,8 @@ class DecoderDataset(Dataset):
             windows.append(dict(identity=(identity, row['occurrence']), chart_id=key, start=row['start_beat'],
                 sequence_index=row['sequence_index'], **tensors))
         result = dict(variant=variant, grid=grid, coverage=coverage, dp=dp, windows=windows)
+        if bank is not None:
+            result['p0'] = bank
         if self.gt_plan is not None:
             result['gt_plan'] = self.gt_plan.read(variant)
         return result
@@ -135,9 +145,18 @@ def collate_audio(items, *, config, packed=False):
     windows = [w for i in items for w in i['windows']]
     if any('sequence_index' in w for w in windows):
         windows.sort(key=lambda w: w['sequence_index'])
-    online, audio = collate_online_audio(items, config)
-    lengths = [sum(key[0] == variant for key in online.audio_keys)*audio.valid.shape[1] for variant in variants]
-    batch = Batch(collate_conditions(items, windows, config, audio=audio, audio_keys=online.audio_keys), windows, variants, lengths,
+    if config['decoder_train_audio_mode'] == 'cached':
+        from maidata.training.frozen_p0 import collate_banks
+        from maidata.decoder.types import Memory
+        bank = collate_banks(items)
+        online, keys = None, None
+        audio = Memory(bank.values, bank.beats, bank.valid)
+        lengths = [len(item['p0'].beats) for item in items]
+    else:
+        online, audio = collate_online_audio(items, config)
+        keys = online.audio_keys
+        lengths = [sum(key[0] == variant for key in keys)*audio.valid.shape[1] for variant in variants]
+    batch = Batch(collate_conditions(items, windows, config, audio=audio, audio_keys=keys), windows, variants, lengths,
                   online_audio=online)
     from .preparation import prepare_batch
     prepare_batch(batch, config)

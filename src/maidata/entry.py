@@ -106,7 +106,9 @@ CONFIG = {
     "decoder_z_after_beats": 4,
     "decoder_history_dropout": 0.15,
     "decoder_train_checkpoint": None,  # Offline-export producer; optional in training, never initializes stage-II E.
-    "decoder_train_p0_cache": None,  # Optional offline-export path; joint training does not read P0 caches.
+    "decoder_train_p0_cache": None,  # Frozen public P0 for cached adaptation; unused by joint training.
+    "decoder_train_audio_mode": "joint",  # joint: fresh E/M; cached: frozen E, warm-start M.
+    "decoder_train_init_checkpoint": None,  # Weight initialization only; never an optimizer/epoch resume.
     "decoder_train_dp_cache": None,  # Matching frozen Z and predicted plan12 export.
     "decoder_train_plan_source": "gt",  # Match GT charts in training; inference reads predicted plan12.
     "decoder_train_gt_plan_cache": None,  # Required only for gt; offline MusicPlanTargets export.

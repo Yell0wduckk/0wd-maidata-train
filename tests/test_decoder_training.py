@@ -416,6 +416,7 @@ def test_runner_exact_epoch_resume_dropout_validation_and_failure(config,tmp_pat
     c = dict(config,decoder_dropout=.1,decoder_history_dropout=.5,decoder_train_stop_after_epochs=6,
              decoder_train_workers=workers,decoder_train_row_budget=24)
     c.update({k:str(tmp_path/k) for k in PATH_KEYS})
+    c['decoder_train_init_checkpoint'] = None
     items = [training_item(i,c,monkeypatch) for i in range(2)]
     class Plan:
         def __init__(self,root,c,*,training):
@@ -612,7 +613,7 @@ def test_required_recipe_is_not_filled_from_pretraining_defaults(config):
 def test_joint_training_does_not_require_export_only_paths(config,tmp_path):
     from maidata.decoder_training.recipe import PATH_KEYS
     c = dict(config,**{k:str(tmp_path/k) for k in PATH_KEYS})
-    c.update(decoder_train_checkpoint=None,decoder_train_p0_cache=None)
+    c.update(decoder_train_checkpoint=None,decoder_train_p0_cache=None,decoder_train_init_checkpoint=None)
     recipe.validate(c)
     assert 'decoder_train_checkpoint' not in checkpoint.data_provenance(c)['paths']
     assert 'decoder_train_p0_cache' not in checkpoint.data_provenance(c)['paths']
