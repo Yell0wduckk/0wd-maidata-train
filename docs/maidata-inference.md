@@ -88,6 +88,8 @@ M使用独立CONT输入；续接锁定时间类型，每次CONT执行主干并�
 
 ## Physical 推理查询与复用
 
+推理在选择每个 ROUTE 候选时提前检查第一段的 `path_coverage`：第一段路径、NOTE 出现时刻和一拍后的启动时刻不随 duration 或后续拼接变化，必然冲突的候选立即拒绝。即使恢复了旧的延迟前缀，也不能在该第一段上继续追加。保留原来的路径豁免、覆盖方向和时间边界；拼接后段的启动时间依赖总 duration 分配，仍由完整轨道检查。此提前拦截仅用于推理，训练的 AttributionState、归责和已生产支持缓存不变。
+
 整曲生成使用独立的 `physical.inference.InferencePhysicalState`，迁移旧仓库的局部字段查询、存在性短路和前缀内缓存。训练的 `AttributionState` 继续维护首次归责与惩罚支持；正常整曲推理只读取原始规则决定，不计算训练归责、继承冲突或冲突覆盖。
 
 - 类型阶段只需确认存在一个可用 NOTE，不枚举全部 kind×pad；kind阶段找到可用位置即停止；pad阶段只查询已选kind。候选结果在同一前缀内复用，外观flags和track break共享查询，short标记仍独立检查音频边界。

@@ -9,7 +9,8 @@ from maidata.chart.types import (KINDS, BUTTON_PADS, TOUCH_PADS, Completion,
                                 Moment, Note, Route, HoldDuration, SlideDuration)
 from .actions import materialize
 from .conflicts import branch_conflicts
-from .rules import CATEGORIES, prune_history
+from .geometry import Geometry
+from .rules import CATEGORIES, EPS, prune_history
 from .inference_context import InferenceIntervalContext
 from .state import Decision, PhysicalState
 from .support import duration_support, moment_support
@@ -150,6 +151,26 @@ class InferencePhysicalState(PhysicalState):
             self._context = InferenceIntervalContext(self.actions)
         return Decision(physical=self._context.reasons(action, touch_repeat=touch_repeat), deferred=deferred)
 
+    def _first_route_coverage(self, grammar):
+        """Reject immutable first-segment coverage before accepting any ROUTE.
+
+        The first segment appears at the NOTE and starts one beat later.
+        Neither timestamp nor its path changes with duration or extension.
+        Later segments retain full-action checks: their starts depend on the
+        total duration and the lengths of every segment in the chain.
+        """
+        path = self.geometry.path(grammar.note.pad, grammar.routes[0])
+        if path.exempt:
+            return frozenset()
+        appearance = self.timing.second(grammar.cursor)
+        launch = self.timing.second(grammar.cursor + 96)
+        for action in self.actions:
+            for old in action.motions:
+                if (not old.exempt and Geometry.covers(old.path, path.key)
+                        and old.start <= launch + EPS and old.end >= appearance - EPS):
+                    return frozenset({'slide_too_fast'})
+        return frozenset()
+
     def query(self, token, *, window_end=None, touch_repeat=True):
         self._refresh()
         canonical = _query_token(token)
@@ -188,9 +209,12 @@ class InferencePhysicalState(PhysicalState):
                                       wifi=token.route_id == 70)
             if branch:
                 return Decision(physical=frozenset(c.category for c in branch))
+            coverage = self._first_route_coverage(s)
+            if coverage:
+                return Decision(physical=coverage)
             if s.routes == (70,):
-                # WiFi cannot be extended. Ordinary chains remain deferred:
-                # adding routes can repair their eventual duration/coverage.
+                # WiFi cannot be extended. Remaining ordinary-chain checks
+                # stay deferred when extension can repair their completion.
                 fork = type(self)(self.timing, self.geometry, audio_end_seconds=self.audio_end_seconds)
                 fork.duration_end_seconds = self.duration_end_seconds
                 fork.grammar, fork.actions = grammar, self.actions

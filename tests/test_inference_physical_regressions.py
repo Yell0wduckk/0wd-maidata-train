@@ -11,7 +11,7 @@ import torch
 from maidata.chart import Moment, Note, Route, HoldDuration, SlideDuration
 from maidata.chart.routes import catalog, route_for
 from maidata.chart.types import Completion, Track, TOUCH_PADS
-from maidata.physical import Geometry, PathGeometry, PhysicalState
+from maidata.physical import Geometry, PathGeometry, PhysicalState, PhysicalError
 from maidata.physical.actions import materialize
 from maidata.physical.attribution import AttributionState
 from maidata.physical.inference import InferencePhysicalState
@@ -142,6 +142,61 @@ def test_route_prefix_can_be_repaired_by_extension_then_rolled_back(timing, geom
     assert not s.query_types()['SLIDE_DURATION'].allowed
     assert s.query(extension).allowed
     assert s.snapshot() == pending
+
+
+def test_first_route_coverage_is_rejected_before_duration_or_extension(timing, geometry):
+    s = state(timing, geometry, tick=192)
+    s.actions = (track(timing, geometry, ('1-3',)),)
+    s.accept(Note.make('slide', 'A1'))
+    saved = s.snapshot()
+    route = Route(route_for('1-3'), 0)
+    # Old motion ends exactly when the new head appears. Every duration and
+    # later extension keeps this first segment's appearance and launch fixed.
+    with patch('maidata.physical.inference.duration_support', side_effect=AssertionError('duration query')):
+        decision = s.query(route)
+        assert decision.physical == frozenset({'slide_too_fast'})
+        assert not decision.deferred
+        with pytest.raises(PhysicalError):
+            s.accept(route)
+    assert s.snapshot() == saved
+    # The training oracle is deliberately unchanged by this inference fix.
+    training = PhysicalState(timing, geometry, audio_end_seconds=20.)
+    training.restore(saved)
+    oracle = AttributionState(training)
+    assert oracle.query(route).raw.deferred
+    assert oracle.query(route).raw.decision().allowed
+    training.accept_source(route)
+    assert 'slide_too_fast' in oracle.query(SlideDuration(96)).raw.decision().physical
+    # A restored legacy/deferred prefix cannot append its way out of coverage.
+    s.accept_source(route)
+    assert s.query(Route(route_for('3-5'))).physical == frozenset({'slide_too_fast'})
+
+
+@pytest.mark.parametrize('exempt', ['old', 'new', None])
+def test_route_coverage_preserves_exemptions_and_snapshot_cache(timing, geometry, exempt):
+    s = state(timing, geometry, tick=192)
+    old = track(timing, geometry, ('1-3',))
+    if exempt == 'old':
+        old = replace(old, motions=tuple(replace(m, exempt=True) for m in old.motions))
+    elif exempt == 'new':
+        geometry.paths['1-3'] = replace(geometry.paths['1-3'], exempt=True)
+    s.actions = (old,)
+    s.accept(Note.make('slide', 'A1'))
+    saved = s.snapshot()
+    route = Route(route_for('1-3'), 0)
+    decision = s.query(route)
+    assert decision.allowed == (exempt is not None)
+    s.actions = ()
+    assert s.query(route).allowed
+    s.restore(saved)
+    assert s.query(route) == decision
+
+
+def test_route_coverage_allows_a_finished_path_before_new_appearance(timing, geometry):
+    s = state(timing, geometry, tick=193)
+    s.actions = (track(timing, geometry, ('1-3',)),)
+    s.accept(Note.make('slide', 'A1'))
+    assert s.query(Route(route_for('1-3'), 0)).allowed
 
 
 def test_chained_segments_do_not_consume_branch_slots_and_wifi_stays_exclusive(timing, geometry):
