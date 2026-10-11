@@ -22,7 +22,7 @@ def validate(config):
     missing = [k for k in keys if k not in export_only and config[k] is None]
     if missing:
         raise ValueError('set explicit Decoder training recipe: '+', '.join(missing))
-    for key in ('gradient_accumulation_steps','row_budget','chunk_token_budget','encoder_window_chunk_size','scheduler_epochs','stop_after_epochs'):
+    for key in ('gradient_accumulation_steps','row_budget','chunk_token_budget','scheduler_epochs','stop_after_epochs'):
         if type(config['decoder_train_'+key]) is not int or config['decoder_train_'+key] < 1:
             raise ValueError(f'{key} must be a positive integer')
     for key in ('warmup_steps','workers'):

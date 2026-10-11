@@ -60,16 +60,56 @@ def assert_trees_equal(actual, expected):
 
 
 @pytest.mark.parametrize('accumulate', [False, True])
+def test_single_chunk_uses_real_audio_graph_without_bridge_or_gradient_copies(config, monkeypatch, accumulate):
+    c = dict(config, decoder_train_chunk_token_budget=10000,
+             decoder_train_gradient_accumulation_steps=2 if accumulate else 1)
+    rows = [training_item(0, c, monkeypatch, remaster=True),
+            training_item(1, c, monkeypatch)]
+    batches = ([collate_audio([row], config=c, packed=True) for row in rows] if accumulate else
+               [collate_audio(rows, config=c, packed=True)])
+    assert all(len(b.chunks) == 1 for b in batches)
+    model = DecoderTrainer(c)
+    reference = deepcopy(model)
+    opts = [recipe.optimizer(m.parameters(), c) for m in (model, reference)]
+    scheds = [recipe.scheduler(opt, [1]*6, c) for opt in opts]
+    backward_calls = []
+    hook = next(model.encoder.parameters()).register_hook(lambda grad: backward_calls.append(1))
+    # The bridge owns all K/V-gradient cloning/conversion. A single chunk must
+    # not construct it, including when several physical batches accumulate.
+    with patch.object(runner, 'SharedAudioGradients', side_effect=AssertionError('single chunk needs no bridge')), \
+         patch.object(model.encoder, 'forward', wraps=model.encoder.forward) as encode, \
+         patch.object(model.encoder, 'encode_windows', wraps=model.encoder.encode_windows) as local_encode, \
+         patch.object(model.decoder, 'prepare_audio', wraps=model.decoder.prepare_audio) as project:
+        actual, audit = runner.update(model, batches, opts[0], scheds[0], c, distances())
+    hook.remove()
+    assert encode.call_count == local_encode.call_count == project.call_count == len(batches)
+    assert len(backward_calls) == len(batches)
+    assert audit['chunks'] == len(batches)
+    assert audit['padded_token_costs'] == [b.chunks[0].cost for b in batches]
+    assert audit['batch_costs'] == [b.budget_cost for b in batches]
+    expected = direct_update(reference, batches, opts[1], scheds[1], c)
+    assert actual.counts == expected.counts
+    assert actual.report(c)['loss'] == pytest.approx(expected.report(c)['loss'], rel=2e-6)
+    for (name, a), (other_name, b) in zip(model.named_parameters(), reference.named_parameters()):
+        assert name == other_name
+        torch.testing.assert_close(a, b, atol=2e-5, rtol=4e-4, msg=name)
+        if a.grad is None or b.grad is None:
+            assert a.grad is b.grad
+        else:
+            torch.testing.assert_close(a.grad, b.grad, atol=2e-5, rtol=4e-4, msg=name+' gradient')
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.encoder.parameters())
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.decoder.parameters())
+
+
+@pytest.mark.parametrize('accumulate', [False, True])
 def test_gradient_bridge_matches_direct_graph_and_updates_encoder_once_per_batch(config, monkeypatch, accumulate):
     rows = [training_item(0, config, monkeypatch, remaster=True),
             training_item(1, config, monkeypatch)]
     c = dict(config, decoder_train_chunk_token_budget=12,
-             decoder_train_encoder_window_chunk_size=1,
              decoder_train_gradient_accumulation_steps=2 if accumulate else 1)
     batches = ([collate_audio([row], config=c, packed=True) for row in rows] if accumulate else
                [collate_audio(rows, config=c, packed=True)])
-    unchunked = dict(c, decoder_train_chunk_token_budget=10000,
-                    decoder_train_encoder_window_chunk_size=10000)
+    unchunked = dict(c, decoder_train_chunk_token_budget=10000)
     reference_batches = ([collate_audio([row], config=unchunked, packed=True) for row in rows] if accumulate else
                          [collate_audio(rows, config=unchunked, packed=True)])
     assert all(len(b.chunks) > 1 for b in batches)
@@ -85,10 +125,12 @@ def test_gradient_bridge_matches_direct_graph_and_updates_encoder_once_per_batch
         scheds = [recipe.scheduler(opt, [1]*6, c) for opt in opts]
         backward_calls = []
         hook = next(model.encoder.parameters()).register_hook(lambda grad: backward_calls.append(1))
-        with patch.object(model.encoder, 'forward', wraps=model.encoder.forward) as encode:
+        with patch.object(model.encoder, 'forward', wraps=model.encoder.forward) as encode, \
+             patch.object(model.encoder, 'encode_windows', wraps=model.encoder.encode_windows) as local_encode, \
+             patch.object(runner, 'SharedAudioGradients', wraps=runner.SharedAudioGradients) as bridge:
             actual, audit = runner.update(model, batches, opts[0], scheds[0], c, distances(), audit=True)
         hook.remove()
-        assert encode.call_count == len(batches)
+        assert encode.call_count == local_encode.call_count == bridge.call_count == len(batches)
         assert len(backward_calls) == len(batches)
         expected = direct_update(reference, reference_batches, opts[1], scheds[1], c)
     assert actual.counts == expected.counts

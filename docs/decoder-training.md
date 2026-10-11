@@ -15,7 +15,7 @@
 | `decoder_training.window_cache` | 读取已打包的输入与监督张量，执行历史 dropout、padding 和行索引平移 |
 | `decoder_training.intervals/compact_windows` | 从Physical区间直接生成loss积分区间；另支持已有窗口张量转换，不重查规则 |
 | `decoder_training.network` | 持有独立 E_M/M；只编码所选局部 P0，再接入固定 Z/plan |
-| `decoder_training.shared_audio` | 累积各 M 分块的音频 K/V 梯度，最后统一反传到真实 K/V 投影和 E_M |
+| `decoder_training.shared_audio` | 仅用于多个 M 分块：累积音频 K/V 梯度，最后统一反传到真实 K/V 投影和 E_M |
 | `decoder_training.batching` | 按实际 M 输入长度连续分块，不改变 occurrence 顺序或裁剪历史 |
 | `decoder_training.supervision` | 离线整理支持与计数；训练执行批量小头及三组独立 loss 归约 |
 | `decoder_training.recipe/checkpoint/runner` | 配方、配套生产者身份、完整轮状态恢复、训练及验证 |
@@ -24,9 +24,9 @@
 
 音频K/V按唯一局部窗口共享，worker准备各监督窗到局部bank的映射，audio attention只读取对应bank。Z保持原来的前4＋目标16＋后4拍范围，plan12无位置编码，不直接读取难度值。按需音频范围记录为`decoder_train_audio_scope=window`；推理加载新checkpoint后使用相同局部范围，历史缺少此字段的checkpoint继续使用原整曲音频语义。
 
-`decoder_train_encoder_window_chunk_size`默认8，只控制Encoder局部窗口计算块，不改变逻辑batch、row budget、采样、顺序或loss分母。每块采用non-reentrant梯度检查点，反向重算该块局部激活，保留dropout RNG；G0及其K/V图按曲共享。正常前向每个需要的窗口只计算一次，反向允许重算，不detach可学习音频。
+每个输入batch的全部唯一选中局部音频窗口统一进行一次E_M批量前向，不按固定窗数拆块，不使用激活checkpoint或在反向重算局部编码。Encoder layout由worker准备一份，随输入传输并复用于全部窗口和各层；G0及其K/V图按曲共享，在线音频保留完整计算图。
 
-M计算块通过原有音频K/V梯度桥汇总梯度，再统一反传真实投影与E_M图。所有块及累积batch完成后，E_M/M共同裁剪并执行一次optimizer/scheduler更新。离线Z/plan无梯度，更新后重新计算在线音频。保留完整GT历史、监督字段、Physical支持和分母。
+输入batch只有一个M计算块时，直接沿真实音频K/V、E_M与M计算图反传，不构造梯度桥。多个M计算块才通过音频K/V梯度桥汇总FP32梯度，逐块释放M图，最后统一反传真实投影与E_M图一次。所有块及累积batch完成后，E_M/M共同裁剪并执行一次optimizer/scheduler更新。离线Z/plan无梯度，更新后重新计算在线音频。保留完整GT历史、监督字段、Physical支持和逻辑loss分母。
 
 
 固定条件由 `decoder_train_dp_cache` 显式提供，沿用 [D/P 导出](frozen-dp-cache.md)格式；在线音频使用 `decoder_train_audio_cache` 与 `decoder_train_mel_root` 的既有输入。`decoder_train_p0_cache` 仅保留为可选离线导出路径，阶段二训练不读取 P0 缓存。启动只读取所需索引与原生产者元数据，不重新验收旧资产，不读取或哈希生产者 checkpoint。配套输入由用户和训练会话选定，读取时不重复扫描 shape、dtype、有限值、拍坐标、mask 或归属。P0/Z 保持原始绝对位置，完整空尾 Z/plan 有效；不同歌曲的 batch padding 与 Z 上下文范围外的槽无效。
@@ -102,7 +102,7 @@ python -m maidata.decoder_training.compact_windows --source OLD_WINDOW_CACHE --o
 
 转换仅读取已完成的窗口张量，保留token、顺序、长度、计数及非时间监督；不读取字段、Physical、音频或P0/Z/plan。将 `decoder_train_window_cache` 改为新目录，从原完整轮checkpoint恢复，保留optimizer、scheduler和RNG；不改运行中的源码或原缓存。
 
-DataLoader worker 读取所选窗口输入/监督、固定 Z/plan 与去重歌曲的 Mel/aux32，按 seed/epoch/occurrence 选择历史视图、平移标签索引、padding，再按 dtype 打包。所选Encoder窗口布局、M有效行与attention布局均在worker根据输入坐标和mask准备；P0数值由训练进程中的E_M提供，不传输占位的完整隐藏bank。标签、合法 mask、Physical 罚项及其计数已离线确定。训练进程不做整谱解压、校验、规则重放或候选生成；不扫描输入张量的形状、有限值及归属。模型投影和概率运算的重复输入检查在训练/validation 调用中关闭；合法性 mask、概率归一化与梯度裁剪是实际计算，继续保留。
+DataLoader worker 读取所选窗口输入/监督、固定 Z/plan 与去重歌曲的 Mel/aux32，按 seed/epoch/occurrence 选择历史视图、平移标签索引、padding，再按 dtype 打包。所选Encoder窗口共用一份布局，M有效行与各计算块的attention布局也在worker根据输入坐标和mask准备；P0数值由训练进程中的E_M提供，不传输占位的完整隐藏bank。标签、合法 mask、Physical 罚项及其计数已离线确定。训练进程不做整谱解压、校验、规则重放或候选生成；不扫描输入张量的形状、有限值及归属。模型投影和概率运算的重复输入检查在训练/validation 调用中关闭；合法性 mask、概率归一化与梯度裁剪是实际计算，继续保留。
 
 IPC 使用现有 `training.transport` 的 dtype 连续缓冲实现，按需局部音频输入/布局、固定条件与每个 M 分块分别打包；只传轻量 occurrence 元数据，不传规则状态、TimingMap 或整棵 GT/支持对象。音频输入与固定条件传入设备一次，token/支持随当前分块传输和释放，避免把全曲所有候选同时放入显存。模型只消费公开张量，打包形式不进入网络接口。
 
@@ -117,7 +117,7 @@ Z/plan attention同时按query长度和有效key数分组；独立key mask保留
 | 对照项 | 原仓库实现 | 当前阶段二 |
 |---|---|---|
 | IPC/H2D | `maimai_baseline.training.inputs._collate_full_input`、`data.batch_transport.PackedBatch` | 条件及 M 分块分别按 dtype 打包，并保持分块显存边界 |
-| 全曲 P0 K/V | `model.rope.mapped_attention` 逐曲SDPA，切片反向回传整批bank | 独立 `decoder.batching.audio_query_layout` 与 `Attention.mapped`，有效位置投影、小批SDPA及一次梯度收集 |
+| 音频 P0 K/V | `model.rope.mapped_attention` 逐曲SDPA，切片反向回传整批bank | 独立 `decoder.batching.audio_query_layout` 与 `Attention.mapped`，有效位置投影、小批SDPA；单M块直接反传，多块统一收集梯度 |
 | 条件准备 | 原路径读取冻结音频特征并按歌曲映射 | worker准备完整音频输入/布局和固定Z/plan；在线E_M只计算所选局部P0，不构造D/P或执行CPU layout fallback |
 | 采样与归约 | 原训练维护完整音频组、既有计划及逻辑 batch | 保留 occurrence 集合，全局随机窗口组批；内部计算块仍按共同分母反传 |
 
@@ -161,4 +161,4 @@ checkpoint的recipe记录`decoder_train_plan_source`，GT缓存路径作为输�
 
 每5轮及末轮 validation，重合只执行一次；完整诊断仅末轮。每轮按保存的 occurrence 集合与随机顺序消费，去重歌曲数与音频读取实例数分别记录。`last` 每个完整轮保存，`best` 只在轮末验证改善时更新，编号 checkpoint 每5轮及末轮保存；异常和轮内不保存 checkpoint。验证 loss 用于诊断及 checkpoint 记录，谱面质量仍由实际生成结果评估。
 
-CPU验证覆盖既有字段/Physical监督、历史dropout、空尾窗和独立损失归约；联合训练另覆盖真实小E_M/M更新、禁止D/P/R构造、固定Z/plan不带梯度、音频与条件映射、packed传输及worker布局。梯度桥与直接真实计算图比较分块/未分块和累积batch的loss、E_M/M梯度及更新，检查每batch E_M只前向和反向一次。v2恢复使用非零dropout逐位核对两模块、optimizer、scheduler和全部RNG，并拒绝旧v1。正式默认仍为12 workers；CPU测试不代表CUDA原batch、吞吐或正式训练已验证。
+CPU验证覆盖既有字段/Physical监督、历史dropout、空尾窗和独立损失归约；联合训练另覆盖真实小E_M/M更新、禁止D/P/R构造、固定Z/plan不带梯度、音频与条件映射、packed传输及worker布局。单M块直接反传、多块梯度桥与直接真实计算图比较分块/未分块和累积batch的loss、E_M/M梯度及更新，检查每batch E_M只前向和反向一次、Encoder布局仅准备一份且不执行checkpoint重算。v2恢复使用非零dropout逐位核对两模块、optimizer、scheduler和全部RNG，并拒绝旧v1。正式默认仍为12 workers；CPU测试不代表CUDA原batch、吞吐或正式训练已验证。

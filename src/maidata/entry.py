@@ -122,7 +122,6 @@ CONFIG = {
     "decoder_train_gradient_accumulation_steps": 1,  # One batch per optimizer update.
     "decoder_train_row_budget": 8192,  # Padded M inputs, including history and boundary.
     "decoder_train_chunk_token_budget": 8192,  # Independent M computation cap; never crop history.
-    "decoder_train_encoder_window_chunk_size": 8,  # Encoder activation blocks; logical batches stay intact.
     "decoder_train_audio_scope": "window",  # Selected local P0, including its audio context.
     "decoder_train_window_cache": None,  # Offline tensorized window inputs and supervision.
     "decoder_train_physical_weight": None,

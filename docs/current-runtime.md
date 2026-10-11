@@ -39,9 +39,9 @@ CPU验证覆盖默认/非默认容量、源字段/simai标签、复用与mask、
 
 CPU验证覆盖默认与非默认架构、并行/增量一致、目标类型隔离、plan位置与空mask、FP32/CPU BF16反向、真实字段/规则支持、非单调时间概率、独立归约、跨Encoder/D/P梯度与实际冻结、链/分支快照。训练循环和checkpoint位于独立的`maidata.decoder_training`；整曲生成由独立`maidata.inference`调度，未运行CUDA或重建缓存。
 
-阶段二已接入原谱v2字段/Physical、全局打乱的既有Decoder occurrence、GT历史与确定性15% history dropout；保持仍有效的完整物理动作，训练读取离线窗口支持。当前重新随机初始化音频Encoder E_M与M并联合更新；每batch按audio_variant去重读取已验收Mel/aux32，E_M只编码当前监督窗所需的前4＋目标16＋后4拍局部窗口，同曲同起点共享P0。G0仍按曲准备一次；局部窗口按8窗分块并用梯度检查点反向重算，不改变逻辑batch。M音频attention只读取对应局部P0；新checkpoint记录window范围，推理使用同一范围。Z始终读取阶段一E_D/D/P的固定离线缓存；plan12默认读取固定P预测，也可通过`--plan-source gt`切换到离线原谱统计小缓存，训练与validation使用相同来源。训练不构建或运行教师E_D/D/P/R，也不从阶段一权重初始化E_M。固定条件缺失不在线补算；导出与消费模块独立。GT缓存生产、两组独立fresh训练及远端串行launcher见[plan对照](decoder-plan-comparison.md)。
+阶段二已接入原谱v2字段/Physical、全局打乱的既有Decoder occurrence、GT历史与确定性15% history dropout；保持仍有效的完整物理动作，训练读取离线窗口支持。当前重新随机初始化音频Encoder E_M与M并联合更新；每batch按audio_variant去重读取已验收Mel/aux32，E_M只编码当前监督窗所需的前4＋目标16＋后4拍局部窗口，同曲同起点共享P0。G0按曲准备一次；选中的局部窗口统一批量编码，不使用activation checkpoint反向重算，Encoder布局仅准备和传输一份。M音频attention只读取对应局部P0；新checkpoint记录window范围，推理使用同一范围。Z始终读取阶段一E_D/D/P的固定离线缓存；plan12默认读取固定P预测，也可通过`--plan-source gt`切换到离线原谱统计小缓存，训练与validation使用相同来源。训练不构建或运行教师E_D/D/P/R，也不从阶段一权重初始化E_M。固定条件缺失不在线补算；导出与消费模块独立。GT缓存生产、两组独立fresh训练及远端串行launcher见[plan对照](decoder-plan-comparison.md)。
 
-默认row budget8192、累积1、warmup200，全部可配置，音频成本另行记录，本次不改变组批预算。M计算块使用整个逻辑update的独立分母；通过音频K/V梯度桥收集各块梯度，最后只反传真实E_M及音频投影一次，E_M/M共同裁剪和更新。worker准备Encoder/P0/M布局，训练不解压整谱或查询Physical，不重新验收旧输入、不哈希生产者checkpoint。联合训练checkpoint为`maidata.decoder-training.v2`，保存成套E_M/M、optimizer、scheduler、完整轮和全部RNG；只有M的旧v1不能作为其完整轮续训。源码/配方/budget/计划身份不作为额外恢复门禁。保留workers12、完整轮checkpoint、每5轮及末轮validation与原batch CUDA测量入口；CPU合成梯度/恢复测试已通过，CUDA原batch和正式训练未执行。其余未确定配方保持None，见[阶段二训练](decoder-training.md)。
+默认row budget8192、累积1、warmup200，全部可配置，音频成本另行记录，本次不改变组批预算。M计算块使用整个逻辑update的独立分母；单M块直接反传真实音频图，多M块才通过音频K/V梯度桥收集各块梯度，最后只反传真实E_M及音频投影一次，E_M/M共同裁剪和更新。worker准备Encoder/P0/M布局，训练不解压整谱或查询Physical，不重新验收旧输入、不哈希生产者checkpoint。联合训练checkpoint为`maidata.decoder-training.v2`，保存成套E_M/M、optimizer、scheduler、完整轮和全部RNG；只有M的旧v1不能作为其完整轮续训。源码/配方/budget/计划身份不作为额外恢复门禁。保留workers12、完整轮checkpoint、每5轮及末轮validation与原batch CUDA测量入口；本次性能修复的CPU梯度与恢复验证、CUDA原batch成本记录由独立修复报告提供。其余未确定配方保持None，见[阶段二训练](decoder-training.md)。
 
 ## 当前整曲推理与物化
 

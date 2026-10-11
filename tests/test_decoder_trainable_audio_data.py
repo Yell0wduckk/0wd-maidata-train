@@ -77,8 +77,11 @@ def test_dataset_reads_one_existing_grid_and_dp_per_selected_variant(config, tmp
 
 def test_online_placeholder_encodes_only_selected_windows_and_deduplicates_charts(config, monkeypatch):
     items = [training_item(i, config, monkeypatch, remaster=i == 0) for i in range(2)]
-    with patch('maidata.model.build_model', side_effect=AssertionError('worker cannot construct E')):
+    from maidata.audio.layout import prepare_encoder_layout
+    with patch('maidata.model.build_model', side_effect=AssertionError('worker cannot construct E')), \
+            patch('maidata.audio.layout.prepare_encoder_layout', wraps=prepare_encoder_layout) as prepare:
         online, placeholder = collate_online_audio(items, config)
+    assert prepare.call_count == 1
     assert len(online.songs.mel_patches) == 2
     assert online.windows.window_to_song.tolist() == [0, 0, 1, 1]
     assert online.windows.target_start_beats.tolist() == [0., 3., 0., 3.]
@@ -100,7 +103,7 @@ def test_interleaved_occurrences_keep_order_and_fixed_dp_under_packed_transport(
     assert batch.audio_variants == ['0', '1'] and batch.audio_lengths == [36, 36]
     assert [w['identity'] for w in batch.windows] == [w['identity'] for w in expected]
     assert batch.conditions.audio.values.shape[-1] == 0
-    assert batch.online_audio.windows.layout['training_chunks']
+    assert 'training_chunks' not in batch.online_audio.windows.layout
     assert len(packet.context.buffers) <= 5
     assert batch.online_audio.songs.mel_patches.data_ptr() == packet.online_audio.songs.mel_patches.data_ptr()
     torch.testing.assert_close(batch.online_audio.songs.mel_patches[0], torch.from_numpy(items[0]['grid']['mel_patches']))

@@ -72,19 +72,25 @@ def update(model, batches, opt, sched, config, geometry, *, audit=False):
             conditions = model.conditions(batch)
             bank = conditions.audio
             audio_kv = model.decoder.prepare_audio(Memory(bank.values,bank.beats,bank.valid), indices=conditions.audio_indices)
-        shared_audio = SharedAudioGradients(audio_kv)
+        # One M chunk can backpropagate directly through its real audio graph.
+        # Multiple chunks still need the bridge to release each M graph before
+        # the one shared Encoder/audio-projection backward.
+        shared_audio = SharedAudioGradients(audio_kv) if len(chunks) > 1 else None
+        chunk_audio = audio_kv if shared_audio is None else shared_audio.memory
         for cpu_chunk in chunks:
             chunk = cpu_chunk.to(device)
             with recipe.autocast(device,config):
-                terms,output = chunk_loss(model,conditions,shared_audio.memory,chunk,config,geometry)
+                terms,output = chunk_loss(model,conditions,chunk_audio,chunk,config,geometry)
                 value = objective(terms,counts,config)
             value.backward()
-            shared_audio.collect()
+            if shared_audio is not None:
+                shared_audio.collect()
             metrics.add(terms)
             costs.append(chunk.cost)
             del terms,output,value,chunk
-        shared_audio.backward()
-        del batch,conditions,bank,audio_kv,shared_audio
+        if shared_audio is not None:
+            shared_audio.backward()
+        del batch,conditions,bank,audio_kv,chunk_audio,shared_audio
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(),config['decoder_train_gradient_clip'])
     gradients = {name:sum(float(p.grad.float().square().sum()) for p in m.parameters() if p.grad is not None)**.5
                  for name,m in model.named_children()} if audit else {}

@@ -19,8 +19,7 @@ class DecoderTrainer(nn.Module):
 
     def conditions(self, batch):
         inputs = batch.online_audio
-        local = self.encoder(inputs.songs, inputs.windows,
-                             window_chunks=inputs.windows.layout['training_chunks'])
+        local = self.encoder(inputs.songs, inputs.windows)
         audio = local.P0
         conditions = replace(batch.conditions, audio=Memory(audio.values, audio.beats, audio.valid))
         # Fixed D/P caches may have BF16 values while this run uses FP32.

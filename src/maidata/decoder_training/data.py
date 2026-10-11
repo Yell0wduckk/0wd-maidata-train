@@ -123,17 +123,6 @@ def collate_online_audio(items, config):
         radii=config['stage_attention_radii'], rates=config['fpn_rates'], before=config['audio_before_beats'],
         context=config['audio_before_beats']+config['target_beats']+config['audio_after_beats'])
     windows.layout = layout
-    from maidata.audio.chunking import slice_windows
-    size = config['decoder_train_encoder_window_chunk_size']
-    chunks = []
-    for start in range(0, len(starts), size):
-        stop = min(start + size, len(starts))
-        subset = slice_windows(windows, start, stop, None)
-        chunk_layout = prepare_encoder_layout(songs.beat_centers, songs.sample_valid.any(-1), subset,
-            radii=config['stage_attention_radii'], rates=config['fpn_rates'], before=config['audio_before_beats'],
-            context=config['audio_before_beats']+config['target_beats']+config['audio_after_beats'])
-        chunks.append((start, stop, chunk_layout))
-    layout['training_chunks'] = tuple(chunks)
     beats, valid = layout['grids'][0], layout['resample'][0]['valid']
     # No dummy d_model-wide bank crosses IPC/H2D. The trainable Encoder replaces
     # these zero-width values before M prepares its audio K/V.
