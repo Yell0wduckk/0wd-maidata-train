@@ -38,7 +38,7 @@ R使用共享残差MLP，只索引所属拍Z，没有邻拍读取或查询间att
 
 ## 新 Decoder：网络、窗口与监督
 
-显式适配入口 `python -m maidata.decoder_training.adapt` 读取 ckpt45 冻结 Encoder 的公开全曲 P0 和后续 Drafter 的 Z 缓存，开启 Z attention，只更新从 ckpt45 初始化的 M；默认 GT plan。E 保持 eval、不前向、不进入 optimizer，D/P/R 不构建；权重初始化与适配自己的完整轮恢复分开。音频范围记录 full_song 并用于后续推理，旧 joint 默认仍为在线 window。新 D/P 导出支持复用阶段二 P0，并核对 frozen-E Drafter 保存的生产者身份，见[适配入口](decoder-frozen-adaptation.md)。本次只完成代码与 CPU 验证，不启动后续适配实验。
+显式适配入口 `python -m maidata.decoder_training.adapt` 读取 ckpt45 冻结 Encoder 的逐窗口 P0 和后续 Drafter 的 Z 缓存，开启 Z attention，只更新从 ckpt45 初始化的 M；默认 GT plan。音频继续为原来的前4＋目标16＋后4拍、`window` 范围，局部缓存由 `local_p0_cache` 用同一 Encoder/原窗口输入单独补产，包含完整空尾窗，不能由全曲中心P0裁剪近似。D/P导出仍复用原全曲P0。E保持eval、不前向、不进入optimizer，D/P/R不构建；权重初始化与完整轮恢复分开。用户已授权20轮停止／50轮调度、LR1e-4、warmup200，实际运行由训练会话处理，见[适配入口](decoder-frozen-adaptation.md)。
 
 阶段一训练入口另支持`pretrain_audio_mode=joint/cached`：前者同步更新E/D/R/P；后者读取阶段二ckpt45的冻结Encoder所生产的公开全曲P0，仅更新D/R/P，E保持eval且不前向。缓存生产入口`maidata.training.p0_cache`保留Encoder快照，完成checkpoint自带E/D/R/P，原教师加载/导出继续可用。组批proxy和计划不随计算量缩小而改变，具体生产与50/100轮交接见[冻结P0训练](drafter-frozen-p0-training.md)。
 

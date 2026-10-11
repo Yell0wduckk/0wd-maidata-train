@@ -6,6 +6,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 import torch
 from torch.utils.data import DataLoader
@@ -15,6 +16,7 @@ from maidata.training.frozen_p0 import FrozenP0, ENCODER_SCHEMA
 from maidata.decoder_training import adaptation, checkpoint, recipe, runner
 from maidata.decoder_training.network import DecoderTrainer
 from maidata.decoder_training.data import collate_audio, DecoderDataset
+from maidata.decoder_training.local_p0_cache import LocalP0, export as export_local
 from maidata.decoder_training.frozen_cache import FrozenCache, condition_config
 from test_decoder_training import config, encoder_config, distances
 from test_decoder_frozen_inputs import assets
@@ -47,15 +49,30 @@ def adapted(assets):
     dp = json.loads(dp_path.read_text())
     dp['producer']['audio_producer'] = p0.identity
     dp_path.write_text(json.dumps(dp))
-    c.update(decoder_train_audio_mode='cached',decoder_train_audio_scope='full_song',
+    c.update(decoder_train_audio_mode='cached',decoder_train_audio_scope='window',
              decoder_z_cross_attention=True, decoder_train_init_checkpoint=str(path),
              decoder_train_plan_source='gt')
+    parent = roots['p0'].parent
+    (parent/'audio/grids').mkdir(parents=True)
+    c.update(decoder_train_audio_cache=str(parent/'audio'),decoder_train_mel_root=None,
+             decoder_train_local_p0_cache=str(parent/'local-p0'))
+    for side,item,plan in zip(('train','validation'),items,plans):
+        np.savez(parent/f'audio/grids/{item["variant"]}.npz',**item['grid'])
+        root = parent/side
+        root.mkdir()
+        (root/'plan.json').write_text(json.dumps(dict(audio_groups=[dict(meta,audio_variant=v)
+            for v,meta in plan.groups.items()],files={'windows':'windows.jsonl'})))
+        (root/'windows.jsonl').write_text('\n'.join(json.dumps(w) for w in plan.windows))
+        c[f'decoder_train_{side}_plan'] = str(root)
+    export_local(c,c['decoder_train_local_p0_cache'])
+    local = LocalP0(c['decoder_train_local_p0_cache'],p0)
     cache = FrozenCache(plans,c,binding)
     c, saved = adaptation.prepare(c)
     c = condition_config(c,cache)
     selected = []
     for i,item in enumerate(items):
-        selected.append(dict(item, grid=None, p0=p0.read(item['variant'])[0],
+        starts = list(dict.fromkeys(w['start'] for w in item['windows']))
+        selected.append(dict(item, local_p0=local.read(item['variant'],starts)[0],audio_starts=starts,
             dp=cache.read(item['variant']),
             gt_plan=dict(item['dp']['planner'],window_index=item['dp']['window_index']),
             windows=[dict(w,sequence_index=2*j+i) for j,w in enumerate(item['windows'])]))
@@ -118,8 +135,34 @@ def test_cached_dataset_never_opens_mel_and_reuses_window_labels(adapted):
         dataset = DecoderDataset(plan,c,{},cache,SimpleNamespace(read=lambda key:labels[key]))
         got = dataset[('0',1)]
     assert got['grid'] is None
-    assert torch.equal(got['p0'].values,item['p0'].values)
+    assert torch.equal(got['local_p0'].values,item['local_p0'].values)
     assert [w['identity'] for w in got['windows']] == [w['identity'] for w in item['windows']]
+
+
+def test_local_cache_matches_original_window_encoder_and_audio_mapping(adapted):
+    from maidata.decoder_training.data import collate_online_audio
+    c,_,items,_,p0 = adapted
+    encoder = build_model(c)
+    p0.load_encoder(encoder)
+    for item in items:
+        online,_ = collate_online_audio([item],c)
+        with torch.no_grad():
+            original = encoder(online.songs,online.windows).P0
+        # Exact same windows, including context and the complete empty tail.
+        for key in ('values','beats','valid'):
+            torch.testing.assert_close(getattr(item['local_p0'],key),getattr(original,key),rtol=0,atol=0)
+        assert item['audio_starts'] == [0,3]
+        assert original.beats.shape == (2,18)
+        assert original.valid[-1].any()  # Tail still sees the preceding real audio.
+    batch = collate_audio(items,config=c)
+    online = collate_audio(items,config=dict(c,decoder_train_audio_mode='joint'))
+    assert batch.budget_cost == online.budget_cost
+    assert batch.audio_lengths == online.audio_lengths
+    for name in ('audio_mapping','occurrence_mapping','audio_indices'):
+        assert torch.equal(getattr(batch.conditions,name),getattr(online.conditions,name))
+    assert torch.equal(batch.conditions.audio.beats,online.conditions.audio.beats)
+    assert torch.equal(batch.conditions.audio.valid,online.conditions.audio.valid)
+    assert [w['identity'] for w in batch.windows] == [w['identity'] for w in online.windows]
 
 
 def test_adaptation_runner_resume_is_exact_and_does_not_reopen_initial_m(adapted,tmp_path,monkeypatch):
@@ -159,7 +202,7 @@ def test_adaptation_runner_resume_is_exact_and_does_not_reopen_initial_m(adapted
     for key in ('model_state','optimizer_state','scheduler_state','rng','loader_rng','step','completed_epochs'):
         assert_trees_equal(actual[key],expected[key])
     assert actual['recipe']['decoder_z_cross_attention']
-    assert actual['recipe']['decoder_train_audio_scope'] == 'full_song'
+    assert actual['recipe']['decoder_train_audio_scope'] == 'window'
     assert actual['initialization']['completed_epochs'] == 45
     # Completed adaptation still carries a real frozen E plus M for normal inference.
     from maidata.decoder_training.producer import FrozenProducer
@@ -169,7 +212,7 @@ def test_adaptation_runner_resume_is_exact_and_does_not_reopen_initial_m(adapted
     torch.save(dict(schema=SCHEMA,recipe=c,model_state=FrozenProducer(c).state_dict()),teacher)
     loaded = load_models(teacher,path,device='cpu',plan_source='gt')
     assert loaded.decoder.condition.z_cross_attention
-    assert loaded.config['decoder_train_audio_scope'] == 'full_song'
+    assert loaded.config['decoder_train_audio_scope'] == 'window'
     assert_trees_equal(loaded.decoder_encoder.state_dict(),{k.removeprefix('encoder.'):v
                       for k,v in actual['model_state'].items() if k.startswith('encoder.')})
 
@@ -199,6 +242,7 @@ def test_adapt_cli_is_explicit_and_show_config_does_not_load_inputs(capsys):
         main(['--init-checkpoint','epoch-045.ckpt','--p0-cache','p0','--dp-cache','dp','--show-config'],adaptation=True)
     c = json.loads(capsys.readouterr().out)
     assert c['decoder_train_audio_mode'] == 'cached' and c['decoder_z_cross_attention']
+    assert c['decoder_train_audio_scope'] == 'window'
     assert c['decoder_train_plan_source'] == 'gt' and c['decoder_train_workers'] == 12
     assert c['decoder_train_init_checkpoint'] == 'epoch-045.ckpt'
 
@@ -226,7 +270,19 @@ def test_dp_export_reuses_stage_two_p0_after_frozen_drafter_training(config,tmp_
     export_config = dict(c,decoder_train_checkpoint=str(tmp_path/'draft/checkpoints/last.ckpt'),
         decoder_train_p0_cache=str(p0_root),decoder_train_train_plan=c['pretrain_train_plan'],
         decoder_train_validation_plan=c['pretrain_validation_plan'],decoder_train_chart_cache=c['pretrain_chart_cache'],
-        decoder_train_source_root=c['pretrain_source_root'])
+        decoder_train_source_root=c['pretrain_source_root'],decoder_train_audio_cache=c['pretrain_audio_cache'],
+        decoder_train_mel_root=None)
+    local_root = tmp_path/'local-p0'
+    with patch('maidata.training.frozen_p0.FrozenP0.read',side_effect=AssertionError('no full-song bank cropping')):
+        local_report = export_local(export_config,local_root)
+    local = LocalP0(local_root,FrozenP0(p0_root))
+    assert local_report['first_bank_roundtrip_exact']
+    assert local_report['groups']['1']['starts'] == [-1,2,5]
+    selected,_ = local.read('1',[5,-1])
+    assert selected.beats.shape == (2,18)
+    assert selected.beats[0,0] == pytest.approx(3+.5/3)
+    assert selected.beats[1,0] == pytest.approx(-3+.5/3)
+    assert selected.valid[0].any() and not selected.valid[1,0]
     with patch('maidata.audio.encoder.AudioEncoder.forward',side_effect=AssertionError('export must reuse P0')), \
          patch('maidata.decoder_training.dp_cache.digest_file',wraps=checkpoint.digest_file) as digest:
         report = export_dp(export_config,p0_root,dp_root)

@@ -20,6 +20,8 @@ def prepare(config, resume=None):
         raise ValueError('cached adaptation requires --p0-cache including its frozen Encoder snapshot')
     p0 = FrozenP0(config['decoder_train_p0_cache'])
     saved = payload['recipe']
+    if saved.get('decoder_train_audio_scope') != 'window':
+        raise ValueError('adaptation must preserve the source Decoder local-window audio scope')
     encoder = {k: saved[k] for k in ENCODER_KEYS}
     if json.loads(json.dumps(encoder)) != p0.encoder_config:
         raise ValueError('initial Decoder Encoder configuration differs from frozen P0')

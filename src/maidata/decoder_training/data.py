@@ -44,7 +44,8 @@ class DecoderDataset(Dataset):
         self.p0 = None
         if config['decoder_train_audio_mode'] == 'cached':
             from maidata.training.frozen_p0 import FrozenP0
-            self.p0 = FrozenP0(config['decoder_train_p0_cache'])
+            from .local_p0_cache import LocalP0
+            self.p0 = LocalP0(config['decoder_train_local_p0_cache'],FrozenP0(config['decoder_train_p0_cache']))
         self.gt_plan = None
         if config['decoder_train_plan_source'] == 'gt':
             from .gt_plan_cache import GTPlanCache
@@ -60,7 +61,8 @@ class DecoderDataset(Dataset):
         dp = self.cache.read(variant)
         bank, grid = None, None
         if self.p0 is not None:
-            bank, coverage = self.p0.read(variant)
+            starts = list(dict.fromkeys(row['start_beat'] for row in rows))
+            bank, coverage = self.p0.read(variant,starts)
         else:
             grid = load_grid(Path(c['decoder_train_audio_cache'])/'grids'/f'{variant}.npz',
                              mel_root=c['decoder_train_mel_root'], validate_input=False)
@@ -77,7 +79,7 @@ class DecoderDataset(Dataset):
                 sequence_index=row['sequence_index'], **tensors))
         result = dict(variant=variant, grid=grid, coverage=coverage, dp=dp, windows=windows)
         if bank is not None:
-            result['p0'] = bank
+            result.update(local_p0=bank,audio_starts=starts)
         if self.gt_plan is not None:
             result['gt_plan'] = self.gt_plan.read(variant)
         return result
@@ -146,12 +148,12 @@ def collate_audio(items, *, config, packed=False):
     if any('sequence_index' in w for w in windows):
         windows.sort(key=lambda w: w['sequence_index'])
     if config['decoder_train_audio_mode'] == 'cached':
-        from maidata.training.frozen_p0 import collate_banks
         from maidata.decoder.types import Memory
-        bank = collate_banks(items)
-        online, keys = None, None
-        audio = Memory(bank.values, bank.beats, bank.valid)
-        lengths = [len(item['p0'].beats) for item in items]
+        online = None
+        keys = [(item['variant'],start) for item in items for start in item['audio_starts']]
+        audio = Memory(*(torch.cat([getattr(item['local_p0'],key) for item in items])
+                         for key in ('values','beats','valid')))
+        lengths = [item['local_p0'].valid.numel() for item in items]
     else:
         online, audio = collate_online_audio(items, config)
         keys = online.audio_keys

@@ -16,9 +16,11 @@ class DecoderTrainer(nn.Module):
         self.initialization = None
         if self.cached:
             from maidata.training.frozen_p0 import FrozenP0
+            from .local_p0_cache import LocalP0
             cache = FrozenP0(config['decoder_train_p0_cache'])
             cache.load_encoder(self.encoder)
-            self.audio_producer = cache.identity
+            local = LocalP0(config['decoder_train_local_p0_cache'],cache)
+            self.audio_producer = dict(source=cache.identity,local=local.identity)
         self.decoder = build_decoder(config)
         self.distributions = decoder_time_distributions(config)
         for module in self.modules():

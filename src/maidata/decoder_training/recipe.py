@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 
-PATH_KEYS = tuple('decoder_train_'+k for k in ('checkpoint','init_checkpoint','p0_cache','dp_cache','gt_plan_cache','window_cache','train_plan','validation_plan','chart_cache',
+PATH_KEYS = tuple('decoder_train_'+k for k in ('checkpoint','init_checkpoint','p0_cache','local_p0_cache','dp_cache','gt_plan_cache','window_cache','train_plan','validation_plan','chart_cache',
     'physical_cache','audio_cache','mel_root','source_root','geometry','slide_data','route_distances','output'))
 
 
@@ -14,8 +14,8 @@ def validate(config):
     cached = config['decoder_train_audio_mode'] == 'cached'
     if config['decoder_train_audio_mode'] not in ('joint', 'cached'):
         raise ValueError('decoder_train_audio_mode must be joint or cached')
-    if config['decoder_train_audio_scope'] != ('full_song' if cached else 'window'):
-        raise ValueError('joint stage II requires window audio; cached adaptation requires full_song P0')
+    if config['decoder_train_audio_scope'] != 'window':
+        raise ValueError('joint training and frozen adaptation both require original window audio')
     if cached and not config['decoder_z_cross_attention']:
         raise ValueError('cached Decoder adaptation requires Z cross-attention')
     if not cached and config['decoder_train_init_checkpoint'] is not None:
@@ -25,7 +25,7 @@ def validate(config):
         raise ValueError('decoder_train_plan_source must be predicted or gt')
     export_only = {'decoder_train_checkpoint', 'decoder_train_init_checkpoint'}
     if not cached:
-        export_only.add('decoder_train_p0_cache')
+        export_only.update(('decoder_train_p0_cache', 'decoder_train_local_p0_cache'))
     else:
         export_only.update(('decoder_train_audio_cache', 'decoder_train_mel_root'))
     if not config['decoder_z_cross_attention'] and config['decoder_train_plan_source'] == 'gt':

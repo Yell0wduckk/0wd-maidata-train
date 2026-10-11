@@ -1,6 +1,6 @@
 # 主 Decoder 阶段二训练
 
-另有显式的 [`maidata.decoder_training.adapt` 适配入口](decoder-frozen-adaptation.md)：冻结 E/D、读取全曲 P0/Z，从已有 M checkpoint 初始化并只更新 M，开启 Z attention。以下默认 joint 路径的在线局部音频、scratch E/M 规则不适用于该入口。
+另有显式的 [`maidata.decoder_training.adapt` 适配入口](decoder-frozen-adaptation.md)：冻结 E/D、读取逐窗局部 P0/Z，从已有 M checkpoint 初始化并只更新 M，开启 Z attention。音频窗口、采样及batch边界与原joint一致；以下在线音频计算、scratch E/M 规则不适用于该入口。
 
 入口为 `python -m maidata.decoder_training`。本阶段**重新随机初始化音频 Encoder E_M 与主 Decoder M，联合更新两者**；始终读取阶段一 E_D/D/P 的固定离线全曲 Z。plan12默认读取独立离线GT plan，使训练条件准确对应GT谱面；P预测plan保留为显式对照。训练与验证构建E_M/M，不构建或运行教师E_D/D/P/R，不加载阶段一权重初始化E_M。E_M在线消费已验收Mel/aux32，M的谱面损失经音频K/V正常反传至E_M；固定Z/plan不会随E_M更新漂移，缺失条件不在线补算。
 

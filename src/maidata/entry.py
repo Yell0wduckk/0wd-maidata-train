@@ -107,6 +107,7 @@ CONFIG = {
     "decoder_history_dropout": 0.15,
     "decoder_train_checkpoint": None,  # Offline-export producer; optional in training, never initializes stage-II E.
     "decoder_train_p0_cache": None,  # Frozen public P0 for cached adaptation; unused by joint training.
+    "decoder_train_local_p0_cache": None,  # Exact per-window P0 (including context/tail) for M adaptation.
     "decoder_train_audio_mode": "joint",  # joint: fresh E/M; cached: frozen E, warm-start M.
     "decoder_train_init_checkpoint": None,  # Weight initialization only; never an optimizer/epoch resume.
     "decoder_train_dp_cache": None,  # Matching frozen Z and predicted plan12 export.

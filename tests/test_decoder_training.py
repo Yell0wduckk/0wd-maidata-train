@@ -338,6 +338,8 @@ def test_real_dataset_reads_fields_supports_and_plan_without_rebuilding(config,t
     assert len(batch.windows)==6 and len(batch.audio_variants)==2
     plan.occurrences(3)
     assert sum(len(p) for step in plan.batches(3,c) for p in step)==6
+    for epoch in (1,20,50):
+        assert plan.batches(epoch,c) == plan.batches(epoch,dict(c,decoder_train_audio_mode='cached'))
     from collections import Counter
     from maidata.decoder_training.data import WindowBatchSampler
     from maidata.decoder_training.batching import batch_cost
