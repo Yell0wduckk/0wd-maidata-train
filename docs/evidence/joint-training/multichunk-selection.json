@@ -1,0 +1,34 @@
+{
+  "check_step": 107,
+  "epoch": 1,
+  "groups": 2,
+  "original_proxy": 42738.0,
+  "decoder_occurrences": 90,
+  "m_chunks": 2,
+  "total_padded_rows": 13803,
+  "chunk_padded_rows": [
+    8084,
+    5719
+  ],
+  "chunk_token_budget": 8192,
+  "physical_batches": [
+    {
+      "audio_variants": [
+        "0c7a34c26844fdf086295a8cc2e1f687d5020a596970907f93c8db07267d67c6",
+        "95944a7242bbbffbd9a19b637dd08b29f65c077663f6e0b25b30d6385e0d6d17"
+      ],
+      "groups": 2,
+      "original_proxy": 42738.0,
+      "decoder_occurrences": 90,
+      "m_chunks": 2,
+      "chunk_padded_rows": [
+        8084,
+        5719
+      ]
+    }
+  ],
+  "natural_multi_chunk": true,
+  "selection": "maximum natural M chunks, then maximum total padded rows",
+  "config_path": "/root/autodl-tmp/maidata-joint-z4-gt-20261011/source-cd1abe2/configs/joint-z4-gt-linux.json",
+  "window_manifest": "/root/autodl-tmp/decoder-cont-token-20261011/windows-v5/manifest.json"
+}

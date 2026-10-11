@@ -14,9 +14,9 @@
 
 每曲只准备一次G0；coverage窗与M监督所需局部窗取并集，包含完整空尾窗，统一执行一次E。M读取同一24拍窗的真实局部P0，同曲同起点共享；D只读取coverage中心组成的全曲P0。同音频多难度共享E结果，D分别消费相应谱面条件。
 
-梯度路径是 `M→Z→D→E`、`M→局部P0→E` 和 `R/P→D→E`。8192行只限制M内部计算块，保留全部实例与完整历史，块间不更新参数。单块合并总损失直接反传；多块对音频K/V与实时Z建立叶梯度桥，FP32累积M贡献，最后连同R/P一次多输出反传真实E/D图。没有重复E/D前向、反复retain_graph、activation checkpoint或跨更新旧P0/Z复用。
+梯度路径是 `M→Z→D→E`、`M→局部P0→E` 和 `R/P→D→E`。8192行只限制M内部计算块，保留全部实例与完整历史，块间不更新参数。单块合并总损失直接反传；多块对音频K/V与实时Z建立叶梯度桥，FP32累积M贡献，最后连同R/P一次多输出反传真实E/D图，依据[PyTorch多输出梯度累加机制](https://docs.pytorch.org/docs/2.11/generated/torch.autograd.backward.html)。没有重复E/D前向、反复retain_graph、activation checkpoint或跨更新旧P0/Z复用。
 
-worker准备窗口映射、R字段选择、Encoder及M attention分组；热路径使用这些索引，指标在设备累计后回读。保留mask、dropout、坐标与BF16语义。SDPA实际后端由显式成本诊断记录。
+worker准备窗口映射、R字段选择、Encoder及M attention分组；热路径使用这些索引，指标在设备累计后回读。条件mask每个M块首次确认一次，所有层及字段复用确认结果；Z关闭或mask改变时保留精确单key语义。保留mask、dropout、坐标与BF16语义。[SDPA后端取决于实际输入条件](https://docs.pytorch.org/docs/2.11/generated/torch.nn.functional.scaled_dot_product_attention.html)，由显式成本诊断记录。
 
 ## 命令
 
@@ -36,7 +36,7 @@ python -m maidata.joint_training --config configs/joint-z4-gt-linux.json --cuda-
 python -m maidata.joint_training --config configs/joint-z4-gt-linux.json --cost-check
 ```
 
-正确性审计记录五模块梯度、更新及真实前反向调用次数。成本测量关闭参数审计和完整诊断，每模式预热2次、测量7次；每次计时前恢复同一模型、optimizer、scheduler及全部RNG，恢复开销不计入。模式为完整joint、仅切断M→Z的detach_z、仅R/P辅助分支、固定Z的M＋音频E基线（不执行D/R/P）。GT plan固定；各模式保留原音频组与M实例。报告记录数据等待、H2D、E/D/辅助前向、M前向损失/M分块反向/共享反向、clip/optimizer、显存、工作量及实际attention算子。各分段有包含关系，不能直接相加。
+正确性审计记录五模块梯度、更新及真实前反向调用次数。成本测量关闭参数审计和完整诊断，每模式预热2次、测量7次；每次计时前恢复同一模型、optimizer、scheduler及全部RNG，恢复开销不计入。模式为完整joint、仅R/P辅助分支、固定Z的M＋音频E基线（不执行D/R/P），不再测切断M→Z对照。正式训练始终保留M→Z→D→E梯度。GT plan固定；各模式保留原音频组与M实例。报告记录数据等待、H2D、E/D/辅助前向、M前向损失/M分块反向/共享反向、clip/optimizer、显存、工作量及实际attention算子。各分段有包含关系，不能直接相加。
 
 报告在输出目录同级 `diagnostics/cuda-audit.json` 和 `diagnostics/cuda-cost.json`。这些是显式诊断产物，不是普通启动前置条件。
 
@@ -49,7 +49,13 @@ python -m maidata.joint_training --config configs/joint-z4-gt-linux.json --cost-
 单个联合checkpoint整曲推理：
 
 ```bash
-python -m maidata.inference --joint-checkpoint /path/to/last.ckpt --help
+python -m maidata.inference \
+  --joint-checkpoint /path/to/last.ckpt \
+  --audio /path/to/song.wav --bpm 120 --first-seconds 0 \
+  --grid /path/to/grid.npz --mel-root /path/to/referenced-mel \
+  --geometry /path/to/path-catalog --slide-data /path/to/slide_data.json \
+  --difficulty 5 --level 14.5 --device cuda --precision bf16 \
+  --output /path/to/generated/song
 ```
 
 推理其余音频、grid和导出参数沿用[推理说明](maidata-inference.md)。E只加载一次，coverage与M局部窗口取并集，实际局部输出供D/M复用；M保持window范围。推理使用P预测plan，报告明确记录训练GT与推理predicted的差异。详细trace默认关闭。

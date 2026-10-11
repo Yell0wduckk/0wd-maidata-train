@@ -135,7 +135,7 @@ def measure(model, batches, opt, sched, config, geometry):
             del terms, conditions, outputs
     reset()
     reports = {}
-    for mode in ('joint', 'detach_z', 'auxiliary', 'decoder'):
+    for mode in ('joint', 'auxiliary', 'decoder'):
         extra = {'fixed_z': fixed_z} if mode == 'decoder' else {}
         for _ in range(2):
             reset()
@@ -178,6 +178,5 @@ def measure(model, batches, opt, sched, config, geometry):
         synchronization_operators=[event for event in operators if any(name in event['name']
             for name in ('nonzero', '_local_scalar_dense', 'item'))], top_device_operators=operators[:40],
         notes=['GT plan is fixed in all modes.',
-               'detach_z retains auxiliary supervision and the M-to-audio path.',
                'decoder uses the same fixed Z and skips D/R/P; E still encodes the same local windows.',
                'Shared E makes sums of standalone wall times an approximation, not an epoch prediction.'])

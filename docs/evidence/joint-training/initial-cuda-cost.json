@@ -1,0 +1,9064 @@
+{
+  "kind": "original_batch_cost_comparison",
+  "warmup": 2,
+  "repetitions": 7,
+  "reset_outside_timing": true,
+  "diagnostics": false,
+  "parameter_audit": false,
+  "workload": {
+    "audio_groups": [
+      [
+        "9aa48b54139ae2a11cc8d2ad909dde29c22a74b6cad5de6e43aa05d3d1ddde94",
+        "72bfa6615068ba7cff321747df01a37882459e5ae6090188b31ed8ee17f75fb5"
+      ]
+    ],
+    "auxiliary_base_windows": 57,
+    "decoder_occurrences": 59,
+    "unique_decoder_windows": 57,
+    "local_encoder_windows": 57,
+    "coverage_encoder_windows": 55,
+    "valid_audio_input_samples": 31260,
+    "actual_reconstruction_queries": 4516,
+    "valid_m_rows": 3427,
+    "padded_m_rows": 5369,
+    "m_chunks": 1,
+    "m_batch_costs": [
+      {
+        "audio_tokens": 11904,
+        "chart_tokens": 5369,
+        "row_tokens": 5369,
+        "oversized": false
+      }
+    ]
+  },
+  "modes": {
+    "joint": {
+      "samples": [
+        {
+          "seconds": 0.3979509323835373,
+          "cuda_seconds": {
+            "H2D": 0.00413481593132019,
+            "encoder_forward": 0.031923967361450194,
+            "draft_forward": 0.013318143844604492,
+            "auxiliary_forward": 0.006962240219116211,
+            "shared_forward": 0.05286703872680664,
+            "audio_projection": 0.002568351984024048,
+            "M_forward_loss": 0.1613912353515625,
+            "direct_backward": 0.1632607421875,
+            "clip": 0.006325215816497803,
+            "optimizer": 0.003826688051223755
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0018155798316001892,
+            "encoder_forward": 0.02776283770799637,
+            "draft_forward": 0.019579045474529266,
+            "auxiliary_forward": 0.006964869797229767,
+            "shared_forward": 0.055168621242046356,
+            "audio_projection": 0.002571411430835724,
+            "M_forward_loss": 0.16139959543943405,
+            "direct_backward": 0.13203094899654388,
+            "clip": 0.006177954375743866,
+            "optimizer": 0.003314085304737091
+          },
+          "peak_allocated": 6951490560,
+          "peak_reserved": 7860125696,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          }
+        },
+        {
+          "seconds": 0.2707885131239891,
+          "cuda_seconds": {
+            "H2D": 0.003805664122104645,
+            "encoder_forward": 0.03193123245239258,
+            "draft_forward": 0.013957119941711426,
+            "auxiliary_forward": 0.006849535942077637,
+            "shared_forward": 0.05339859390258789,
+            "audio_projection": 0.0025736000537872313,
+            "M_forward_loss": 0.03365254211425781,
+            "direct_backward": 0.16438082885742186,
+            "clip": 0.005772160053253174,
+            "optimizer": 0.0036761600971221926
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.001474522054195404,
+            "encoder_forward": 0.027927152812480927,
+            "draft_forward": 0.020073123276233673,
+            "auxiliary_forward": 0.006852395832538605,
+            "shared_forward": 0.05571739375591278,
+            "audio_projection": 0.0025768280029296875,
+            "M_forward_loss": 0.03365609794855118,
+            "direct_backward": 0.13278421759605408,
+            "clip": 0.005622759461402893,
+            "optimizer": 0.0031256750226020813
+          },
+          "peak_allocated": 6948166656,
+          "peak_reserved": 7860125696,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          }
+        },
+        {
+          "seconds": 0.2703383043408394,
+          "cuda_seconds": {
+            "H2D": 0.003825727999210358,
+            "encoder_forward": 0.03192473602294922,
+            "draft_forward": 0.013321215629577637,
+            "auxiliary_forward": 0.0067983360290527345,
+            "shared_forward": 0.05269062423706055,
+            "audio_projection": 0.005189631938934326,
+            "M_forward_loss": 0.033445758819580076,
+            "direct_backward": 0.1622968292236328,
+            "clip": 0.005827104091644287,
+            "optimizer": 0.0036464641094207766
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0014853551983833313,
+            "encoder_forward": 0.02794390171766281,
+            "draft_forward": 0.01942712813615799,
+            "auxiliary_forward": 0.006800644099712372,
+            "shared_forward": 0.05501783639192581,
+            "audio_projection": 0.005193628370761871,
+            "M_forward_loss": 0.03344909846782684,
+            "direct_backward": 0.13055437058210373,
+            "clip": 0.005676478147506714,
+            "optimizer": 0.003093823790550232
+          },
+          "peak_allocated": 6951468032,
+          "peak_reserved": 7864320000,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          }
+        },
+        {
+          "seconds": 0.2663061171770096,
+          "cuda_seconds": {
+            "H2D": 0.0038049919605255126,
+            "encoder_forward": 0.03192342376708984,
+            "draft_forward": 0.013119744300842286,
+            "auxiliary_forward": 0.006788095951080322,
+            "shared_forward": 0.05247449493408203,
+            "audio_projection": 0.0025376319885253907,
+            "M_forward_loss": 0.03311148834228515,
+            "direct_backward": 0.16146226501464844,
+            "clip": 0.005956607818603516,
+            "optimizer": 0.003564543962478638
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0014664679765701294,
+            "encoder_forward": 0.02787887305021286,
+            "draft_forward": 0.019292674958705902,
+            "auxiliary_forward": 0.006790563464164734,
+            "shared_forward": 0.05480055510997772,
+            "audio_projection": 0.002541281282901764,
+            "M_forward_loss": 0.03311470150947571,
+            "direct_backward": 0.1290152594447136,
+            "clip": 0.005804486572742462,
+            "optimizer": 0.0029985010623931885
+          },
+          "peak_allocated": 6948166656,
+          "peak_reserved": 7864320000,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          }
+        },
+        {
+          "seconds": 0.27383939176797867,
+          "cuda_seconds": {
+            "H2D": 0.004286015868186951,
+            "encoder_forward": 0.03193814468383789,
+            "draft_forward": 0.015045632362365722,
+            "auxiliary_forward": 0.007419904232025146,
+            "shared_forward": 0.05512700653076172,
+            "audio_projection": 0.0027568318843841553,
+            "M_forward_loss": 0.036481216430664064,
+            "direct_backward": 0.16167219543457031,
+            "clip": 0.00584438419342041,
+            "optimizer": 0.003703808069229126
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.002033799886703491,
+            "encoder_forward": 0.027989022433757782,
+            "draft_forward": 0.02099943906068802,
+            "auxiliary_forward": 0.00742262601852417,
+            "shared_forward": 0.057363636791706085,
+            "audio_projection": 0.0027598515152931213,
+            "M_forward_loss": 0.03648489713668823,
+            "direct_backward": 0.12952857464551926,
+            "clip": 0.005698114633560181,
+            "optimizer": 0.003175005316734314
+          },
+          "peak_allocated": 6951468032,
+          "peak_reserved": 7864320000,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          }
+        },
+        {
+          "seconds": 0.27168018370866776,
+          "cuda_seconds": {
+            "H2D": 0.003820640027523041,
+            "encoder_forward": 0.031914527893066404,
+            "draft_forward": 0.01325875186920166,
+            "auxiliary_forward": 0.006986752033233643,
+            "shared_forward": 0.052832225799560546,
+            "audio_projection": 0.002624864101409912,
+            "M_forward_loss": 0.03341052627563477,
+            "direct_backward": 0.1658653106689453,
+            "clip": 0.005818240165710449,
+            "optimizer": 0.0037266879081726072
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0015098005533218384,
+            "encoder_forward": 0.027871981263160706,
+            "draft_forward": 0.01939062774181366,
+            "auxiliary_forward": 0.006989046931266785,
+            "shared_forward": 0.05512988567352295,
+            "audio_projection": 0.0026281774044036865,
+            "M_forward_loss": 0.033413805067539215,
+            "direct_backward": 0.13436804711818695,
+            "clip": 0.005672544240951538,
+            "optimizer": 0.00317305326461792
+          },
+          "peak_allocated": 6948166656,
+          "peak_reserved": 7866417152,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          }
+        },
+        {
+          "seconds": 0.2669948562979698,
+          "cuda_seconds": {
+            "H2D": 0.003821311891078949,
+            "encoder_forward": 0.0319399356842041,
+            "draft_forward": 0.013228032112121582,
+            "auxiliary_forward": 0.006883584022521973,
+            "shared_forward": 0.052702785491943356,
+            "audio_projection": 0.0025518081188201903,
+            "M_forward_loss": 0.033186912536621094,
+            "direct_backward": 0.1619300537109375,
+            "clip": 0.005674784183502197,
+            "optimizer": 0.003649535894393921
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.001544557511806488,
+            "encoder_forward": 0.027890115976333618,
+            "draft_forward": 0.019337758421897888,
+            "auxiliary_forward": 0.0068861618638038635,
+            "shared_forward": 0.054965101182460785,
+            "audio_projection": 0.0025556832551956177,
+            "M_forward_loss": 0.03319045156240463,
+            "direct_backward": 0.12984942644834518,
+            "clip": 0.005523107945919037,
+            "optimizer": 0.0030927732586860657
+          },
+          "peak_allocated": 6951468032,
+          "peak_reserved": 7866417152,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          }
+        }
+      ],
+      "median_seconds": 0.2707885131239891,
+      "min_seconds": 0.2663061171770096,
+      "max_seconds": 0.3979509323835373,
+      "metrics": {
+        "loss": 14.259653223926406,
+        "weighted": {
+          "decoder": 2.668533353487131,
+          "reconstruction": 11.112019609621061,
+          "planner": 0.4791002608182137
+        },
+        "auxiliary": {
+          "loss": 11.591119870439275,
+          "reconstruction": 11.112019609621061,
+          "planner": 0.4791002608182137,
+          "classification": {
+            "mean": 1.4875073705248458,
+            "active_fields": 8
+          },
+          "terms": {
+            "field/kind": {
+              "total": 1805.38427734375,
+              "count": 1109,
+              "mean": 1.627938933583183
+            },
+            "field/route_id": {
+              "total": 1042.6602783203125,
+              "count": 237,
+              "mean": 4.399410457047732
+            },
+            "field/track_break": {
+              "total": 122.8371810913086,
+              "count": 228,
+              "mean": 0.53875956618995
+            },
+            "field/ex": {
+              "total": 754.7507934570312,
+              "count": 1065,
+              "mean": 0.708686191039466
+            },
+            "field/break_": {
+              "total": 1449.9210205078125,
+              "count": 1065,
+              "mean": 1.3614281882702466
+            },
+            "field/firework": {
+              "total": 36.554344177246094,
+              "count": 44,
+              "mean": 0.8307805494828657
+            },
+            "field/short_hold": {
+              "total": 429.19891357421875,
+              "count": 705,
+              "mean": 0.6087927852116578
+            },
+            "field/short_touch_hold": {
+              "total": 74.79475402832031,
+              "count": 41,
+              "mean": 1.824262293373666
+            },
+            "moment96": {
+              "total": 4183.8388671875,
+              "count": 921,
+              "mean": 4.542713210844191
+            },
+            "empty": {
+              "total": 581.6222534179688,
+              "count": 912,
+              "mean": 0.6377436989232114
+            },
+            "positive_count": {
+              "total": 2826.419189453125,
+              "count": 636,
+              "mean": 4.444055329328813
+            },
+            "planner_continuous": {
+              "total": 6.49594783782959,
+              "count": 57,
+              "mean": 0.11396399715490509
+            },
+            "planner_category": {
+              "total": 83.25106811523438,
+              "count": 57,
+              "mean": 1.4605450546532346
+            }
+          }
+        },
+        "decoder": {
+          "loss": 2.668533353487131,
+          "means": {
+            "main": 2.156581317573427,
+            "judge": 0.5108589393963953,
+            "trajectory": 0.4646684955264523,
+            "physical": 0.030235398065349924
+          },
+          "physical_categories": [
+            0.11065261486972389,
+            0.004729043912729605,
+            1.2080307205424058e-08,
+            0.005559885157717386
+          ],
+          "counts": {
+            "main": 8648,
+            "physical": 4226,
+            "judge": 241,
+            "trajectory": 241
+          },
+          "sums": {
+            "main": 18650.115234375,
+            "physical": [
+              467.6179504394531,
+              19.984939575195312,
+              5.105137825012207e-05,
+              23.496074676513672
+            ],
+            "judge": 123.11700439453125,
+            "trajectory": 111.985107421875
+          }
+        }
+      },
+      "audit": {
+        "gradient_norm": 123.51222229003906,
+        "gradients": {},
+        "changed_parameter_tensors": {},
+        "chunks": 1,
+        "padded_token_costs": [
+          5369
+        ],
+        "batch_costs": [
+          {
+            "audio_tokens": 11904,
+            "chart_tokens": 5369,
+            "row_tokens": 5369,
+            "oversized": false
+          }
+        ]
+      }
+    },
+    "detach_z": {
+      "samples": [
+        {
+          "seconds": 0.2344893515110016,
+          "cuda_seconds": {
+            "H2D": 0.003918335914611816,
+            "encoder_forward": 0.03191974449157715,
+            "draft_forward": 0.013275135993957519,
+            "auxiliary_forward": 0.007683072090148926,
+            "shared_forward": 0.0536082878112793,
+            "audio_projection": 0.0028518400192260743,
+            "M_forward_loss": 0.03397856140136719,
+            "direct_backward": 0.12634960174560547,
+            "clip": 0.00620300817489624,
+            "optimizer": 0.0040317120552062985
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0015904679894447327,
+            "encoder_forward": 0.02790091186761856,
+            "draft_forward": 0.019391484558582306,
+            "auxiliary_forward": 0.007686026394367218,
+            "shared_forward": 0.055922120809555054,
+            "audio_projection": 0.002854764461517334,
+            "M_forward_loss": 0.033981867134571075,
+            "direct_backward": 0.08583606034517288,
+            "clip": 0.006065055727958679,
+            "optimizer": 0.0035151392221450806
+          },
+          "peak_allocated": 6948033024,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          }
+        },
+        {
+          "seconds": 0.23087390512228012,
+          "cuda_seconds": {
+            "H2D": 0.0038080960512161255,
+            "encoder_forward": 0.031907199859619144,
+            "draft_forward": 0.013307904243469238,
+            "auxiliary_forward": 0.006876160144805908,
+            "shared_forward": 0.05273977661132812,
+            "audio_projection": 0.0025582399368286133,
+            "M_forward_loss": 0.03324371337890625,
+            "direct_backward": 0.12558541107177734,
+            "clip": 0.005649343967437744,
+            "optimizer": 0.003684351921081543
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0014967992901802063,
+            "encoder_forward": 0.027867436408996582,
+            "draft_forward": 0.019437626004219055,
+            "auxiliary_forward": 0.0068786293268203735,
+            "shared_forward": 0.05503778159618378,
+            "audio_projection": 0.0025617405772209167,
+            "M_forward_loss": 0.03324716538190842,
+            "direct_backward": 0.08340244740247726,
+            "clip": 0.005499206483364105,
+            "optimizer": 0.0031280964612960815
+          },
+          "peak_allocated": 6951335424,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          }
+        },
+        {
+          "seconds": 0.23336943984031677,
+          "cuda_seconds": {
+            "H2D": 0.0038051840662956236,
+            "encoder_forward": 0.0319173755645752,
+            "draft_forward": 0.013311167716979981,
+            "auxiliary_forward": 0.006883647918701172,
+            "shared_forward": 0.052757118225097654,
+            "audio_projection": 0.0025539519786834716,
+            "M_forward_loss": 0.03478051376342774,
+            "direct_backward": 0.12218070220947265,
+            "clip": 0.009759103775024414,
+            "optimizer": 0.004001791954040527
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0014959648251533508,
+            "encoder_forward": 0.027877338230609894,
+            "draft_forward": 0.01942788064479828,
+            "auxiliary_forward": 0.006886884570121765,
+            "shared_forward": 0.055052757263183594,
+            "audio_projection": 0.002557210624217987,
+            "M_forward_loss": 0.034783899784088135,
+            "direct_backward": 0.0827401801943779,
+            "clip": 0.009625084698200226,
+            "optimizer": 0.0034928694367408752
+          },
+          "peak_allocated": 6948034048,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          }
+        },
+        {
+          "seconds": 0.23473197221755981,
+          "cuda_seconds": {
+            "H2D": 0.004179232120513916,
+            "encoder_forward": 0.03192393684387207,
+            "draft_forward": 0.013074432373046875,
+            "auxiliary_forward": 0.00691919994354248,
+            "shared_forward": 0.0525753288269043,
+            "audio_projection": 0.0025860159397125245,
+            "M_forward_loss": 0.036878719329833984,
+            "direct_backward": 0.12558150482177735,
+            "clip": 0.005703968048095703,
+            "optimizer": 0.0037201919555664062
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0018613636493682861,
+            "encoder_forward": 0.02789086103439331,
+            "draft_forward": 0.01920892298221588,
+            "auxiliary_forward": 0.006921887397766113,
+            "shared_forward": 0.05488073080778122,
+            "audio_projection": 0.0025895386934280396,
+            "M_forward_loss": 0.036882586777210236,
+            "direct_backward": 0.08392678946256638,
+            "clip": 0.005553990602493286,
+            "optimizer": 0.003169819712638855
+          },
+          "peak_allocated": 6951335424,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          }
+        },
+        {
+          "seconds": 0.2356962412595749,
+          "cuda_seconds": {
+            "H2D": 0.003841920018196106,
+            "encoder_forward": 0.031924352645874024,
+            "draft_forward": 0.013338687896728516,
+            "auxiliary_forward": 0.007154687881469727,
+            "shared_forward": 0.05310809707641601,
+            "audio_projection": 0.0026007039546966553,
+            "M_forward_loss": 0.035318912506103514,
+            "direct_backward": 0.12622720336914062,
+            "clip": 0.006654240131378174,
+            "optimizer": 0.004215807914733887
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0015268474817276,
+            "encoder_forward": 0.02776370942592621,
+            "draft_forward": 0.019592255353927612,
+            "auxiliary_forward": 0.007157027721405029,
+            "shared_forward": 0.05540905147790909,
+            "audio_projection": 0.002603672444820404,
+            "M_forward_loss": 0.03532254695892334,
+            "direct_backward": 0.09204769134521484,
+            "clip": 0.006522119045257568,
+            "optimizer": 0.0037116631865501404
+          },
+          "peak_allocated": 6948034048,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          }
+        },
+        {
+          "seconds": 0.23060229420661926,
+          "cuda_seconds": {
+            "H2D": 0.003803967893123627,
+            "encoder_forward": 0.031932672500610354,
+            "draft_forward": 0.01346560001373291,
+            "auxiliary_forward": 0.0070256638526916505,
+            "shared_forward": 0.053107521057128904,
+            "audio_projection": 0.00256278395652771,
+            "M_forward_loss": 0.03349462509155274,
+            "direct_backward": 0.12456208038330079,
+            "clip": 0.005774079799652099,
+            "optimizer": 0.0036877119541168213
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.001495160162448883,
+            "encoder_forward": 0.027913764119148254,
+            "draft_forward": 0.01957162469625473,
+            "auxiliary_forward": 0.007028080523014069,
+            "shared_forward": 0.05540412664413452,
+            "audio_projection": 0.0025657787919044495,
+            "M_forward_loss": 0.03349810093641281,
+            "direct_backward": 0.08269796520471573,
+            "clip": 0.005623362958431244,
+            "optimizer": 0.003144986927509308
+          },
+          "peak_allocated": 6951335424,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          }
+        },
+        {
+          "seconds": 0.27239932119846344,
+          "cuda_seconds": {
+            "H2D": 0.0038004798889160157,
+            "encoder_forward": 0.031919839859008786,
+            "draft_forward": 0.013225983619689942,
+            "auxiliary_forward": 0.006902751922607422,
+            "shared_forward": 0.052690879821777344,
+            "audio_projection": 0.0025241599082946775,
+            "M_forward_loss": 0.03436000061035156,
+            "direct_backward": 0.16495718383789063,
+            "clip": 0.006634367942810059,
+            "optimizer": 0.003955712080001831
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0014649778604507446,
+            "encoder_forward": 0.02792344242334366,
+            "draft_forward": 0.019324563443660736,
+            "auxiliary_forward": 0.006904877722263336,
+            "shared_forward": 0.0550147220492363,
+            "audio_projection": 0.002526618540287018,
+            "M_forward_loss": 0.03436378389596939,
+            "direct_backward": 0.13507135212421417,
+            "clip": 0.006498754024505615,
+            "optimizer": 0.003435790538787842
+          },
+          "peak_allocated": 6948034048,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 1
+          }
+        }
+      ],
+      "median_seconds": 0.2344893515110016,
+      "min_seconds": 0.23060229420661926,
+      "max_seconds": 0.27239932119846344,
+      "metrics": {
+        "loss": 14.259653223926406,
+        "weighted": {
+          "decoder": 2.668533353487131,
+          "reconstruction": 11.112019609621061,
+          "planner": 0.4791002608182137
+        },
+        "auxiliary": {
+          "loss": 11.591119870439275,
+          "reconstruction": 11.112019609621061,
+          "planner": 0.4791002608182137,
+          "classification": {
+            "mean": 1.4875073705248458,
+            "active_fields": 8
+          },
+          "terms": {
+            "field/kind": {
+              "total": 1805.38427734375,
+              "count": 1109,
+              "mean": 1.627938933583183
+            },
+            "field/route_id": {
+              "total": 1042.6602783203125,
+              "count": 237,
+              "mean": 4.399410457047732
+            },
+            "field/track_break": {
+              "total": 122.8371810913086,
+              "count": 228,
+              "mean": 0.53875956618995
+            },
+            "field/ex": {
+              "total": 754.7507934570312,
+              "count": 1065,
+              "mean": 0.708686191039466
+            },
+            "field/break_": {
+              "total": 1449.9210205078125,
+              "count": 1065,
+              "mean": 1.3614281882702466
+            },
+            "field/firework": {
+              "total": 36.554344177246094,
+              "count": 44,
+              "mean": 0.8307805494828657
+            },
+            "field/short_hold": {
+              "total": 429.19891357421875,
+              "count": 705,
+              "mean": 0.6087927852116578
+            },
+            "field/short_touch_hold": {
+              "total": 74.79475402832031,
+              "count": 41,
+              "mean": 1.824262293373666
+            },
+            "moment96": {
+              "total": 4183.8388671875,
+              "count": 921,
+              "mean": 4.542713210844191
+            },
+            "empty": {
+              "total": 581.6222534179688,
+              "count": 912,
+              "mean": 0.6377436989232114
+            },
+            "positive_count": {
+              "total": 2826.419189453125,
+              "count": 636,
+              "mean": 4.444055329328813
+            },
+            "planner_continuous": {
+              "total": 6.49594783782959,
+              "count": 57,
+              "mean": 0.11396399715490509
+            },
+            "planner_category": {
+              "total": 83.25106811523438,
+              "count": 57,
+              "mean": 1.4605450546532346
+            }
+          }
+        },
+        "decoder": {
+          "loss": 2.668533353487131,
+          "means": {
+            "main": 2.156581317573427,
+            "judge": 0.5108589393963953,
+            "trajectory": 0.4646684955264523,
+            "physical": 0.030235398065349924
+          },
+          "physical_categories": [
+            0.11065261486972389,
+            0.004729043912729605,
+            1.2080307205424058e-08,
+            0.005559885157717386
+          ],
+          "counts": {
+            "main": 8648,
+            "physical": 4226,
+            "judge": 241,
+            "trajectory": 241
+          },
+          "sums": {
+            "main": 18650.115234375,
+            "physical": [
+              467.6179504394531,
+              19.984939575195312,
+              5.105137825012207e-05,
+              23.496074676513672
+            ],
+            "judge": 123.11700439453125,
+            "trajectory": 111.985107421875
+          }
+        }
+      },
+      "audit": {
+        "gradient_norm": 123.60700988769531,
+        "gradients": {},
+        "changed_parameter_tensors": {},
+        "chunks": 1,
+        "padded_token_costs": [
+          5369
+        ],
+        "batch_costs": [
+          {
+            "audio_tokens": 11904,
+            "chart_tokens": 5369,
+            "row_tokens": 5369,
+            "oversized": false
+          }
+        ]
+      }
+    },
+    "auxiliary": {
+      "samples": [
+        {
+          "seconds": 0.17184985429048538,
+          "cuda_seconds": {
+            "H2D": 0.003016223907470703,
+            "encoder_forward": 0.03192313575744629,
+            "draft_forward": 0.01329587173461914,
+            "auxiliary_forward": 0.006924191951751709,
+            "shared_forward": 0.05279148864746094,
+            "shared_backward": 0.10319462585449218,
+            "clip": 0.0068596482276916506,
+            "optimizer": 0.002531327962875366
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.000710614025592804,
+            "encoder_forward": 0.02789292484521866,
+            "draft_forward": 0.019411295652389526,
+            "auxiliary_forward": 0.006926320493221283,
+            "shared_forward": 0.0550832524895668,
+            "shared_backward": 0.0702572837471962,
+            "clip": 0.006808392703533173,
+            "optimizer": 0.0021118149161338806
+          },
+          "peak_allocated": 5917133312,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 0
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 0
+          }
+        },
+        {
+          "seconds": 0.17990265041589737,
+          "cuda_seconds": {
+            "H2D": 0.0030184640884399414,
+            "encoder_forward": 0.03191884803771973,
+            "draft_forward": 0.021955999374389648,
+            "auxiliary_forward": 0.007234560012817383,
+            "shared_forward": 0.06181584167480469,
+            "shared_backward": 0.10373439788818359,
+            "clip": 0.005206912040710449,
+            "optimizer": 0.0023552000522613524
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0008018240332603455,
+            "encoder_forward": 0.027823224663734436,
+            "draft_forward": 0.028032027184963226,
+            "auxiliary_forward": 0.007237762212753296,
+            "shared_forward": 0.06401560455560684,
+            "shared_backward": 0.0707542896270752,
+            "clip": 0.005141794681549072,
+            "optimizer": 0.0019432604312896729
+          },
+          "peak_allocated": 5916992000,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 0
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 0
+          }
+        },
+        {
+          "seconds": 0.17352016270160675,
+          "cuda_seconds": {
+            "H2D": 0.003017791986465454,
+            "encoder_forward": 0.0319204158782959,
+            "draft_forward": 0.013121536254882812,
+            "auxiliary_forward": 0.006800384044647217,
+            "shared_forward": 0.05248777770996094,
+            "shared_backward": 0.1070940170288086,
+            "clip": 0.005095903873443604,
+            "optimizer": 0.0024197120666503906
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0006969049572944641,
+            "encoder_forward": 0.02791142463684082,
+            "draft_forward": 0.019235149025917053,
+            "auxiliary_forward": 0.006802812218666077,
+            "shared_forward": 0.0547955185174942,
+            "shared_backward": 0.07484515756368637,
+            "clip": 0.005033060908317566,
+            "optimizer": 0.002013474702835083
+          },
+          "peak_allocated": 5917133824,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 0
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 0
+          }
+        },
+        {
+          "seconds": 0.17227087914943695,
+          "cuda_seconds": {
+            "H2D": 0.0030158720016479493,
+            "encoder_forward": 0.0319305591583252,
+            "draft_forward": 0.014833663940429688,
+            "auxiliary_forward": 0.0073432960510253905,
+            "shared_forward": 0.05479888153076172,
+            "shared_backward": 0.10349260711669922,
+            "clip": 0.004924543857574463,
+            "optimizer": 0.0024238080978393555
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0007473155856132507,
+            "encoder_forward": 0.028007887303829193,
+            "draft_forward": 0.020784951746463776,
+            "auxiliary_forward": 0.007346145808696747,
+            "shared_forward": 0.05705341696739197,
+            "shared_backward": 0.07039736211299896,
+            "clip": 0.0048719048500061035,
+            "optimizer": 0.00200565904378891
+          },
+          "peak_allocated": 5916992000,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 0
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 0
+          }
+        },
+        {
+          "seconds": 0.1705537512898445,
+          "cuda_seconds": {
+            "H2D": 0.0030202560424804686,
+            "encoder_forward": 0.03192495918273926,
+            "draft_forward": 0.01349948787689209,
+            "auxiliary_forward": 0.007091519832611084,
+            "shared_forward": 0.053181537628173826,
+            "shared_backward": 0.10338019561767578,
+            "clip": 0.004974559783935547,
+            "optimizer": 0.002386944055557251
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0007646828889846802,
+            "encoder_forward": 0.02787536382675171,
+            "draft_forward": 0.019576847553253174,
+            "auxiliary_forward": 0.00709417462348938,
+            "shared_forward": 0.05542134493589401,
+            "shared_backward": 0.07033280283212662,
+            "clip": 0.004920490086078644,
+            "optimizer": 0.0019602328538894653
+          },
+          "peak_allocated": 5917133824,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 0
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 0
+          }
+        },
+        {
+          "seconds": 0.171310156583786,
+          "cuda_seconds": {
+            "H2D": 0.003017728090286255,
+            "encoder_forward": 0.0319166088104248,
+            "draft_forward": 0.013225983619689942,
+            "auxiliary_forward": 0.006816768169403077,
+            "shared_forward": 0.05261190414428711,
+            "shared_backward": 0.1052774429321289,
+            "clip": 0.004643295764923096,
+            "optimizer": 0.002275327920913696
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0007191896438598633,
+            "encoder_forward": 0.027889251708984375,
+            "draft_forward": 0.01932264119386673,
+            "auxiliary_forward": 0.006819181144237518,
+            "shared_forward": 0.05489649623632431,
+            "shared_backward": 0.07299638539552689,
+            "clip": 0.00458044558763504,
+            "optimizer": 0.0018525868654251099
+          },
+          "peak_allocated": 5916992000,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 0
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 0
+          }
+        },
+        {
+          "seconds": 0.1726662740111351,
+          "cuda_seconds": {
+            "H2D": 0.0030154879093170165,
+            "encoder_forward": 0.03191462326049805,
+            "draft_forward": 0.014541824340820313,
+            "auxiliary_forward": 0.007413599967956543,
+            "shared_forward": 0.05453919982910156,
+            "shared_backward": 0.1039834213256836,
+            "clip": 0.005326784133911132,
+            "optimizer": 0.002494463920593262
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.000680483877658844,
+            "encoder_forward": 0.028104543685913086,
+            "draft_forward": 0.0204557403922081,
+            "auxiliary_forward": 0.0074166059494018555,
+            "shared_forward": 0.05686098337173462,
+            "shared_backward": 0.07158424705266953,
+            "clip": 0.005276411771774292,
+            "optimizer": 0.0020953789353370667
+          },
+          "peak_allocated": 5917133824,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 0
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 1,
+            "reconstruction": 1,
+            "planner": 1,
+            "decoder": 0
+          }
+        }
+      ],
+      "median_seconds": 0.17227087914943695,
+      "min_seconds": 0.1705537512898445,
+      "max_seconds": 0.17990265041589737,
+      "metrics": {
+        "loss": 11.591119870439275,
+        "weighted": {
+          "decoder": 0.0,
+          "reconstruction": 11.112019609621061,
+          "planner": 0.4791002608182137
+        },
+        "auxiliary": {
+          "loss": 11.591119870439275,
+          "reconstruction": 11.112019609621061,
+          "planner": 0.4791002608182137,
+          "classification": {
+            "mean": 1.4875073705248458,
+            "active_fields": 8
+          },
+          "terms": {
+            "field/kind": {
+              "total": 1805.38427734375,
+              "count": 1109,
+              "mean": 1.627938933583183
+            },
+            "field/route_id": {
+              "total": 1042.6602783203125,
+              "count": 237,
+              "mean": 4.399410457047732
+            },
+            "field/track_break": {
+              "total": 122.8371810913086,
+              "count": 228,
+              "mean": 0.53875956618995
+            },
+            "field/ex": {
+              "total": 754.7507934570312,
+              "count": 1065,
+              "mean": 0.708686191039466
+            },
+            "field/break_": {
+              "total": 1449.9210205078125,
+              "count": 1065,
+              "mean": 1.3614281882702466
+            },
+            "field/firework": {
+              "total": 36.554344177246094,
+              "count": 44,
+              "mean": 0.8307805494828657
+            },
+            "field/short_hold": {
+              "total": 429.19891357421875,
+              "count": 705,
+              "mean": 0.6087927852116578
+            },
+            "field/short_touch_hold": {
+              "total": 74.79475402832031,
+              "count": 41,
+              "mean": 1.824262293373666
+            },
+            "moment96": {
+              "total": 4183.8388671875,
+              "count": 921,
+              "mean": 4.542713210844191
+            },
+            "empty": {
+              "total": 581.6222534179688,
+              "count": 912,
+              "mean": 0.6377436989232114
+            },
+            "positive_count": {
+              "total": 2826.419189453125,
+              "count": 636,
+              "mean": 4.444055329328813
+            },
+            "planner_continuous": {
+              "total": 6.49594783782959,
+              "count": 57,
+              "mean": 0.11396399715490509
+            },
+            "planner_category": {
+              "total": 83.25106811523438,
+              "count": 57,
+              "mean": 1.4605450546532346
+            }
+          }
+        },
+        "decoder": {
+          "loss": 0.0,
+          "means": {
+            "main": 0.0,
+            "judge": 0.0,
+            "trajectory": 0.0,
+            "physical": 0.0
+          },
+          "physical_categories": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "counts": {
+            "main": 0,
+            "physical": 0,
+            "judge": 0,
+            "trajectory": 0
+          },
+          "sums": {
+            "main": 0.0,
+            "physical": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "judge": 0.0,
+            "trajectory": 0.0
+          }
+        }
+      },
+      "audit": {
+        "gradient_norm": 123.73184967041016,
+        "gradients": {},
+        "changed_parameter_tensors": {},
+        "chunks": 0,
+        "padded_token_costs": [],
+        "batch_costs": [
+          {
+            "audio_tokens": 11904,
+            "chart_tokens": 5369,
+            "row_tokens": 5369,
+            "oversized": false
+          }
+        ]
+      }
+    },
+    "decoder": {
+      "samples": [
+        {
+          "seconds": 0.17540615051984787,
+          "cuda_seconds": {
+            "H2D": 0.00340118408203125,
+            "encoder_forward": 0.03192083168029785,
+            "shared_forward": 0.03193340873718262,
+            "audio_projection": 0.001094688057899475,
+            "M_forward_loss": 0.029412479400634767,
+            "direct_backward": 0.09923983764648438,
+            "clip": 0.004662879943847656,
+            "optimizer": 0.0023306241035461425
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0014237388968467712,
+            "encoder_forward": 0.027938835322856903,
+            "shared_forward": 0.02811434119939804,
+            "audio_projection": 0.002467319369316101,
+            "M_forward_loss": 0.03371138870716095,
+            "direct_backward": 0.05688336491584778,
+            "clip": 0.004638239741325378,
+            "optimizer": 0.001953519880771637
+          },
+          "peak_allocated": 6650565120,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 0,
+            "reconstruction": 0,
+            "planner": 0,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 0,
+            "reconstruction": 0,
+            "planner": 0,
+            "decoder": 1
+          }
+        },
+        {
+          "seconds": 0.19709035009145737,
+          "cuda_seconds": {
+            "H2D": 0.0033978559672832487,
+            "encoder_forward": 0.03191804885864258,
+            "shared_forward": 0.03192963218688965,
+            "audio_projection": 0.0011008000373840332,
+            "M_forward_loss": 0.02957904052734375,
+            "direct_backward": 0.12075331115722657,
+            "clip": 0.004734272003173828,
+            "optimizer": 0.0023797760009765627
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0014392435550689697,
+            "encoder_forward": 0.027920246124267578,
+            "shared_forward": 0.028091736137866974,
+            "audio_projection": 0.002555757761001587,
+            "M_forward_loss": 0.03379971534013748,
+            "direct_backward": 0.09825416654348373,
+            "clip": 0.004707068204879761,
+            "optimizer": 0.001994408667087555
+          },
+          "peak_allocated": 6651451904,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 0,
+            "reconstruction": 0,
+            "planner": 0,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 0,
+            "reconstruction": 0,
+            "planner": 0,
+            "decoder": 1
+          }
+        },
+        {
+          "seconds": 0.17830990254878998,
+          "cuda_seconds": {
+            "H2D": 0.0033995519280433655,
+            "encoder_forward": 0.031931552886962894,
+            "shared_forward": 0.03194307136535644,
+            "audio_projection": 0.0010935039520263673,
+            "M_forward_loss": 0.029533472061157227,
+            "direct_backward": 0.10227001953125,
+            "clip": 0.004677375793457031,
+            "optimizer": 0.0022773759365081786
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0014815852046012878,
+            "encoder_forward": 0.028008371591567993,
+            "shared_forward": 0.028181418776512146,
+            "audio_projection": 0.0025400519371032715,
+            "M_forward_loss": 0.0336478054523468,
+            "direct_backward": 0.05942697077989578,
+            "clip": 0.004642784595489502,
+            "optimizer": 0.0018999800086021423
+          },
+          "peak_allocated": 6650565632,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 0,
+            "reconstruction": 0,
+            "planner": 0,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 0,
+            "reconstruction": 0,
+            "planner": 0,
+            "decoder": 1
+          }
+        },
+        {
+          "seconds": 0.19971807301044464,
+          "cuda_seconds": {
+            "H2D": 0.0034023680686950685,
+            "encoder_forward": 0.03191728019714356,
+            "shared_forward": 0.031928831100463864,
+            "audio_projection": 0.0010905599594116212,
+            "M_forward_loss": 0.029624479293823242,
+            "direct_backward": 0.12344525146484375,
+            "clip": 0.0047041277885437015,
+            "optimizer": 0.0022949440479278563
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0014309436082839966,
+            "encoder_forward": 0.02777142822742462,
+            "shared_forward": 0.027955055236816406,
+            "audio_projection": 0.0025412142276763916,
+            "M_forward_loss": 0.03398857265710831,
+            "direct_backward": 0.08772116899490356,
+            "clip": 0.004677474498748779,
+            "optimizer": 0.0019111037254333496
+          },
+          "peak_allocated": 6651451904,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 0,
+            "reconstruction": 0,
+            "planner": 0,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 0,
+            "reconstruction": 0,
+            "planner": 0,
+            "decoder": 1
+          }
+        },
+        {
+          "seconds": 0.1740267276763916,
+          "cuda_seconds": {
+            "H2D": 0.003398784011602402,
+            "encoder_forward": 0.031920127868652344,
+            "shared_forward": 0.031932672500610354,
+            "audio_projection": 0.0010926079750061034,
+            "M_forward_loss": 0.02962063980102539,
+            "direct_backward": 0.09780748748779297,
+            "clip": 0.004737567901611328,
+            "optimizer": 0.0022476799488067626
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0015073716640472412,
+            "encoder_forward": 0.027867361903190613,
+            "shared_forward": 0.028050139546394348,
+            "audio_projection": 0.002749145030975342,
+            "M_forward_loss": 0.03358282148838043,
+            "direct_backward": 0.05473688244819641,
+            "clip": 0.004707507789134979,
+            "optimizer": 0.0018656924366950989
+          },
+          "peak_allocated": 6650565632,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 0,
+            "reconstruction": 0,
+            "planner": 0,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 0,
+            "reconstruction": 0,
+            "planner": 0,
+            "decoder": 1
+          }
+        },
+        {
+          "seconds": 0.1965048909187317,
+          "cuda_seconds": {
+            "H2D": 0.003416703999042511,
+            "encoder_forward": 0.0319150390625,
+            "shared_forward": 0.03192665672302246,
+            "audio_projection": 0.0010926079750061034,
+            "M_forward_loss": 0.029121023178100586,
+            "direct_backward": 0.12107875061035156,
+            "clip": 0.004563519954681397,
+            "optimizer": 0.002209791898727417
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0014096051454544067,
+            "encoder_forward": 0.02791774272918701,
+            "shared_forward": 0.02808649092912674,
+            "audio_projection": 0.0024524852633476257,
+            "M_forward_loss": 0.03345818072557449,
+            "direct_backward": 0.08617204427719116,
+            "clip": 0.00453968346118927,
+            "optimizer": 0.001809336245059967
+          },
+          "peak_allocated": 6651451904,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 0,
+            "reconstruction": 0,
+            "planner": 0,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 0,
+            "reconstruction": 0,
+            "planner": 0,
+            "decoder": 1
+          }
+        },
+        {
+          "seconds": 0.17287472635507584,
+          "cuda_seconds": {
+            "H2D": 0.0034015679061412812,
+            "encoder_forward": 0.03192118453979492,
+            "shared_forward": 0.031933696746826175,
+            "audio_projection": 0.0010967040061950683,
+            "M_forward_loss": 0.02897273635864258,
+            "direct_backward": 0.09762441253662109,
+            "clip": 0.004563392162322998,
+            "optimizer": 0.00220467209815979
+          },
+          "cpu_wall_seconds": {
+            "H2D": 0.0014046058058738708,
+            "encoder_forward": 0.02789740264415741,
+            "shared_forward": 0.02807554602622986,
+            "audio_projection": 0.0024538636207580566,
+            "M_forward_loss": 0.03330440819263458,
+            "direct_backward": 0.054579854011535645,
+            "clip": 0.004535570740699768,
+            "optimizer": 0.0018112286925315857
+          },
+          "peak_allocated": 6650565632,
+          "peak_reserved": 7868514304,
+          "forward_calls": {
+            "encoder": 1,
+            "draft": 0,
+            "reconstruction": 0,
+            "planner": 0,
+            "decoder": 1
+          },
+          "backward_parameter_calls": {
+            "encoder": 1,
+            "draft": 0,
+            "reconstruction": 0,
+            "planner": 0,
+            "decoder": 1
+          }
+        }
+      ],
+      "median_seconds": 0.17830990254878998,
+      "min_seconds": 0.17287472635507584,
+      "max_seconds": 0.19971807301044464,
+      "metrics": {
+        "loss": 2.668496812728223,
+        "weighted": {
+          "decoder": 2.668496812728223,
+          "reconstruction": 0.0,
+          "planner": 0.0
+        },
+        "auxiliary": {
+          "loss": 0.0,
+          "reconstruction": 0.0,
+          "planner": 0.0,
+          "terms": {},
+          "classification": {
+            "mean": 0.0,
+            "active_fields": 0
+          }
+        },
+        "decoder": {
+          "loss": 2.668496812728223,
+          "means": {
+            "main": 2.1569783566287004,
+            "judge": 0.5106067894899994,
+            "trajectory": 0.4644091594268672,
+            "physical": 0.030013102051361658
+          },
+          "physical_categories": [
+            0.10983557279111084,
+            0.004724714691696492,
+            1.15466959462327e-08,
+            0.0054920745358555114
+          ],
+          "counts": {
+            "main": 8648,
+            "physical": 4226,
+            "judge": 241,
+            "trajectory": 241
+          },
+          "sums": {
+            "main": 18653.548828125,
+            "physical": [
+              464.1651306152344,
+              19.966644287109375,
+              4.8796337068779394e-05,
+              23.20950698852539
+            ],
+            "judge": 123.05623626708984,
+            "trajectory": 111.922607421875
+          }
+        }
+      },
+      "audit": {
+        "gradient_norm": 4.850861549377441,
+        "gradients": {},
+        "changed_parameter_tensors": {},
+        "chunks": 1,
+        "padded_token_costs": [
+          5369
+        ],
+        "batch_costs": [
+          {
+            "audio_tokens": 11904,
+            "chart_tokens": 5369,
+            "row_tokens": 5369,
+            "oversized": false
+          }
+        ]
+      }
+    }
+  },
+  "sdpa_operators": [
+    {
+      "name": "autograd::engine::evaluate_function: ScaledDotProductEfficientAttentionBackward0",
+      "count": 102,
+      "cpu_time_us": 10227.08499999973,
+      "device_time_us": 8920.107000000164,
+      "shapes": []
+    },
+    {
+      "name": "fmha_cutlassB_bf16_aligned_64x64_k32_dropout_sm80(PyTorchMemEffAttention::AttentionBackwardKernel<cutlass::arch::Sm80, cutlass::bfloat16_t, true, true, true, 64, 64, 32, false>::Params)",
+      "count": 56,
+      "cpu_time_us": 0,
+      "device_time_us": 4988.09100000016,
+      "shapes": []
+    },
+    {
+      "name": "ScaledDotProductEfficientAttentionBackward0",
+      "count": 16,
+      "cpu_time_us": 1119.5449999999255,
+      "device_time_us": 3234.0470000000205,
+      "shapes": [
+        [
+          2,
+          8,
+          124,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "fmha_cutlassB_bf16_aligned_64x64_k32_sm80(PyTorchMemEffAttention::AttentionBackwardKernel<cutlass::arch::Sm80, cutlass::bfloat16_t, true, false, true, 64, 64, 32, false>::Params)",
+      "count": 16,
+      "cpu_time_us": 0,
+      "device_time_us": 3219.268999999971,
+      "shapes": []
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 8,
+      "cpu_time_us": 550.6930000000866,
+      "device_time_us": 3104.348999999929,
+      "shapes": [
+        [
+          2,
+          8,
+          124,
+          32
+        ],
+        [
+          2,
+          8,
+          124,
+          32
+        ],
+        [
+          2,
+          8,
+          3840,
+          32
+        ],
+        [
+          2,
+          8,
+          3840,
+          32
+        ],
+        [
+          2,
+          8,
+          124,
+          3840
+        ],
+        [
+          2,
+          8,
+          124,
+          32
+        ],
+        [
+          2,
+          8,
+          128
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 8,
+      "cpu_time_us": 360.8750000000582,
+      "device_time_us": 3104.348999999929,
+      "shapes": [
+        [
+          2,
+          124,
+          8,
+          32
+        ],
+        [
+          2,
+          124,
+          8,
+          32
+        ],
+        [
+          2,
+          3840,
+          8,
+          32
+        ],
+        [
+          2,
+          3840,
+          8,
+          32
+        ],
+        [
+          2,
+          8,
+          124,
+          3840
+        ],
+        [
+          2,
+          124,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          2,
+          8,
+          128
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "fmha_cutlassF_bf16_aligned_64x64_rf_sm80(PyTorchMemEffAttention::AttentionKernel<cutlass::bfloat16_t, cutlass::arch::Sm80, true, 64, 64, 64, true, true>::Params)",
+      "count": 102,
+      "cpu_time_us": 0,
+      "device_time_us": 2964.696000000189,
+      "shapes": []
+    },
+    {
+      "name": "ScaledDotProductEfficientAttentionBackward0",
+      "count": 3,
+      "cpu_time_us": 287.7179999999935,
+      "device_time_us": 2010.9830000000075,
+      "shapes": [
+        [
+          57,
+          8,
+          24,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 8,
+      "cpu_time_us": 772.6799999999857,
+      "device_time_us": 1354.4960000000065,
+      "shapes": [
+        [
+          2,
+          8,
+          124,
+          32
+        ],
+        [
+          2,
+          8,
+          3840,
+          32
+        ],
+        [
+          2,
+          8,
+          3840,
+          32
+        ],
+        [
+          2,
+          1,
+          124,
+          3840
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 8,
+      "cpu_time_us": 307.787000000033,
+      "device_time_us": 1315.919999999991,
+      "shapes": [
+        [
+          2,
+          8,
+          124,
+          32
+        ],
+        [
+          2,
+          8,
+          3840,
+          32
+        ],
+        [
+          2,
+          8,
+          3840,
+          32
+        ],
+        [
+          2,
+          8,
+          124,
+          3840
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 8,
+      "cpu_time_us": 170.1170000000202,
+      "device_time_us": 1315.919999999991,
+      "shapes": [
+        [
+          2,
+          124,
+          8,
+          32
+        ],
+        [
+          2,
+          3840,
+          8,
+          32
+        ],
+        [
+          2,
+          3840,
+          8,
+          32
+        ],
+        [
+          2,
+          8,
+          124,
+          3840
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 1,
+      "cpu_time_us": 83.38300000003073,
+      "device_time_us": 985.9000000000233,
+      "shapes": [
+        [
+          57,
+          8,
+          24,
+          32
+        ],
+        [
+          57,
+          8,
+          24,
+          32
+        ],
+        [
+          57,
+          8,
+          1053,
+          32
+        ],
+        [
+          57,
+          8,
+          1053,
+          32
+        ],
+        [
+          57,
+          8,
+          24,
+          1053
+        ],
+        [
+          57,
+          8,
+          24,
+          32
+        ],
+        [
+          57,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 1,
+      "cpu_time_us": 62.59299999999348,
+      "device_time_us": 985.9000000000233,
+      "shapes": [
+        [
+          57,
+          24,
+          8,
+          32
+        ],
+        [
+          57,
+          24,
+          8,
+          32
+        ],
+        [
+          57,
+          1053,
+          8,
+          32
+        ],
+        [
+          57,
+          1053,
+          8,
+          32
+        ],
+        [
+          57,
+          8,
+          24,
+          1053
+        ],
+        [
+          57,
+          24,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          57,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductEfficientAttentionBackward0",
+      "count": 1,
+      "cpu_time_us": 69.11900000000605,
+      "device_time_us": 687.0659999999916,
+      "shapes": [
+        [
+          980,
+          8,
+          32,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 1,
+      "cpu_time_us": 63.40000000002328,
+      "device_time_us": 687.0659999999916,
+      "shapes": [
+        [
+          980,
+          8,
+          32,
+          32
+        ],
+        [
+          980,
+          8,
+          32,
+          32
+        ],
+        [
+          980,
+          8,
+          104,
+          32
+        ],
+        [
+          980,
+          8,
+          104,
+          32
+        ],
+        [
+          980,
+          8,
+          32,
+          104
+        ],
+        [
+          980,
+          8,
+          32,
+          32
+        ],
+        [
+          980,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 1,
+      "cpu_time_us": 41.46799999999348,
+      "device_time_us": 687.0659999999916,
+      "shapes": [
+        [
+          980,
+          32,
+          8,
+          32
+        ],
+        [
+          980,
+          32,
+          8,
+          32
+        ],
+        [
+          980,
+          104,
+          8,
+          32
+        ],
+        [
+          980,
+          104,
+          8,
+          32
+        ],
+        [
+          980,
+          8,
+          32,
+          104
+        ],
+        [
+          980,
+          32,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          980,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductEfficientAttentionBackward0",
+      "count": 2,
+      "cpu_time_us": 154.3640000000014,
+      "device_time_us": 648.972000000067,
+      "shapes": [
+        [
+          493,
+          8,
+          16,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 2,
+      "cpu_time_us": 141.80300000001444,
+      "device_time_us": 648.972000000067,
+      "shapes": [
+        [
+          493,
+          8,
+          16,
+          32
+        ],
+        [
+          493,
+          8,
+          16,
+          32
+        ],
+        [
+          493,
+          8,
+          88,
+          32
+        ],
+        [
+          493,
+          8,
+          88,
+          32
+        ],
+        [
+          493,
+          8,
+          16,
+          88
+        ],
+        [
+          493,
+          8,
+          16,
+          32
+        ],
+        [
+          493,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 2,
+      "cpu_time_us": 86.51800000004005,
+      "device_time_us": 648.972000000067,
+      "shapes": [
+        [
+          493,
+          16,
+          8,
+          32
+        ],
+        [
+          493,
+          16,
+          8,
+          32
+        ],
+        [
+          493,
+          88,
+          8,
+          32
+        ],
+        [
+          493,
+          88,
+          8,
+          32
+        ],
+        [
+          493,
+          8,
+          16,
+          88
+        ],
+        [
+          493,
+          16,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          493,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 1,
+      "cpu_time_us": 83.25299999996787,
+      "device_time_us": 580.6859999999288,
+      "shapes": [
+        [
+          57,
+          8,
+          24,
+          32
+        ],
+        [
+          57,
+          8,
+          24,
+          32
+        ],
+        [
+          57,
+          8,
+          765,
+          32
+        ],
+        [
+          57,
+          8,
+          765,
+          32
+        ],
+        [
+          57,
+          8,
+          24,
+          765
+        ],
+        [
+          57,
+          8,
+          24,
+          32
+        ],
+        [
+          57,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 1,
+      "cpu_time_us": 62.80999999999767,
+      "device_time_us": 580.6859999999288,
+      "shapes": [
+        [
+          57,
+          24,
+          8,
+          32
+        ],
+        [
+          57,
+          24,
+          8,
+          32
+        ],
+        [
+          57,
+          765,
+          8,
+          32
+        ],
+        [
+          57,
+          765,
+          8,
+          32
+        ],
+        [
+          57,
+          8,
+          24,
+          765
+        ],
+        [
+          57,
+          24,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          57,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductEfficientAttentionBackward0",
+      "count": 6,
+      "cpu_time_us": 554.0570000000007,
+      "device_time_us": 573.4219999999623,
+      "shapes": [
+        [
+          30,
+          8,
+          102,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 528.0959999999905,
+      "device_time_us": 573.4219999999623,
+      "shapes": [
+        [
+          30,
+          8,
+          102,
+          32
+        ],
+        [
+          30,
+          8,
+          102,
+          32
+        ],
+        [
+          30,
+          8,
+          192,
+          32
+        ],
+        [
+          30,
+          8,
+          192,
+          32
+        ],
+        [
+          30,
+          8,
+          102,
+          192
+        ],
+        [
+          30,
+          8,
+          102,
+          32
+        ],
+        [
+          30,
+          8,
+          128
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 326.75400000004447,
+      "device_time_us": 573.4219999999623,
+      "shapes": [
+        [
+          30,
+          102,
+          8,
+          32
+        ],
+        [
+          30,
+          102,
+          8,
+          32
+        ],
+        [
+          30,
+          192,
+          8,
+          32
+        ],
+        [
+          30,
+          192,
+          8,
+          32
+        ],
+        [
+          30,
+          8,
+          102,
+          192
+        ],
+        [
+          30,
+          102,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          30,
+          8,
+          128
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "fmha_cutlassB_bf16_aligned_64x64_k64_dropout_sm80(PyTorchMemEffAttention::AttentionBackwardKernel<cutlass::arch::Sm80, cutlass::bfloat16_t, true, true, true, 64, 64, 64, false>::Params)",
+      "count": 30,
+      "cpu_time_us": 0,
+      "device_time_us": 556.3400000002002,
+      "shapes": []
+    },
+    {
+      "name": "autograd::engine::evaluate_function: ScaledDotProductFlashAttentionBackward0",
+      "count": 30,
+      "cpu_time_us": 3023.7800000001153,
+      "device_time_us": 522.0879999999888,
+      "shapes": []
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 1,
+      "cpu_time_us": 98.27700000000186,
+      "device_time_us": 444.3970000000554,
+      "shapes": [
+        [
+          57,
+          8,
+          24,
+          32
+        ],
+        [
+          57,
+          8,
+          24,
+          32
+        ],
+        [
+          57,
+          8,
+          621,
+          32
+        ],
+        [
+          57,
+          8,
+          621,
+          32
+        ],
+        [
+          57,
+          8,
+          24,
+          621
+        ],
+        [
+          57,
+          8,
+          24,
+          32
+        ],
+        [
+          57,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 1,
+      "cpu_time_us": 69.87299999996321,
+      "device_time_us": 444.3970000000554,
+      "shapes": [
+        [
+          57,
+          24,
+          8,
+          32
+        ],
+        [
+          57,
+          24,
+          8,
+          32
+        ],
+        [
+          57,
+          621,
+          8,
+          32
+        ],
+        [
+          57,
+          621,
+          8,
+          32
+        ],
+        [
+          57,
+          8,
+          24,
+          621
+        ],
+        [
+          57,
+          24,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          57,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductEfficientAttentionBackward0",
+      "count": 1,
+      "cpu_time_us": 71.50899999996182,
+      "device_time_us": 352.4090000000433,
+      "shapes": [
+        [
+          493,
+          8,
+          32,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 1,
+      "cpu_time_us": 65.95600000000559,
+      "device_time_us": 352.4090000000433,
+      "shapes": [
+        [
+          493,
+          8,
+          32,
+          32
+        ],
+        [
+          493,
+          8,
+          32,
+          32
+        ],
+        [
+          493,
+          8,
+          104,
+          32
+        ],
+        [
+          493,
+          8,
+          104,
+          32
+        ],
+        [
+          493,
+          8,
+          32,
+          104
+        ],
+        [
+          493,
+          8,
+          32,
+          32
+        ],
+        [
+          493,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 1,
+      "cpu_time_us": 38.521999999997206,
+      "device_time_us": 352.4090000000433,
+      "shapes": [
+        [
+          493,
+          32,
+          8,
+          32
+        ],
+        [
+          493,
+          32,
+          8,
+          32
+        ],
+        [
+          493,
+          104,
+          8,
+          32
+        ],
+        [
+          493,
+          104,
+          8,
+          32
+        ],
+        [
+          493,
+          8,
+          32,
+          104
+        ],
+        [
+          493,
+          32,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          493,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductEfficientAttentionBackward0",
+      "count": 6,
+      "cpu_time_us": 755.4740000000165,
+      "device_time_us": 316.0089999999909,
+      "shapes": [
+        [
+          31,
+          8,
+          91,
+          64
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 692.3629999999539,
+      "device_time_us": 316.0089999999909,
+      "shapes": [
+        [
+          31,
+          8,
+          91,
+          64
+        ],
+        [
+          31,
+          8,
+          91,
+          64
+        ],
+        [
+          31,
+          8,
+          7,
+          64
+        ],
+        [
+          31,
+          8,
+          7,
+          64
+        ],
+        [
+          31,
+          8,
+          91,
+          7
+        ],
+        [
+          31,
+          8,
+          91,
+          64
+        ],
+        [
+          31,
+          8,
+          96
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 472.3609999999753,
+      "device_time_us": 316.0089999999909,
+      "shapes": [
+        [
+          31,
+          91,
+          8,
+          64
+        ],
+        [
+          31,
+          91,
+          8,
+          64
+        ],
+        [
+          31,
+          7,
+          8,
+          64
+        ],
+        [
+          31,
+          7,
+          8,
+          64
+        ],
+        [
+          31,
+          8,
+          91,
+          7
+        ],
+        [
+          31,
+          91,
+          8,
+          64
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          31,
+          8,
+          96
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 1,
+      "cpu_time_us": 131.60300000000097,
+      "device_time_us": 232.39999999999782,
+      "shapes": [
+        [
+          980,
+          8,
+          32,
+          32
+        ],
+        [
+          980,
+          8,
+          104,
+          32
+        ],
+        [
+          980,
+          8,
+          104,
+          32
+        ],
+        [
+          980,
+          1,
+          32,
+          104
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 1,
+      "cpu_time_us": 58.016999999999825,
+      "device_time_us": 223.5089999999982,
+      "shapes": [
+        [
+          980,
+          8,
+          32,
+          32
+        ],
+        [
+          980,
+          8,
+          104,
+          32
+        ],
+        [
+          980,
+          8,
+          104,
+          32
+        ],
+        [
+          980,
+          8,
+          32,
+          104
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 1,
+      "cpu_time_us": 31.761999999998807,
+      "device_time_us": 223.5089999999982,
+      "shapes": [
+        [
+          980,
+          32,
+          8,
+          32
+        ],
+        [
+          980,
+          104,
+          8,
+          32
+        ],
+        [
+          980,
+          104,
+          8,
+          32
+        ],
+        [
+          980,
+          8,
+          32,
+          104
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 6,
+      "cpu_time_us": 472.4809999999852,
+      "device_time_us": 220.44100000000617,
+      "shapes": [
+        [
+          30,
+          8,
+          102,
+          32
+        ],
+        [
+          30,
+          8,
+          192,
+          32
+        ],
+        [
+          30,
+          8,
+          192,
+          32
+        ],
+        [
+          30,
+          1,
+          1,
+          192
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductEfficientAttentionBackward0",
+      "count": 6,
+      "cpu_time_us": 494.9879999999248,
+      "device_time_us": 217.625,
+      "shapes": [
+        [
+          16,
+          8,
+          63,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 465.3289999999979,
+      "device_time_us": 217.625,
+      "shapes": [
+        [
+          16,
+          8,
+          63,
+          32
+        ],
+        [
+          16,
+          8,
+          63,
+          32
+        ],
+        [
+          16,
+          8,
+          192,
+          32
+        ],
+        [
+          16,
+          8,
+          192,
+          32
+        ],
+        [
+          16,
+          8,
+          63,
+          192
+        ],
+        [
+          16,
+          8,
+          63,
+          32
+        ],
+        [
+          16,
+          8,
+          64
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 310.49300000001676,
+      "device_time_us": 217.625,
+      "shapes": [
+        [
+          16,
+          63,
+          8,
+          32
+        ],
+        [
+          16,
+          63,
+          8,
+          32
+        ],
+        [
+          16,
+          192,
+          8,
+          32
+        ],
+        [
+          16,
+          192,
+          8,
+          32
+        ],
+        [
+          16,
+          8,
+          63,
+          192
+        ],
+        [
+          16,
+          63,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          16,
+          8,
+          64
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 6,
+      "cpu_time_us": 194.9659999999858,
+      "device_time_us": 199.97000000001572,
+      "shapes": [
+        [
+          30,
+          8,
+          102,
+          32
+        ],
+        [
+          30,
+          8,
+          192,
+          32
+        ],
+        [
+          30,
+          8,
+          192,
+          32
+        ],
+        [
+          30,
+          8,
+          102,
+          192
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 6,
+      "cpu_time_us": 119.1030000000028,
+      "device_time_us": 199.97000000001572,
+      "shapes": [
+        [
+          30,
+          102,
+          8,
+          32
+        ],
+        [
+          30,
+          192,
+          8,
+          32
+        ],
+        [
+          30,
+          192,
+          8,
+          32
+        ],
+        [
+          30,
+          8,
+          102,
+          192
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 2,
+      "cpu_time_us": 213.78499999999622,
+      "device_time_us": 197.54000000000087,
+      "shapes": [
+        [
+          493,
+          8,
+          16,
+          32
+        ],
+        [
+          493,
+          8,
+          88,
+          32
+        ],
+        [
+          493,
+          8,
+          88,
+          32
+        ],
+        [
+          493,
+          1,
+          16,
+          88
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductFlashAttentionBackward0",
+      "count": 6,
+      "cpu_time_us": 636.1109999999753,
+      "device_time_us": 195.6830000000773,
+      "shapes": [
+        [
+          31,
+          8,
+          91,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_flash_attention_backward",
+      "count": 6,
+      "cpu_time_us": 570.9809999999998,
+      "device_time_us": 195.6830000000773,
+      "shapes": [
+        [
+          31,
+          8,
+          91,
+          32
+        ],
+        [
+          31,
+          8,
+          91,
+          32
+        ],
+        [
+          31,
+          8,
+          91,
+          32
+        ],
+        [
+          31,
+          8,
+          91,
+          32
+        ],
+        [
+          31,
+          8,
+          91,
+          32
+        ],
+        [
+          31,
+          8,
+          91
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [
+          2
+        ],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_flash_attention_backward",
+      "count": 6,
+      "cpu_time_us": 396.24599999998463,
+      "device_time_us": 195.6830000000773,
+      "shapes": [
+        [
+          31,
+          91,
+          8,
+          32
+        ],
+        [
+          31,
+          91,
+          8,
+          32
+        ],
+        [
+          31,
+          91,
+          8,
+          32
+        ],
+        [
+          31,
+          91,
+          8,
+          32
+        ],
+        [
+          31,
+          91,
+          8,
+          32
+        ],
+        [
+          31,
+          8,
+          91
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [
+          2
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 2,
+      "cpu_time_us": 90.97999999999593,
+      "device_time_us": 188.51800000000367,
+      "shapes": [
+        [
+          493,
+          8,
+          16,
+          32
+        ],
+        [
+          493,
+          8,
+          88,
+          32
+        ],
+        [
+          493,
+          8,
+          88,
+          32
+        ],
+        [
+          493,
+          8,
+          16,
+          88
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 2,
+      "cpu_time_us": 55.900000000001455,
+      "device_time_us": 188.51800000000367,
+      "shapes": [
+        [
+          493,
+          16,
+          8,
+          32
+        ],
+        [
+          493,
+          88,
+          8,
+          32
+        ],
+        [
+          493,
+          88,
+          8,
+          32
+        ],
+        [
+          493,
+          8,
+          16,
+          88
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductEfficientAttentionBackward0",
+      "count": 6,
+      "cpu_time_us": 754.8820000000705,
+      "device_time_us": 176.45999999996275,
+      "shapes": [
+        [
+          1,
+          8,
+          148,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 718.335999999952,
+      "device_time_us": 176.45999999996275,
+      "shapes": [
+        [
+          1,
+          8,
+          148,
+          32
+        ],
+        [
+          1,
+          8,
+          148,
+          32
+        ],
+        [
+          1,
+          8,
+          192,
+          32
+        ],
+        [
+          1,
+          8,
+          192,
+          32
+        ],
+        [
+          1,
+          8,
+          148,
+          192
+        ],
+        [
+          1,
+          8,
+          148,
+          32
+        ],
+        [
+          1,
+          8,
+          160
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 444.1120000000228,
+      "device_time_us": 176.45999999996275,
+      "shapes": [
+        [
+          1,
+          148,
+          8,
+          32
+        ],
+        [
+          1,
+          148,
+          8,
+          32
+        ],
+        [
+          1,
+          192,
+          8,
+          32
+        ],
+        [
+          1,
+          192,
+          8,
+          32
+        ],
+        [
+          1,
+          8,
+          148,
+          192
+        ],
+        [
+          1,
+          148,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          1,
+          8,
+          160
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductEfficientAttentionBackward0",
+      "count": 18,
+      "cpu_time_us": 1396.0909999999276,
+      "device_time_us": 174.79300000000512,
+      "shapes": [
+        [
+          1,
+          8,
+          4,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 8,
+      "cpu_time_us": 493.7489999998943,
+      "device_time_us": 129.69800000009127,
+      "shapes": [
+        [
+          2,
+          8,
+          124,
+          32
+        ],
+        [
+          2,
+          8,
+          124,
+          32
+        ],
+        [
+          2,
+          8,
+          124,
+          32
+        ],
+        [
+          2,
+          8,
+          124,
+          32
+        ],
+        [
+          2,
+          8,
+          124,
+          124
+        ],
+        [
+          2,
+          8,
+          124,
+          32
+        ],
+        [
+          2,
+          8,
+          128
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 8,
+      "cpu_time_us": 328.9729999998817,
+      "device_time_us": 129.69800000009127,
+      "shapes": [
+        [
+          2,
+          124,
+          8,
+          32
+        ],
+        [
+          2,
+          124,
+          8,
+          32
+        ],
+        [
+          2,
+          124,
+          8,
+          32
+        ],
+        [
+          2,
+          124,
+          8,
+          32
+        ],
+        [
+          2,
+          8,
+          124,
+          124
+        ],
+        [
+          2,
+          124,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          2,
+          8,
+          128
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductEfficientAttentionBackward0",
+      "count": 6,
+      "cpu_time_us": 582.506999999925,
+      "device_time_us": 128.00200000000768,
+      "shapes": [
+        [
+          18,
+          8,
+          63,
+          64
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 552.1750000000466,
+      "device_time_us": 128.00200000000768,
+      "shapes": [
+        [
+          18,
+          8,
+          63,
+          64
+        ],
+        [
+          18,
+          8,
+          63,
+          64
+        ],
+        [
+          18,
+          8,
+          7,
+          64
+        ],
+        [
+          18,
+          8,
+          7,
+          64
+        ],
+        [
+          18,
+          8,
+          63,
+          7
+        ],
+        [
+          18,
+          8,
+          63,
+          64
+        ],
+        [
+          18,
+          8,
+          64
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 377.8270000000193,
+      "device_time_us": 128.00200000000768,
+      "shapes": [
+        [
+          18,
+          63,
+          8,
+          64
+        ],
+        [
+          18,
+          63,
+          8,
+          64
+        ],
+        [
+          18,
+          7,
+          8,
+          64
+        ],
+        [
+          18,
+          7,
+          8,
+          64
+        ],
+        [
+          18,
+          8,
+          63,
+          7
+        ],
+        [
+          18,
+          63,
+          8,
+          64
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          18,
+          8,
+          64
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductFlashAttentionBackward0",
+      "count": 6,
+      "cpu_time_us": 465.22099999996135,
+      "device_time_us": 127.58599999992293,
+      "shapes": [
+        [
+          18,
+          8,
+          63,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_flash_attention_backward",
+      "count": 6,
+      "cpu_time_us": 444.9079999999376,
+      "device_time_us": 127.58599999992293,
+      "shapes": [
+        [
+          18,
+          8,
+          63,
+          32
+        ],
+        [
+          18,
+          8,
+          63,
+          32
+        ],
+        [
+          18,
+          8,
+          63,
+          32
+        ],
+        [
+          18,
+          8,
+          63,
+          32
+        ],
+        [
+          18,
+          8,
+          63,
+          32
+        ],
+        [
+          18,
+          8,
+          63
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [
+          2
+        ],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_flash_attention_backward",
+      "count": 6,
+      "cpu_time_us": 304.73500000001513,
+      "device_time_us": 127.58599999992293,
+      "shapes": [
+        [
+          18,
+          63,
+          8,
+          32
+        ],
+        [
+          18,
+          63,
+          8,
+          32
+        ],
+        [
+          18,
+          63,
+          8,
+          32
+        ],
+        [
+          18,
+          63,
+          8,
+          32
+        ],
+        [
+          18,
+          63,
+          8,
+          32
+        ],
+        [
+          18,
+          8,
+          63
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [
+          2
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 6,
+      "cpu_time_us": 464.44299999998475,
+      "device_time_us": 122.0520000000397,
+      "shapes": [
+        [
+          16,
+          8,
+          63,
+          32
+        ],
+        [
+          16,
+          8,
+          192,
+          32
+        ],
+        [
+          16,
+          8,
+          192,
+          32
+        ],
+        [
+          16,
+          1,
+          1,
+          192
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 1,
+      "cpu_time_us": 114.73199999999997,
+      "device_time_us": 120.4230000000025,
+      "shapes": [
+        [
+          493,
+          8,
+          32,
+          32
+        ],
+        [
+          493,
+          8,
+          104,
+          32
+        ],
+        [
+          493,
+          8,
+          104,
+          32
+        ],
+        [
+          493,
+          1,
+          32,
+          104
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 1,
+      "cpu_time_us": 154.43399999999747,
+      "device_time_us": 118.5689999999995,
+      "shapes": [
+        [
+          57,
+          8,
+          24,
+          32
+        ],
+        [
+          57,
+          8,
+          1053,
+          32
+        ],
+        [
+          57,
+          8,
+          1053,
+          32
+        ],
+        [
+          57,
+          1,
+          24,
+          1053
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductEfficientAttentionBackward0",
+      "count": 6,
+      "cpu_time_us": 511.1899999999732,
+      "device_time_us": 116.00899999999092,
+      "shapes": [
+        [
+          6,
+          8,
+          32,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 489.0570000000007,
+      "device_time_us": 116.00899999999092,
+      "shapes": [
+        [
+          6,
+          8,
+          32,
+          32
+        ],
+        [
+          6,
+          8,
+          32,
+          32
+        ],
+        [
+          6,
+          8,
+          192,
+          32
+        ],
+        [
+          6,
+          8,
+          192,
+          32
+        ],
+        [
+          6,
+          8,
+          32,
+          192
+        ],
+        [
+          6,
+          8,
+          32,
+          32
+        ],
+        [
+          6,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 299.4800000000105,
+      "device_time_us": 116.00899999999092,
+      "shapes": [
+        [
+          6,
+          32,
+          8,
+          32
+        ],
+        [
+          6,
+          32,
+          8,
+          32
+        ],
+        [
+          6,
+          192,
+          8,
+          32
+        ],
+        [
+          6,
+          192,
+          8,
+          32
+        ],
+        [
+          6,
+          8,
+          32,
+          192
+        ],
+        [
+          6,
+          32,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          6,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 1,
+      "cpu_time_us": 52.35000000000218,
+      "device_time_us": 114.12200000000303,
+      "shapes": [
+        [
+          493,
+          8,
+          32,
+          32
+        ],
+        [
+          493,
+          8,
+          104,
+          32
+        ],
+        [
+          493,
+          8,
+          104,
+          32
+        ],
+        [
+          493,
+          8,
+          32,
+          104
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 1,
+      "cpu_time_us": 28.582000000002154,
+      "device_time_us": 114.12200000000303,
+      "shapes": [
+        [
+          493,
+          32,
+          8,
+          32
+        ],
+        [
+          493,
+          104,
+          8,
+          32
+        ],
+        [
+          493,
+          104,
+          8,
+          32
+        ],
+        [
+          493,
+          8,
+          32,
+          104
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 8,
+      "cpu_time_us": 1081.3740000000034,
+      "device_time_us": 110.82599999998638,
+      "shapes": [
+        [
+          2,
+          8,
+          124,
+          32
+        ],
+        [
+          2,
+          8,
+          124,
+          32
+        ],
+        [
+          2,
+          8,
+          124,
+          32
+        ],
+        [
+          2,
+          1,
+          124,
+          124
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 1,
+      "cpu_time_us": 45.13199999999779,
+      "device_time_us": 106.47700000000259,
+      "shapes": [
+        [
+          57,
+          8,
+          24,
+          32
+        ],
+        [
+          57,
+          8,
+          1053,
+          32
+        ],
+        [
+          57,
+          8,
+          1053,
+          32
+        ],
+        [
+          57,
+          8,
+          24,
+          1053
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 1,
+      "cpu_time_us": 27.44499999999971,
+      "device_time_us": 106.47700000000259,
+      "shapes": [
+        [
+          57,
+          24,
+          8,
+          32
+        ],
+        [
+          57,
+          1053,
+          8,
+          32
+        ],
+        [
+          57,
+          1053,
+          8,
+          32
+        ],
+        [
+          57,
+          8,
+          24,
+          1053
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 6,
+      "cpu_time_us": 201.358000000022,
+      "device_time_us": 101.6480000000156,
+      "shapes": [
+        [
+          16,
+          8,
+          63,
+          32
+        ],
+        [
+          16,
+          8,
+          192,
+          32
+        ],
+        [
+          16,
+          8,
+          192,
+          32
+        ],
+        [
+          16,
+          8,
+          63,
+          192
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 6,
+      "cpu_time_us": 121.46799999997893,
+      "device_time_us": 101.6480000000156,
+      "shapes": [
+        [
+          16,
+          63,
+          8,
+          32
+        ],
+        [
+          16,
+          192,
+          8,
+          32
+        ],
+        [
+          16,
+          192,
+          8,
+          32
+        ],
+        [
+          16,
+          8,
+          63,
+          192
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 6,
+      "cpu_time_us": 446.52999999999884,
+      "device_time_us": 100.1420000000071,
+      "shapes": [
+        [
+          1,
+          8,
+          148,
+          32
+        ],
+        [
+          1,
+          8,
+          192,
+          32
+        ],
+        [
+          1,
+          8,
+          192,
+          32
+        ],
+        [
+          1,
+          1,
+          1,
+          192
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 6,
+      "cpu_time_us": 606.7029999999941,
+      "device_time_us": 96.52899999996589,
+      "shapes": [
+        [
+          31,
+          8,
+          91,
+          64
+        ],
+        [
+          31,
+          8,
+          7,
+          64
+        ],
+        [
+          31,
+          8,
+          7,
+          64
+        ],
+        [
+          31,
+          1,
+          1,
+          7
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 6,
+      "cpu_time_us": 469.3400000000256,
+      "device_time_us": 95.05899999999383,
+      "shapes": [
+        [
+          6,
+          8,
+          32,
+          32
+        ],
+        [
+          6,
+          8,
+          192,
+          32
+        ],
+        [
+          6,
+          8,
+          192,
+          32
+        ],
+        [
+          6,
+          1,
+          1,
+          192
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 6,
+      "cpu_time_us": 708.391999999978,
+      "device_time_us": 93.07500000006985,
+      "shapes": [
+        [
+          1,
+          8,
+          11,
+          32
+        ],
+        [
+          1,
+          8,
+          153,
+          32
+        ],
+        [
+          1,
+          8,
+          153,
+          32
+        ],
+        [
+          1,
+          1,
+          1,
+          153
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductEfficientAttentionBackward0",
+      "count": 6,
+      "cpu_time_us": 476.43899999998393,
+      "device_time_us": 88.8519999999553,
+      "shapes": [
+        [
+          1,
+          8,
+          11,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 453.99199999994016,
+      "device_time_us": 88.8519999999553,
+      "shapes": [
+        [
+          1,
+          8,
+          11,
+          32
+        ],
+        [
+          1,
+          8,
+          11,
+          32
+        ],
+        [
+          1,
+          8,
+          153,
+          32
+        ],
+        [
+          1,
+          8,
+          153,
+          32
+        ],
+        [
+          1,
+          8,
+          11,
+          153
+        ],
+        [
+          1,
+          8,
+          11,
+          32
+        ],
+        [
+          1,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 282.93800000005285,
+      "device_time_us": 88.8519999999553,
+      "shapes": [
+        [
+          1,
+          11,
+          8,
+          32
+        ],
+        [
+          1,
+          11,
+          8,
+          32
+        ],
+        [
+          1,
+          153,
+          8,
+          32
+        ],
+        [
+          1,
+          153,
+          8,
+          32
+        ],
+        [
+          1,
+          8,
+          11,
+          153
+        ],
+        [
+          1,
+          11,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          1,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 1,
+      "cpu_time_us": 139.2479999999996,
+      "device_time_us": 85.94299999999203,
+      "shapes": [
+        [
+          57,
+          8,
+          24,
+          32
+        ],
+        [
+          57,
+          8,
+          765,
+          32
+        ],
+        [
+          57,
+          8,
+          765,
+          32
+        ],
+        [
+          57,
+          1,
+          24,
+          765
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 6,
+      "cpu_time_us": 192.27800000002026,
+      "device_time_us": 82.10300000001735,
+      "shapes": [
+        [
+          1,
+          8,
+          148,
+          32
+        ],
+        [
+          1,
+          8,
+          192,
+          32
+        ],
+        [
+          1,
+          8,
+          192,
+          32
+        ],
+        [
+          1,
+          8,
+          148,
+          192
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 6,
+      "cpu_time_us": 115.61999999996624,
+      "device_time_us": 82.10300000001735,
+      "shapes": [
+        [
+          1,
+          148,
+          8,
+          32
+        ],
+        [
+          1,
+          192,
+          8,
+          32
+        ],
+        [
+          1,
+          192,
+          8,
+          32
+        ],
+        [
+          1,
+          8,
+          148,
+          192
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 425.86000000001513,
+      "device_time_us": 78.23299999994924,
+      "shapes": [
+        [
+          1,
+          8,
+          4,
+          32
+        ],
+        [
+          1,
+          8,
+          4,
+          32
+        ],
+        [
+          1,
+          8,
+          128,
+          32
+        ],
+        [
+          1,
+          8,
+          128,
+          32
+        ],
+        [
+          1,
+          8,
+          4,
+          128
+        ],
+        [
+          1,
+          8,
+          4,
+          32
+        ],
+        [
+          1,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 277.0909999999567,
+      "device_time_us": 78.23299999994924,
+      "shapes": [
+        [
+          1,
+          4,
+          8,
+          32
+        ],
+        [
+          1,
+          4,
+          8,
+          32
+        ],
+        [
+          1,
+          128,
+          8,
+          32
+        ],
+        [
+          1,
+          128,
+          8,
+          32
+        ],
+        [
+          1,
+          8,
+          4,
+          128
+        ],
+        [
+          1,
+          4,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          1,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 1,
+      "cpu_time_us": 43.78199999999924,
+      "device_time_us": 75.51599999999598,
+      "shapes": [
+        [
+          57,
+          8,
+          24,
+          32
+        ],
+        [
+          57,
+          8,
+          765,
+          32
+        ],
+        [
+          57,
+          8,
+          765,
+          32
+        ],
+        [
+          57,
+          8,
+          24,
+          765
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 1,
+      "cpu_time_us": 26.27400000000125,
+      "device_time_us": 75.51599999999598,
+      "shapes": [
+        [
+          57,
+          24,
+          8,
+          32
+        ],
+        [
+          57,
+          765,
+          8,
+          32
+        ],
+        [
+          57,
+          765,
+          8,
+          32
+        ],
+        [
+          57,
+          8,
+          24,
+          765
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 6,
+      "cpu_time_us": 202.67700000002515,
+      "device_time_us": 74.5570000000007,
+      "shapes": [
+        [
+          6,
+          8,
+          32,
+          32
+        ],
+        [
+          6,
+          8,
+          192,
+          32
+        ],
+        [
+          6,
+          8,
+          192,
+          32
+        ],
+        [
+          6,
+          8,
+          32,
+          192
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 6,
+      "cpu_time_us": 126.75600000002305,
+      "device_time_us": 74.5570000000007,
+      "shapes": [
+        [
+          6,
+          32,
+          8,
+          32
+        ],
+        [
+          6,
+          192,
+          8,
+          32
+        ],
+        [
+          6,
+          192,
+          8,
+          32
+        ],
+        [
+          6,
+          8,
+          32,
+          192
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 6,
+      "cpu_time_us": 282.69900000002235,
+      "device_time_us": 72.15700000003562,
+      "shapes": [
+        [
+          31,
+          8,
+          91,
+          32
+        ],
+        [
+          31,
+          8,
+          91,
+          32
+        ],
+        [
+          31,
+          8,
+          91,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_flash_attention",
+      "count": 6,
+      "cpu_time_us": 250.6919999999809,
+      "device_time_us": 72.15700000003562,
+      "shapes": [
+        [
+          31,
+          8,
+          91,
+          32
+        ],
+        [
+          31,
+          8,
+          91,
+          32
+        ],
+        [
+          31,
+          8,
+          91,
+          32
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_flash_attention_forward",
+      "count": 6,
+      "cpu_time_us": 176.00899999999092,
+      "device_time_us": 72.15700000003562,
+      "shapes": [
+        [
+          31,
+          91,
+          8,
+          32
+        ],
+        [
+          31,
+          91,
+          8,
+          32
+        ],
+        [
+          31,
+          91,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 1,
+      "cpu_time_us": 134.86999999999898,
+      "device_time_us": 71.90200000000186,
+      "shapes": [
+        [
+          57,
+          8,
+          24,
+          32
+        ],
+        [
+          57,
+          8,
+          621,
+          32
+        ],
+        [
+          57,
+          8,
+          621,
+          32
+        ],
+        [
+          57,
+          1,
+          24,
+          621
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductFlashAttentionBackward0",
+      "count": 6,
+      "cpu_time_us": 573.7209999999905,
+      "device_time_us": 68.03000000002794,
+      "shapes": [
+        [
+          6,
+          8,
+          32,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_flash_attention_backward",
+      "count": 6,
+      "cpu_time_us": 555.7099999999045,
+      "device_time_us": 68.03000000002794,
+      "shapes": [
+        [
+          6,
+          8,
+          32,
+          32
+        ],
+        [
+          6,
+          8,
+          32,
+          32
+        ],
+        [
+          6,
+          8,
+          32,
+          32
+        ],
+        [
+          6,
+          8,
+          32,
+          32
+        ],
+        [
+          6,
+          8,
+          32,
+          32
+        ],
+        [
+          6,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [
+          2
+        ],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_flash_attention_backward",
+      "count": 6,
+      "cpu_time_us": 309.6490000000049,
+      "device_time_us": 68.03000000002794,
+      "shapes": [
+        [
+          6,
+          32,
+          8,
+          32
+        ],
+        [
+          6,
+          32,
+          8,
+          32
+        ],
+        [
+          6,
+          32,
+          8,
+          32
+        ],
+        [
+          6,
+          32,
+          8,
+          32
+        ],
+        [
+          6,
+          32,
+          8,
+          32
+        ],
+        [
+          6,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [
+          2
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 6,
+      "cpu_time_us": 621.6039999999921,
+      "device_time_us": 65.79500000004191,
+      "shapes": [
+        [
+          18,
+          8,
+          63,
+          64
+        ],
+        [
+          18,
+          8,
+          7,
+          64
+        ],
+        [
+          18,
+          8,
+          7,
+          64
+        ],
+        [
+          18,
+          1,
+          1,
+          7
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductFlashAttentionBackward0",
+      "count": 6,
+      "cpu_time_us": 551.4739999999874,
+      "device_time_us": 65.70000000004075,
+      "shapes": [
+        [
+          1,
+          8,
+          11,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_flash_attention_backward",
+      "count": 6,
+      "cpu_time_us": 523.7939999999653,
+      "device_time_us": 65.70000000004075,
+      "shapes": [
+        [
+          1,
+          8,
+          11,
+          32
+        ],
+        [
+          1,
+          8,
+          11,
+          32
+        ],
+        [
+          1,
+          8,
+          11,
+          32
+        ],
+        [
+          1,
+          8,
+          11,
+          32
+        ],
+        [
+          1,
+          8,
+          11,
+          32
+        ],
+        [
+          1,
+          8,
+          11
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [
+          2
+        ],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_flash_attention_backward",
+      "count": 6,
+      "cpu_time_us": 384.66599999999744,
+      "device_time_us": 65.70000000004075,
+      "shapes": [
+        [
+          1,
+          11,
+          8,
+          32
+        ],
+        [
+          1,
+          11,
+          8,
+          32
+        ],
+        [
+          1,
+          11,
+          8,
+          32
+        ],
+        [
+          1,
+          11,
+          8,
+          32
+        ],
+        [
+          1,
+          11,
+          8,
+          32
+        ],
+        [
+          1,
+          8,
+          11
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [
+          2
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductFlashAttentionBackward0",
+      "count": 6,
+      "cpu_time_us": 485.14300000001094,
+      "device_time_us": 65.0889999999199,
+      "shapes": [
+        [
+          3,
+          8,
+          4,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_flash_attention_backward",
+      "count": 6,
+      "cpu_time_us": 464.33600000006845,
+      "device_time_us": 65.0889999999199,
+      "shapes": [
+        [
+          3,
+          8,
+          4,
+          32
+        ],
+        [
+          3,
+          8,
+          4,
+          32
+        ],
+        [
+          3,
+          8,
+          4,
+          32
+        ],
+        [
+          3,
+          8,
+          4,
+          32
+        ],
+        [
+          3,
+          8,
+          4,
+          32
+        ],
+        [
+          3,
+          8,
+          4
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [
+          2
+        ],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_flash_attention_backward",
+      "count": 6,
+      "cpu_time_us": 294.45100000000093,
+      "device_time_us": 65.0889999999199,
+      "shapes": [
+        [
+          3,
+          4,
+          8,
+          32
+        ],
+        [
+          3,
+          4,
+          8,
+          32
+        ],
+        [
+          3,
+          4,
+          8,
+          32
+        ],
+        [
+          3,
+          4,
+          8,
+          32
+        ],
+        [
+          3,
+          4,
+          8,
+          32
+        ],
+        [
+          3,
+          8,
+          4
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [
+          2
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductEfficientAttentionBackward0",
+      "count": 6,
+      "cpu_time_us": 681.9100000000035,
+      "device_time_us": 64.22600000008242,
+      "shapes": [
+        [
+          6,
+          8,
+          32,
+          64
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 658.1929999999702,
+      "device_time_us": 64.22600000008242,
+      "shapes": [
+        [
+          6,
+          8,
+          32,
+          64
+        ],
+        [
+          6,
+          8,
+          32,
+          64
+        ],
+        [
+          6,
+          8,
+          7,
+          64
+        ],
+        [
+          6,
+          8,
+          7,
+          64
+        ],
+        [
+          6,
+          8,
+          32,
+          7
+        ],
+        [
+          6,
+          8,
+          32,
+          64
+        ],
+        [
+          6,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 397.292999999976,
+      "device_time_us": 64.22600000008242,
+      "shapes": [
+        [
+          6,
+          32,
+          8,
+          64
+        ],
+        [
+          6,
+          32,
+          8,
+          64
+        ],
+        [
+          6,
+          7,
+          8,
+          64
+        ],
+        [
+          6,
+          7,
+          8,
+          64
+        ],
+        [
+          6,
+          8,
+          32,
+          7
+        ],
+        [
+          6,
+          32,
+          8,
+          64
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          6,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 6,
+      "cpu_time_us": 225.0360000000219,
+      "device_time_us": 63.55500000000757,
+      "shapes": [
+        [
+          1,
+          8,
+          11,
+          32
+        ],
+        [
+          1,
+          8,
+          153,
+          32
+        ],
+        [
+          1,
+          8,
+          153,
+          32
+        ],
+        [
+          1,
+          8,
+          11,
+          153
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 6,
+      "cpu_time_us": 133.34300000000803,
+      "device_time_us": 63.55500000000757,
+      "shapes": [
+        [
+          1,
+          11,
+          8,
+          32
+        ],
+        [
+          1,
+          153,
+          8,
+          32
+        ],
+        [
+          1,
+          153,
+          8,
+          32
+        ],
+        [
+          1,
+          8,
+          11,
+          153
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 6,
+      "cpu_time_us": 191.02599999999802,
+      "device_time_us": 63.45699999999488,
+      "shapes": [
+        [
+          31,
+          8,
+          91,
+          64
+        ],
+        [
+          31,
+          8,
+          7,
+          64
+        ],
+        [
+          31,
+          8,
+          7,
+          64
+        ],
+        [
+          31,
+          8,
+          91,
+          7
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 6,
+      "cpu_time_us": 117.13099999996484,
+      "device_time_us": 63.45699999999488,
+      "shapes": [
+        [
+          31,
+          91,
+          8,
+          64
+        ],
+        [
+          31,
+          7,
+          8,
+          64
+        ],
+        [
+          31,
+          7,
+          8,
+          64
+        ],
+        [
+          31,
+          8,
+          91,
+          7
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 1,
+      "cpu_time_us": 42.74399999999878,
+      "device_time_us": 62.434000000001106,
+      "shapes": [
+        [
+          57,
+          8,
+          24,
+          32
+        ],
+        [
+          57,
+          8,
+          621,
+          32
+        ],
+        [
+          57,
+          8,
+          621,
+          32
+        ],
+        [
+          57,
+          8,
+          24,
+          621
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 1,
+      "cpu_time_us": 26.022000000000844,
+      "device_time_us": 62.434000000001106,
+      "shapes": [
+        [
+          57,
+          24,
+          8,
+          32
+        ],
+        [
+          57,
+          621,
+          8,
+          32
+        ],
+        [
+          57,
+          621,
+          8,
+          32
+        ],
+        [
+          57,
+          8,
+          24,
+          621
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 6,
+      "cpu_time_us": 497.2219999999943,
+      "device_time_us": 62.17600000000675,
+      "shapes": [
+        [
+          1,
+          8,
+          4,
+          32
+        ],
+        [
+          1,
+          8,
+          128,
+          32
+        ],
+        [
+          1,
+          8,
+          128,
+          32
+        ],
+        [
+          1,
+          1,
+          1,
+          128
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 8,
+      "cpu_time_us": 319.00900000001275,
+      "device_time_us": 61.984999999978754,
+      "shapes": [
+        [
+          2,
+          8,
+          124,
+          32
+        ],
+        [
+          2,
+          8,
+          124,
+          32
+        ],
+        [
+          2,
+          8,
+          124,
+          32
+        ],
+        [
+          2,
+          8,
+          124,
+          124
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 8,
+      "cpu_time_us": 177.86599999997998,
+      "device_time_us": 61.984999999978754,
+      "shapes": [
+        [
+          2,
+          124,
+          8,
+          32
+        ],
+        [
+          2,
+          124,
+          8,
+          32
+        ],
+        [
+          2,
+          124,
+          8,
+          32
+        ],
+        [
+          2,
+          8,
+          124,
+          124
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 6,
+      "cpu_time_us": 838.8380000000179,
+      "device_time_us": 61.12100000001374,
+      "shapes": [
+        [
+          3,
+          8,
+          4,
+          64
+        ],
+        [
+          3,
+          8,
+          7,
+          64
+        ],
+        [
+          3,
+          8,
+          7,
+          64
+        ],
+        [
+          3,
+          1,
+          1,
+          7
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 6,
+      "cpu_time_us": 620.7200000000012,
+      "device_time_us": 60.991000000038184,
+      "shapes": [
+        [
+          6,
+          8,
+          32,
+          64
+        ],
+        [
+          6,
+          8,
+          7,
+          64
+        ],
+        [
+          6,
+          8,
+          7,
+          64
+        ],
+        [
+          6,
+          1,
+          1,
+          7
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductEfficientAttentionBackward0",
+      "count": 6,
+      "cpu_time_us": 564.3979999999574,
+      "device_time_us": 60.06500000003143,
+      "shapes": [
+        [
+          1,
+          8,
+          11,
+          64
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 541.4599999999336,
+      "device_time_us": 60.06500000003143,
+      "shapes": [
+        [
+          1,
+          8,
+          11,
+          64
+        ],
+        [
+          1,
+          8,
+          11,
+          64
+        ],
+        [
+          1,
+          8,
+          7,
+          64
+        ],
+        [
+          1,
+          8,
+          7,
+          64
+        ],
+        [
+          1,
+          8,
+          11,
+          7
+        ],
+        [
+          1,
+          8,
+          11,
+          64
+        ],
+        [
+          1,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 373.0799999998999,
+      "device_time_us": 60.06500000003143,
+      "shapes": [
+        [
+          1,
+          11,
+          8,
+          64
+        ],
+        [
+          1,
+          11,
+          8,
+          64
+        ],
+        [
+          1,
+          7,
+          8,
+          64
+        ],
+        [
+          1,
+          7,
+          8,
+          64
+        ],
+        [
+          1,
+          8,
+          11,
+          7
+        ],
+        [
+          1,
+          11,
+          8,
+          64
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          1,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductEfficientAttentionBackward0",
+      "count": 6,
+      "cpu_time_us": 584.9319999999716,
+      "device_time_us": 58.981000000057975,
+      "shapes": [
+        [
+          3,
+          8,
+          4,
+          64
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 561.631000000023,
+      "device_time_us": 58.981000000057975,
+      "shapes": [
+        [
+          3,
+          8,
+          4,
+          64
+        ],
+        [
+          3,
+          8,
+          4,
+          64
+        ],
+        [
+          3,
+          8,
+          7,
+          64
+        ],
+        [
+          3,
+          8,
+          7,
+          64
+        ],
+        [
+          3,
+          8,
+          4,
+          7
+        ],
+        [
+          3,
+          8,
+          4,
+          64
+        ],
+        [
+          3,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 383.8259999999718,
+      "device_time_us": 58.981000000057975,
+      "shapes": [
+        [
+          3,
+          4,
+          8,
+          64
+        ],
+        [
+          3,
+          4,
+          8,
+          64
+        ],
+        [
+          3,
+          7,
+          8,
+          64
+        ],
+        [
+          3,
+          7,
+          8,
+          64
+        ],
+        [
+          3,
+          8,
+          4,
+          7
+        ],
+        [
+          3,
+          4,
+          8,
+          64
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          3,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 6,
+      "cpu_time_us": 965.0770000000193,
+      "device_time_us": 58.7269999999844,
+      "shapes": [
+        [
+          1,
+          8,
+          4,
+          32
+        ],
+        [
+          1,
+          8,
+          1,
+          32
+        ],
+        [
+          1,
+          8,
+          1,
+          32
+        ],
+        [
+          1,
+          1,
+          1,
+          1
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 6,
+      "cpu_time_us": 705.3669999999984,
+      "device_time_us": 55.941000000035274,
+      "shapes": [
+        [
+          1,
+          8,
+          11,
+          64
+        ],
+        [
+          1,
+          8,
+          7,
+          64
+        ],
+        [
+          1,
+          8,
+          7,
+          64
+        ],
+        [
+          1,
+          1,
+          1,
+          7
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 6,
+      "cpu_time_us": 771.1250000000291,
+      "device_time_us": 55.46400000007998,
+      "shapes": [
+        [
+          1,
+          8,
+          4,
+          32
+        ],
+        [
+          1,
+          8,
+          25,
+          32
+        ],
+        [
+          1,
+          8,
+          25,
+          32
+        ],
+        [
+          1,
+          1,
+          1,
+          25
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 6,
+      "cpu_time_us": 274.2719999999972,
+      "device_time_us": 50.18300000000454,
+      "shapes": [
+        [
+          18,
+          8,
+          63,
+          32
+        ],
+        [
+          18,
+          8,
+          63,
+          32
+        ],
+        [
+          18,
+          8,
+          63,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_flash_attention",
+      "count": 6,
+      "cpu_time_us": 252.65300000002026,
+      "device_time_us": 50.18300000000454,
+      "shapes": [
+        [
+          18,
+          8,
+          63,
+          32
+        ],
+        [
+          18,
+          8,
+          63,
+          32
+        ],
+        [
+          18,
+          8,
+          63,
+          32
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_flash_attention_forward",
+      "count": 6,
+      "cpu_time_us": 179.98600000003353,
+      "device_time_us": 50.18300000000454,
+      "shapes": [
+        [
+          18,
+          63,
+          8,
+          32
+        ],
+        [
+          18,
+          63,
+          8,
+          32
+        ],
+        [
+          18,
+          63,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 444.64099999988684,
+      "device_time_us": 49.830000000074506,
+      "shapes": [
+        [
+          1,
+          8,
+          4,
+          32
+        ],
+        [
+          1,
+          8,
+          4,
+          32
+        ],
+        [
+          1,
+          8,
+          25,
+          32
+        ],
+        [
+          1,
+          8,
+          25,
+          32
+        ],
+        [
+          1,
+          8,
+          4,
+          25
+        ],
+        [
+          1,
+          8,
+          4,
+          32
+        ],
+        [
+          1,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 219.20200000004843,
+      "device_time_us": 49.830000000074506,
+      "shapes": [
+        [
+          1,
+          4,
+          8,
+          32
+        ],
+        [
+          1,
+          4,
+          8,
+          32
+        ],
+        [
+          1,
+          25,
+          8,
+          32
+        ],
+        [
+          1,
+          25,
+          8,
+          32
+        ],
+        [
+          1,
+          8,
+          4,
+          25
+        ],
+        [
+          1,
+          4,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          1,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 447.73099999999977,
+      "device_time_us": 46.72999999998137,
+      "shapes": [
+        [
+          1,
+          8,
+          4,
+          32
+        ],
+        [
+          1,
+          8,
+          4,
+          32
+        ],
+        [
+          1,
+          8,
+          1,
+          32
+        ],
+        [
+          1,
+          8,
+          1,
+          32
+        ],
+        [
+          1,
+          8,
+          4,
+          1
+        ],
+        [
+          1,
+          8,
+          4,
+          32
+        ],
+        [
+          1,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 6,
+      "cpu_time_us": 291.31200000000536,
+      "device_time_us": 46.72999999998137,
+      "shapes": [
+        [
+          1,
+          4,
+          8,
+          32
+        ],
+        [
+          1,
+          4,
+          8,
+          32
+        ],
+        [
+          1,
+          1,
+          8,
+          32
+        ],
+        [
+          1,
+          1,
+          8,
+          32
+        ],
+        [
+          1,
+          8,
+          4,
+          1
+        ],
+        [
+          1,
+          4,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          1,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 6,
+      "cpu_time_us": 204.6710000000021,
+      "device_time_us": 44.84399999999732,
+      "shapes": [
+        [
+          1,
+          8,
+          4,
+          32
+        ],
+        [
+          1,
+          8,
+          128,
+          32
+        ],
+        [
+          1,
+          8,
+          128,
+          32
+        ],
+        [
+          1,
+          8,
+          4,
+          128
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 6,
+      "cpu_time_us": 122.75899999997637,
+      "device_time_us": 44.84399999999732,
+      "shapes": [
+        [
+          1,
+          4,
+          8,
+          32
+        ],
+        [
+          1,
+          128,
+          8,
+          32
+        ],
+        [
+          1,
+          128,
+          8,
+          32
+        ],
+        [
+          1,
+          8,
+          4,
+          128
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 6,
+      "cpu_time_us": 452.0730000000476,
+      "device_time_us": 43.3059999999532,
+      "shapes": [
+        [
+          3,
+          8,
+          4,
+          32
+        ],
+        [
+          3,
+          8,
+          4,
+          32
+        ],
+        [
+          3,
+          8,
+          4,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_flash_attention",
+      "count": 6,
+      "cpu_time_us": 342.08500000002095,
+      "device_time_us": 43.3059999999532,
+      "shapes": [
+        [
+          3,
+          8,
+          4,
+          32
+        ],
+        [
+          3,
+          8,
+          4,
+          32
+        ],
+        [
+          3,
+          8,
+          4,
+          32
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_flash_attention_forward",
+      "count": 6,
+      "cpu_time_us": 238.49999999998545,
+      "device_time_us": 43.3059999999532,
+      "shapes": [
+        [
+          3,
+          4,
+          8,
+          32
+        ],
+        [
+          3,
+          4,
+          8,
+          32
+        ],
+        [
+          3,
+          4,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 6,
+      "cpu_time_us": 200.37199999997392,
+      "device_time_us": 34.86200000005192,
+      "shapes": [
+        [
+          18,
+          8,
+          63,
+          64
+        ],
+        [
+          18,
+          8,
+          7,
+          64
+        ],
+        [
+          18,
+          8,
+          7,
+          64
+        ],
+        [
+          18,
+          8,
+          63,
+          7
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 6,
+      "cpu_time_us": 120.18999999995867,
+      "device_time_us": 34.86200000005192,
+      "shapes": [
+        [
+          18,
+          63,
+          8,
+          64
+        ],
+        [
+          18,
+          7,
+          8,
+          64
+        ],
+        [
+          18,
+          7,
+          8,
+          64
+        ],
+        [
+          18,
+          8,
+          63,
+          7
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 6,
+      "cpu_time_us": 277.6429999999964,
+      "device_time_us": 34.06500000000233,
+      "shapes": [
+        [
+          6,
+          8,
+          32,
+          32
+        ],
+        [
+          6,
+          8,
+          32,
+          32
+        ],
+        [
+          6,
+          8,
+          32,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_flash_attention",
+      "count": 6,
+      "cpu_time_us": 255.08800000000338,
+      "device_time_us": 34.06500000000233,
+      "shapes": [
+        [
+          6,
+          8,
+          32,
+          32
+        ],
+        [
+          6,
+          8,
+          32,
+          32
+        ],
+        [
+          6,
+          8,
+          32,
+          32
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_flash_attention_forward",
+      "count": 6,
+      "cpu_time_us": 180.73400000002584,
+      "device_time_us": 34.06500000000233,
+      "shapes": [
+        [
+          6,
+          32,
+          8,
+          32
+        ],
+        [
+          6,
+          32,
+          8,
+          32
+        ],
+        [
+          6,
+          32,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 6,
+      "cpu_time_us": 332.44099999997707,
+      "device_time_us": 31.249000000025262,
+      "shapes": [
+        [
+          1,
+          8,
+          4,
+          32
+        ],
+        [
+          1,
+          8,
+          1,
+          32
+        ],
+        [
+          1,
+          8,
+          1,
+          32
+        ],
+        [
+          1,
+          8,
+          4,
+          1
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 6,
+      "cpu_time_us": 170.37699999997858,
+      "device_time_us": 31.249000000025262,
+      "shapes": [
+        [
+          1,
+          4,
+          8,
+          32
+        ],
+        [
+          1,
+          1,
+          8,
+          32
+        ],
+        [
+          1,
+          1,
+          8,
+          32
+        ],
+        [
+          1,
+          8,
+          4,
+          1
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 6,
+      "cpu_time_us": 289.19499999999243,
+      "device_time_us": 30.736000000004424,
+      "shapes": [
+        [
+          1,
+          8,
+          11,
+          32
+        ],
+        [
+          1,
+          8,
+          11,
+          32
+        ],
+        [
+          1,
+          8,
+          11,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_flash_attention",
+      "count": 6,
+      "cpu_time_us": 261.3720000000176,
+      "device_time_us": 30.736000000004424,
+      "shapes": [
+        [
+          1,
+          8,
+          11,
+          32
+        ],
+        [
+          1,
+          8,
+          11,
+          32
+        ],
+        [
+          1,
+          8,
+          11,
+          32
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_flash_attention_forward",
+      "count": 6,
+      "cpu_time_us": 181.80999999998312,
+      "device_time_us": 30.736000000004424,
+      "shapes": [
+        [
+          1,
+          11,
+          8,
+          32
+        ],
+        [
+          1,
+          11,
+          8,
+          32
+        ],
+        [
+          1,
+          11,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 6,
+      "cpu_time_us": 197.12200000001758,
+      "device_time_us": 30.28800000004412,
+      "shapes": [
+        [
+          6,
+          8,
+          32,
+          64
+        ],
+        [
+          6,
+          8,
+          7,
+          64
+        ],
+        [
+          6,
+          8,
+          7,
+          64
+        ],
+        [
+          6,
+          8,
+          32,
+          7
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 6,
+      "cpu_time_us": 122.23000000001048,
+      "device_time_us": 30.28800000004412,
+      "shapes": [
+        [
+          6,
+          32,
+          8,
+          64
+        ],
+        [
+          6,
+          7,
+          8,
+          64
+        ],
+        [
+          6,
+          7,
+          8,
+          64
+        ],
+        [
+          6,
+          8,
+          32,
+          7
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 6,
+      "cpu_time_us": 285.0430000000197,
+      "device_time_us": 30.256999999997788,
+      "shapes": [
+        [
+          3,
+          8,
+          4,
+          64
+        ],
+        [
+          3,
+          8,
+          7,
+          64
+        ],
+        [
+          3,
+          8,
+          7,
+          64
+        ],
+        [
+          3,
+          8,
+          4,
+          7
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 6,
+      "cpu_time_us": 162.55000000003201,
+      "device_time_us": 30.256999999997788,
+      "shapes": [
+        [
+          3,
+          4,
+          8,
+          64
+        ],
+        [
+          3,
+          7,
+          8,
+          64
+        ],
+        [
+          3,
+          7,
+          8,
+          64
+        ],
+        [
+          3,
+          8,
+          4,
+          7
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 6,
+      "cpu_time_us": 217.16199999998207,
+      "device_time_us": 27.66500000000815,
+      "shapes": [
+        [
+          1,
+          8,
+          11,
+          64
+        ],
+        [
+          1,
+          8,
+          7,
+          64
+        ],
+        [
+          1,
+          8,
+          7,
+          64
+        ],
+        [
+          1,
+          8,
+          11,
+          7
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 6,
+      "cpu_time_us": 122.22000000000116,
+      "device_time_us": 27.66500000000815,
+      "shapes": [
+        [
+          1,
+          11,
+          8,
+          64
+        ],
+        [
+          1,
+          7,
+          8,
+          64
+        ],
+        [
+          1,
+          7,
+          8,
+          64
+        ],
+        [
+          1,
+          8,
+          11,
+          7
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 6,
+      "cpu_time_us": 273.1510000000271,
+      "device_time_us": 26.131000000037602,
+      "shapes": [
+        [
+          1,
+          8,
+          4,
+          32
+        ],
+        [
+          1,
+          8,
+          25,
+          32
+        ],
+        [
+          1,
+          8,
+          25,
+          32
+        ],
+        [
+          1,
+          8,
+          4,
+          25
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 6,
+      "cpu_time_us": 128.58900000000722,
+      "device_time_us": 26.131000000037602,
+      "shapes": [
+        [
+          1,
+          4,
+          8,
+          32
+        ],
+        [
+          1,
+          25,
+          8,
+          32
+        ],
+        [
+          1,
+          25,
+          8,
+          32
+        ],
+        [
+          1,
+          8,
+          4,
+          25
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "ScaledDotProductEfficientAttentionBackward0",
+      "count": 1,
+      "cpu_time_us": 66.50299999996787,
+      "device_time_us": 12.185999999986961,
+      "shapes": [
+        [
+          57,
+          4,
+          1,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 1,
+      "cpu_time_us": 61.45600000000559,
+      "device_time_us": 12.185999999986961,
+      "shapes": [
+        [
+          57,
+          4,
+          1,
+          32
+        ],
+        [
+          57,
+          4,
+          1,
+          32
+        ],
+        [
+          57,
+          4,
+          4,
+          32
+        ],
+        [
+          57,
+          4,
+          4,
+          32
+        ],
+        [
+          57,
+          4,
+          1,
+          4
+        ],
+        [
+          57,
+          4,
+          1,
+          32
+        ],
+        [
+          57,
+          4,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 1,
+      "cpu_time_us": 40.286000000021886,
+      "device_time_us": 12.185999999986961,
+      "shapes": [
+        [
+          57,
+          1,
+          4,
+          32
+        ],
+        [
+          57,
+          1,
+          4,
+          32
+        ],
+        [
+          57,
+          4,
+          4,
+          32
+        ],
+        [
+          57,
+          4,
+          4,
+          32
+        ],
+        [
+          57,
+          4,
+          1,
+          4
+        ],
+        [
+          57,
+          1,
+          4,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          57,
+          4,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "count": 1,
+      "cpu_time_us": 152.50100000000384,
+      "device_time_us": 11.25700000001234,
+      "shapes": [
+        [
+          57,
+          4,
+          1,
+          32
+        ],
+        [
+          57,
+          4,
+          4,
+          32
+        ],
+        [
+          57,
+          4,
+          4,
+          32
+        ],
+        [
+          57,
+          1,
+          1,
+          4
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "count": 1,
+      "cpu_time_us": 48.24499999999534,
+      "device_time_us": 5.629000000000815,
+      "shapes": [
+        [
+          57,
+          4,
+          1,
+          32
+        ],
+        [
+          57,
+          4,
+          4,
+          32
+        ],
+        [
+          57,
+          4,
+          4,
+          32
+        ],
+        [
+          57,
+          4,
+          1,
+          4
+        ],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "count": 1,
+      "cpu_time_us": 27.938999999998487,
+      "device_time_us": 5.629000000000815,
+      "shapes": [
+        [
+          57,
+          1,
+          4,
+          32
+        ],
+        [
+          57,
+          4,
+          4,
+          32
+        ],
+        [
+          57,
+          4,
+          4,
+          32
+        ],
+        [
+          57,
+          4,
+          1,
+          4
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    }
+  ],
+  "synchronization_operators": [
+    {
+      "name": "aten::item",
+      "count": 24,
+      "cpu_time_us": 23083.041000000037,
+      "device_time_us": 9.724999999976717,
+      "shapes": [
+        []
+      ]
+    },
+    {
+      "name": "aten::_local_scalar_dense",
+      "count": 24,
+      "cpu_time_us": 23053.980000000007,
+      "device_time_us": 9.724999999976717,
+      "shapes": [
+        []
+      ]
+    },
+    {
+      "name": "aten::is_nonzero",
+      "count": 2,
+      "cpu_time_us": 22300.697000000044,
+      "device_time_us": 1.7270000000135042,
+      "shapes": [
+        []
+      ]
+    }
+  ],
+  "top_device_operators": [
+    {
+      "name": "autograd::engine::evaluate_function: AddmmBackward0",
+      "count": 393,
+      "cpu_time_us": 32544.551999999472,
+      "device_time_us": 10674.395999998407,
+      "shapes": []
+    },
+    {
+      "name": "autograd::engine::evaluate_function: IndexBackward0",
+      "count": 35,
+      "cpu_time_us": 6420.106000000058,
+      "device_time_us": 9800.714000000473,
+      "shapes": []
+    },
+    {
+      "name": "autograd::engine::evaluate_function: ScaledDotProductEfficientAttentionBackward0",
+      "count": 102,
+      "cpu_time_us": 10227.08499999973,
+      "device_time_us": 8920.107000000164,
+      "shapes": []
+    },
+    {
+      "name": "void (anonymous namespace)::indexing_backward_kernel<c10::BFloat16, 4>(long const*, long const*, c10::BFloat16 const*, c10::BFloat16*, long, long, long, long, bool)",
+      "count": 12,
+      "cpu_time_us": 0,
+      "device_time_us": 8420.226000000024,
+      "shapes": []
+    },
+    {
+      "name": "autograd::engine::evaluate_function: MaskedFillBackward0",
+      "count": 344,
+      "cpu_time_us": 14453.55800000034,
+      "device_time_us": 7406.153999999893,
+      "shapes": []
+    },
+    {
+      "name": "autograd::engine::evaluate_function: MulBackward0",
+      "count": 455,
+      "cpu_time_us": 12623.929999999702,
+      "device_time_us": 7370.051000000007,
+      "shapes": []
+    },
+    {
+      "name": "autograd::engine::evaluate_function: ConvolutionBackward0",
+      "count": 12,
+      "cpu_time_us": 1348.1340000000782,
+      "device_time_us": 6991.494999999821,
+      "shapes": []
+    },
+    {
+      "name": "Memcpy DtoD (Device -> Device)",
+      "count": 811,
+      "cpu_time_us": 0,
+      "device_time_us": 6518.771999999839,
+      "shapes": []
+    },
+    {
+      "name": "autograd::engine::evaluate_function: ToCopyBackward0",
+      "count": 1314,
+      "cpu_time_us": 27360.072000000684,
+      "device_time_us": 5553.823000000906,
+      "shapes": []
+    },
+    {
+      "name": "void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native::(anonymous namespace)::masked_fill_kernel(at::TensorIterator&, c10::Scalar const&)::{lambda()#1}::operator()() const::{lambda()#12}::operator()() const::{lambda(c10::BFloat16, bool)#1}>(at::TensorIteratorBase&, at::native::(anonymous namespace)::masked_fill_kernel(at::TensorIterator&, c10::Scalar const&)::{lambda()#1}::operator()() const::{lambda()#12}::operator()() const::{lambda(c10::BFloat16, bool)#1} const&)::{lambda(int)#1}>(int, at::native::gpu_kernel_impl_nocast<at::native::(anonymous namespace)::masked_fill_kernel(at::TensorIterator&, c10::Scalar const&)::{lambda()#1}::operator()() const::{lambda()#12}::operator()() const::{lambda(c10::BFloat16, bool)#1}>(at::TensorIteratorBase&, at::native::(anonymous namespace)::masked_fill_kernel(at::TensorIterator&, c10::Scalar const&)::{lambda()#1}::operator()() const::{lambda()#12}::operator()() const::{lambda(c10::BFloat16, bool)#1} const&)::{lambda(int)#1})",
+      "count": 254,
+      "cpu_time_us": 0,
+      "device_time_us": 5258.237000000004,
+      "shapes": []
+    },
+    {
+      "name": "aten::to",
+      "count": 1,
+      "cpu_time_us": 510.4609999999998,
+      "device_time_us": 5246.918,
+      "shapes": [
+        [
+          8460129
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_to_copy",
+      "count": 1,
+      "cpu_time_us": 508.4760000000001,
+      "device_time_us": 5246.918,
+      "shapes": [
+        [
+          8460129
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::copy_",
+      "count": 1,
+      "cpu_time_us": 485.1619999999998,
+      "device_time_us": 5246.918,
+      "shapes": [
+        [
+          8460129
+        ],
+        [
+          8460129
+        ],
+        []
+      ]
+    },
+    {
+      "name": "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > >(at::TensorIteratorBase&, at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > const&)::{lambda(int)#1}>(int, at::native::gpu_kernel_impl_nocast<at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > >(at::TensorIteratorBase&, at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > const&)::{lambda(int)#1})",
+      "count": 878,
+      "cpu_time_us": 0,
+      "device_time_us": 5161.257000000339,
+      "shapes": []
+    },
+    {
+      "name": "aten::masked_fill",
+      "count": 8,
+      "cpu_time_us": 351.8929999999891,
+      "device_time_us": 5037.004000000001,
+      "shapes": [
+        [
+          57,
+          32,
+          576,
+          64
+        ],
+        [
+          57,
+          1,
+          576,
+          1
+        ],
+        []
+      ]
+    },
+    {
+      "name": "fmha_cutlassB_bf16_aligned_64x64_k32_dropout_sm80(PyTorchMemEffAttention::AttentionBackwardKernel<cutlass::arch::Sm80, cutlass::bfloat16_t, true, true, true, 64, 64, 32, false>::Params)",
+      "count": 56,
+      "cpu_time_us": 0,
+      "device_time_us": 4988.09100000016,
+      "shapes": []
+    },
+    {
+      "name": "IndexBackward0",
+      "count": 4,
+      "cpu_time_us": 633.5800000000163,
+      "device_time_us": 4724.154999999853,
+      "shapes": [
+        [
+          493,
+          64,
+          8,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "aten::_index_put_impl_",
+      "count": 4,
+      "cpu_time_us": 563.8699999999953,
+      "device_time_us": 4714.942999999796,
+      "shapes": [
+        [
+          8208,
+          8,
+          32
+        ],
+        [],
+        [
+          493,
+          64,
+          8,
+          32
+        ],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#7}::operator()() const::{lambda(float)#1}, std::array<char*, 2ul>, 4, TrivialOffsetCalculator<1, unsigned int>, char*, at::native::memory::LoadWithCast<1>, std::array<char*, 2ul>::StoreWithCast<1> >(int, at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#7}::operator()() const::{lambda(float)#1}, std::array<char*, 2ul>, TrivialOffsetCalculator<1, unsigned int>, char*, at::native::memory::LoadWithCast<1>, std::array<char*, 2ul>::StoreWithCast<1>)",
+      "count": 1308,
+      "cpu_time_us": 0,
+      "device_time_us": 4578.429000000027,
+      "shapes": []
+    },
+    {
+      "name": "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul> >(int, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul>)",
+      "count": 781,
+      "cpu_time_us": 0,
+      "device_time_us": 4184.683000000303,
+      "shapes": []
+    },
+    {
+      "name": "ConvolutionBackward0",
+      "count": 3,
+      "cpu_time_us": 276.90600000001723,
+      "device_time_us": 4156.360999999859,
+      "shapes": [
+        [
+          57,
+          32,
+          576,
+          64
+        ]
+      ]
+    },
+    {
+      "name": "aten::copy_",
+      "count": 12,
+      "cpu_time_us": 95.24799999993593,
+      "device_time_us": 4097.67299999995,
+      "shapes": [
+        [
+          57,
+          32,
+          576,
+          64
+        ],
+        [
+          57,
+          32,
+          576,
+          64
+        ],
+        []
+      ]
+    },
+    {
+      "name": "void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#12}::operator()() const::{lambda(c10::BFloat16)#1}>(at::TensorIteratorBase&, at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#12}::operator()() const::{lambda(c10::BFloat16)#1} const&)::{lambda(int)#1}>(int, at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#12}::operator()() const::{lambda(c10::BFloat16)#1}>(at::TensorIteratorBase&, at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#12}::operator()() const::{lambda(c10::BFloat16)#1} const&)::{lambda(int)#1})",
+      "count": 459,
+      "cpu_time_us": 0,
+      "device_time_us": 3723.9350000003215,
+      "shapes": []
+    },
+    {
+      "name": "void at::native::vectorized_elementwise_kernel<4, at::native::bfloat16_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda(float)#1}, std::array<char*, 2ul> >(int, at::native::bfloat16_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda(float)#1}, std::array<char*, 2ul>)",
+      "count": 1424,
+      "cpu_time_us": 0,
+      "device_time_us": 3688.722000001463,
+      "shapes": []
+    },
+    {
+      "name": "autograd::engine::evaluate_function: IndexSelectBackward0",
+      "count": 148,
+      "cpu_time_us": 5476.882000000041,
+      "device_time_us": 3601.8740000002435,
+      "shapes": []
+    },
+    {
+      "name": "Memcpy HtoD (Pinned -> Device)",
+      "count": 6,
+      "cpu_time_us": 0,
+      "device_time_us": 3369.28099999999,
+      "shapes": []
+    },
+    {
+      "name": "ScaledDotProductEfficientAttentionBackward0",
+      "count": 16,
+      "cpu_time_us": 1119.5449999999255,
+      "device_time_us": 3234.0470000000205,
+      "shapes": [
+        [
+          2,
+          8,
+          124,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "fmha_cutlassB_bf16_aligned_64x64_k32_sm80(PyTorchMemEffAttention::AttentionBackwardKernel<cutlass::arch::Sm80, cutlass::bfloat16_t, true, false, true, 64, 64, 32, false>::Params)",
+      "count": 16,
+      "cpu_time_us": 0,
+      "device_time_us": 3219.268999999971,
+      "shapes": []
+    },
+    {
+      "name": "autograd::engine::evaluate_function: NativeLayerNormBackward0",
+      "count": 102,
+      "cpu_time_us": 5088.645000000222,
+      "device_time_us": 3199.307999999932,
+      "shapes": []
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "count": 8,
+      "cpu_time_us": 550.6930000000866,
+      "device_time_us": 3104.348999999929,
+      "shapes": [
+        [
+          2,
+          8,
+          124,
+          32
+        ],
+        [
+          2,
+          8,
+          124,
+          32
+        ],
+        [
+          2,
+          8,
+          3840,
+          32
+        ],
+        [
+          2,
+          8,
+          3840,
+          32
+        ],
+        [
+          2,
+          8,
+          124,
+          3840
+        ],
+        [
+          2,
+          8,
+          124,
+          32
+        ],
+        [
+          2,
+          8,
+          128
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "count": 8,
+      "cpu_time_us": 360.8750000000582,
+      "device_time_us": 3104.348999999929,
+      "shapes": [
+        [
+          2,
+          124,
+          8,
+          32
+        ],
+        [
+          2,
+          124,
+          8,
+          32
+        ],
+        [
+          2,
+          3840,
+          8,
+          32
+        ],
+        [
+          2,
+          3840,
+          8,
+          32
+        ],
+        [
+          2,
+          8,
+          124,
+          3840
+        ],
+        [
+          2,
+          124,
+          8,
+          32
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          2,
+          8,
+          128
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "name": "void at::native::reduce_kernel<128, 4, at::native::ReduceOp<c10::BFloat16, at::native::func_wrapper_t<c10::BFloat16, at::native::sum_functor<c10::BFloat16, float, c10::BFloat16>::operator()(at::TensorIterator&)::{lambda(float, float)#1}>, unsigned int, c10::BFloat16, 4, 8> >(at::native::ReduceOp<c10::BFloat16, at::native::func_wrapper_t<c10::BFloat16, at::native::sum_functor<c10::BFloat16, float, c10::BFloat16>::operator()(at::TensorIterator&)::{lambda(float, float)#1}>, unsigned int, c10::BFloat16, 4, 8>)",
+      "count": 377,
+      "cpu_time_us": 0,
+      "device_time_us": 3021.275999999576,
+      "shapes": []
+    },
+    {
+      "name": "void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<c10::BFloat16> >(at::TensorIteratorBase&, at::native::CUDAFunctor_add<c10::BFloat16> const&)::{lambda(int)#1}>(int, at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<c10::BFloat16> >(at::TensorIteratorBase&, at::native::CUDAFunctor_add<c10::BFloat16> const&)::{lambda(int)#1})",
+      "count": 19,
+      "cpu_time_us": 0,
+      "device_time_us": 2987.351999999937,
+      "shapes": []
+    },
+    {
+      "name": "fmha_cutlassF_bf16_aligned_64x64_rf_sm80(PyTorchMemEffAttention::AttentionKernel<cutlass::bfloat16_t, cutlass::arch::Sm80, true, 64, 64, 64, true, true>::Params)",
+      "count": 102,
+      "cpu_time_us": 0,
+      "device_time_us": 2964.696000000189,
+      "shapes": []
+    },
+    {
+      "name": "autograd::engine::evaluate_function: SubBackward0",
+      "count": 92,
+      "cpu_time_us": 1449.0499999997846,
+      "device_time_us": 2835.171999999875,
+      "shapes": []
+    },
+    {
+      "name": "aten::linear",
+      "count": 2,
+      "cpu_time_us": 280.16899999999987,
+      "device_time_us": 2750.630000000001,
+      "shapes": [
+        [
+          57,
+          576,
+          64,
+          32
+        ],
+        [
+          64,
+          32
+        ],
+        [
+          64
+        ]
+      ]
+    },
+    {
+      "name": "autograd::engine::evaluate_function: GeluBackward0",
+      "count": 65,
+      "cpu_time_us": 1117.8859999997658,
+      "device_time_us": 2706.427999999898,
+      "shapes": []
+    },
+    {
+      "name": "void at::native::vectorized_elementwise_kernel<4, at::native::GeluBackwardCUDAKernelImpl(at::TensorIteratorBase&, at::native::GeluType)::{lambda()#2}::operator()() const::{lambda()#4}::operator()() const::{lambda(c10::BFloat16, {lambda()#4})#1}, std::array<char*, 3ul> >(int, at::native::GeluBackwardCUDAKernelImpl(at::TensorIteratorBase&, at::native::GeluType)::{lambda()#2}::operator()() const::{lambda()#4}::operator()() const::{lambda(c10::BFloat16, {lambda()#4})#1}, std::array<char*, 3ul>)",
+      "count": 65,
+      "cpu_time_us": 0,
+      "device_time_us": 2706.427999999898,
+      "shapes": []
+    },
+    {
+      "name": "aten::masked_fill_",
+      "count": 8,
+      "cpu_time_us": 77.26700000001802,
+      "device_time_us": 2664.816000000039,
+      "shapes": [
+        [
+          57,
+          32,
+          576,
+          64
+        ],
+        [
+          57,
+          1,
+          576,
+          1
+        ],
+        []
+      ]
+    },
+    {
+      "name": "Activity Buffer Request",
+      "count": 2,
+      "cpu_time_us": 3046.977000000007,
+      "device_time_us": 2623.459,
+      "shapes": []
+    }
+  ],
+  "notes": [
+    "GT plan is fixed in all modes.",
+    "detach_z retains auxiliary supervision and the M-to-audio path.",
+    "decoder uses the same fixed Z and skips D/R/P; E still encodes the same local windows.",
+    "Shared E makes sums of standalone wall times an approximation, not an epoch prediction."
+  ],
+  "source": {
+    "commit": "b58ba7f"
+  },
+  "binding": {
+    "paths": {
+      "pretrain_train_plan": "/root/autodl-tmp/pilot320-encoder-draft-inputs-20261010/plans/train",
+      "pretrain_validation_plan": "/root/autodl-tmp/pilot320-encoder-draft-inputs-20261010/plans/validation",
+      "pretrain_chart_cache": "/root/autodl-tmp/chart-cache-original-v2-master-remaster-fields-20261010",
+      "pretrain_audio_cache": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/audio/encoder-inputs-all-official-20261010",
+      "pretrain_mel_root": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/audio/features",
+      "pretrain_source_root": "/root/autodl-tmp/pilot320-encoder-draft-inputs-20261010/sources",
+      "decoder_train_train_plan": "/root/autodl-tmp/0wd-v3-decoder-tests-11cfd7b-20261010/plans/train",
+      "decoder_train_validation_plan": "/root/autodl-tmp/0wd-v3-decoder-tests-11cfd7b-20261010/plans/validation",
+      "decoder_train_chart_cache": "/root/autodl-tmp/chart-cache-original-v2-master-remaster-fields-20261010",
+      "decoder_train_audio_cache": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/audio/encoder-inputs-all-official-20261010",
+      "decoder_train_mel_root": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/audio/features",
+      "decoder_train_source_root": "/root/autodl-tmp/pilot320-encoder-draft-inputs-20261010/sources",
+      "decoder_train_physical_cache": "/root/autodl-tmp/training-physical-v2-original-pilot320-20261010",
+      "decoder_train_window_cache": "/root/autodl-tmp/decoder-cont-token-20261011/windows-v5",
+      "decoder_train_gt_plan_cache": "/root/autodl-tmp/pilot320-gt-plan-7adb36c-20261010",
+      "decoder_train_geometry": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/physical/path-catalog",
+      "decoder_train_slide_data": "/root/autodl-tmp/0wd-v3-physical-20261010/resources/slide_data.json",
+      "decoder_train_route_distances": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/slide-geometry/route-artifact/route_geometry.npz"
+    }
+  },
+  "config": {
+    "mel_bins": 128,
+    "samples_per_beat": 24,
+    "d_model": 256,
+    "heads": 8,
+    "ffn_dim": 1024,
+    "stage_depths": [
+      1,
+      1,
+      2
+    ],
+    "stage_attention_radii": [
+      1,
+      2,
+      4
+    ],
+    "temporal_kernel_size": 15,
+    "stem_channels": 32,
+    "frequency_dim": 64,
+    "frequency_queries": 4,
+    "fpn_rates": [
+      8,
+      4,
+      2
+    ],
+    "target_beats": 16,
+    "target_stride_beats": 16,
+    "audio_before_beats": 4,
+    "audio_after_beats": 4,
+    "chart_history_beats": 4,
+    "complex_rhythm_min_kinds": 3,
+    "complex_rhythm_multiplier": 2.0,
+    "dropout": 0.1,
+    "rope_base": 10000,
+    "rope_position_scale": 1.0,
+    "draft_layers": 8,
+    "draft_dim": 256,
+    "draft_heads": 8,
+    "draft_experts": 4,
+    "draft_expert_ffn_dim": 512,
+    "draft_latent_dim": 256,
+    "draft_z_stride_beats": 4,
+    "draft_dropout": 0.0,
+    "draft_norm_eps": 1e-05,
+    "draft_difficulty_vocab_size": 8,
+    "draft_level_center": 10.0,
+    "draft_level_scale": 5.0,
+    "draft_span_scale": 16.0,
+    "planner_dim": 128,
+    "planner_heads": 4,
+    "planner_mlp_dim": 256,
+    "planner_dropout": 0.1,
+    "planner_norm_eps": 1e-05,
+    "reconstruction_ffn_dim": 512,
+    "reconstruction_dropout": 0.1,
+    "reconstruction_norm_eps": 1e-05,
+    "pretrain_batch_reference_rows": 207,
+    "reconstruction_position_base": 10000.0,
+    "reconstruction_position_scale": 1.0,
+    "reconstruction_label_smoothing": 0.05,
+    "reconstruction_classification_weight": 1.0,
+    "reconstruction_moment_weight": 1.0,
+    "reconstruction_empty_weight": 1.0,
+    "reconstruction_positive_count_weight": 1.0,
+    "planner_continuous_weight": 1.0,
+    "planner_category_weight": 0.25,
+    "pretrain_optimizer": "adamw",
+    "pretrain_learning_rate": 0.0004,
+    "pretrain_weight_decay": 0.01,
+    "pretrain_gradient_clip": 1.0,
+    "pretrain_warmup_steps": 200,
+    "pretrain_scheduler_epochs": 150,
+    "pretrain_stop_after_epochs": 90,
+    "pretrain_precision": "bf16",
+    "pretrain_initialization": "scratch",
+    "pretrain_audio_mode": "joint",
+    "pretrain_p0_cache": null,
+    "pretrain_seed": 20261010,
+    "pretrain_audio_groups_per_batch": 2,
+    "pretrain_gradient_accumulation_steps": 1,
+    "pretrain_token_budget": 45056,
+    "pretrain_audio_token_weight": 1.0,
+    "pretrain_row_token_weight": 1.0,
+    "pretrain_workers": 12,
+    "pretrain_device": "cuda",
+    "pretrain_train_plan": "/root/autodl-tmp/pilot320-encoder-draft-inputs-20261010/plans/train",
+    "pretrain_validation_plan": "/root/autodl-tmp/pilot320-encoder-draft-inputs-20261010/plans/validation",
+    "pretrain_chart_cache": "/root/autodl-tmp/chart-cache-original-v2-master-remaster-fields-20261010",
+    "pretrain_audio_cache": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/audio/encoder-inputs-all-official-20261010",
+    "pretrain_mel_root": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/audio/features",
+    "pretrain_source_root": "/root/autodl-tmp/pilot320-encoder-draft-inputs-20261010/sources",
+    "pretrain_output": "/root/autodl-tmp/maidata-joint-z4-gt-20261011/training",
+    "decoder_dim": 256,
+    "decoder_layers": 6,
+    "decoder_router_layer": 2,
+    "decoder_heads": 8,
+    "decoder_shared_ffn_dim": 1024,
+    "decoder_expert_ffn_dim": 512,
+    "decoder_experts": 4,
+    "decoder_readout_ffn_dim": 256,
+    "decoder_dropout": 0.1,
+    "decoder_norm_eps": 1e-05,
+    "decoder_rope_base": 10000.0,
+    "decoder_rope_position_scale": 1.0,
+    "decoder_condition_gate_init": 0.001,
+    "decoder_z_cross_attention": true,
+    "decoder_note_dims": [
+      64,
+      128,
+      16,
+      16,
+      16,
+      8,
+      8
+    ],
+    "decoder_route_dims": [
+      240,
+      16
+    ],
+    "decoder_time_base": 10000.0,
+    "decoder_time_scale": 1.0,
+    "decoder_z_before_beats": 4,
+    "decoder_z_after_beats": 4,
+    "decoder_history_dropout": 0.15,
+    "decoder_train_checkpoint": null,
+    "decoder_train_p0_cache": null,
+    "decoder_train_local_p0_cache": null,
+    "decoder_train_audio_mode": "joint",
+    "decoder_train_init_checkpoint": null,
+    "decoder_train_dp_cache": null,
+    "decoder_train_plan_source": "gt",
+    "decoder_train_gt_plan_cache": "/root/autodl-tmp/pilot320-gt-plan-7adb36c-20261010",
+    "decoder_train_optimizer": "adamw",
+    "decoder_train_fused_optimizer": true,
+    "decoder_train_learning_rate": 0.0004,
+    "decoder_train_weight_decay": 0.01,
+    "decoder_train_gradient_clip": 1.0,
+    "decoder_train_warmup_steps": 200,
+    "decoder_train_scheduler_epochs": 150,
+    "decoder_train_stop_after_epochs": 90,
+    "decoder_train_precision": "bf16",
+    "decoder_train_gradient_accumulation_steps": 1,
+    "decoder_train_row_budget": 8192,
+    "decoder_train_chunk_token_budget": 8192,
+    "decoder_train_audio_scope": "window",
+    "decoder_train_window_cache": "/root/autodl-tmp/decoder-cont-token-20261011/windows-v5",
+    "decoder_train_physical_weight": 0.8,
+    "decoder_train_judge_weight": 0.5,
+    "decoder_train_trajectory_weight": 0.5,
+    "decoder_train_seed": 20261010,
+    "decoder_train_workers": 12,
+    "decoder_train_device": "cuda",
+    "decoder_train_train_plan": "/root/autodl-tmp/0wd-v3-decoder-tests-11cfd7b-20261010/plans/train",
+    "decoder_train_validation_plan": "/root/autodl-tmp/0wd-v3-decoder-tests-11cfd7b-20261010/plans/validation",
+    "decoder_train_chart_cache": "/root/autodl-tmp/chart-cache-original-v2-master-remaster-fields-20261010",
+    "decoder_train_physical_cache": "/root/autodl-tmp/training-physical-v2-original-pilot320-20261010",
+    "decoder_train_audio_cache": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/audio/encoder-inputs-all-official-20261010",
+    "decoder_train_mel_root": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/audio/features",
+    "decoder_train_source_root": "/root/autodl-tmp/pilot320-encoder-draft-inputs-20261010/sources",
+    "decoder_train_geometry": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/physical/path-catalog",
+    "decoder_train_slide_data": "/root/autodl-tmp/0wd-v3-physical-20261010/resources/slide_data.json",
+    "decoder_train_route_distances": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/slide-geometry/route-artifact/route_geometry.npz",
+    "decoder_train_output": "/root/autodl-tmp/maidata-joint-z4-gt-20261011/training",
+    "joint_train_initialization": "scratch",
+    "joint_train_z_stride_beats": 4,
+    "joint_train_plan_source": "gt",
+    "joint_train_optimizer": "adamw",
+    "joint_train_fused_optimizer": true,
+    "joint_train_learning_rate": 0.0004,
+    "joint_train_weight_decay": 0.01,
+    "joint_train_gradient_clip": 1.0,
+    "joint_train_warmup_steps": 200,
+    "joint_train_scheduler_epochs": 150,
+    "joint_train_stop_after_epochs": 90,
+    "joint_train_precision": "bf16",
+    "joint_train_workers": 12,
+    "joint_train_seed": 20261010,
+    "joint_train_device": "cuda",
+    "joint_train_decoder_weight": 1.0,
+    "joint_train_reconstruction_weight": 1.0,
+    "joint_train_planner_weight": 1.0,
+    "joint_train_physical_weight": 0.8,
+    "joint_train_judge_weight": 0.5,
+    "joint_train_trajectory_weight": 0.5,
+    "joint_train_output": "/root/autodl-tmp/maidata-joint-z4-gt-20261011/training"
+  },
+  "optimizer_step_in_epoch": 33,
+  "data_wait_seconds": 1.715725600719452,
+  "steps_by_epoch": [
+    173,
+    171,
+    171,
+    173,
+    175,
+    172,
+    169,
+    168,
+    173,
+    174,
+    174,
+    176,
+    167,
+    177,
+    176,
+    171,
+    175,
+    176,
+    173,
+    169,
+    177,
+    172,
+    173,
+    175,
+    171,
+    171,
+    177,
+    171,
+    173,
+    175,
+    168,
+    176,
+    175,
+    174,
+    173,
+    173,
+    172,
+    175,
+    169,
+    175,
+    172,
+    174,
+    170,
+    172,
+    175,
+    175,
+    171,
+    174,
+    173,
+    173,
+    175,
+    171,
+    170,
+    164,
+    171,
+    176,
+    175,
+    173,
+    171,
+    167,
+    173,
+    172,
+    171,
+    175,
+    173,
+    171,
+    174,
+    172,
+    173,
+    173,
+    172,
+    174,
+    174,
+    174,
+    177,
+    172,
+    174,
+    176,
+    174,
+    174,
+    170,
+    175,
+    169,
+    172,
+    167,
+    174,
+    171,
+    174,
+    176,
+    173,
+    177,
+    172,
+    172,
+    171,
+    173,
+    171,
+    171,
+    170,
+    174,
+    172,
+    172,
+    174,
+    173,
+    173,
+    176,
+    170,
+    169,
+    169,
+    173,
+    173,
+    172,
+    176,
+    172,
+    173,
+    172,
+    174,
+    170,
+    172,
+    169,
+    174,
+    174,
+    176,
+    172,
+    171,
+    176,
+    172,
+    173,
+    175,
+    172,
+    172,
+    170,
+    174,
+    175,
+    174,
+    177,
+    169,
+    173,
+    172,
+    171,
+    174,
+    168,
+    170,
+    172,
+    175,
+    170,
+    175,
+    174,
+    176,
+    174,
+    171
+  ],
+  "group_proxy_costs": [
+    44356.0
+  ]
+}
