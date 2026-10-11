@@ -106,7 +106,7 @@ class TimePath:
 
 
 def compile_time_target(kind, *, ticks=None, censored_lower=None, origin_tick,
-                        timing, window_end_tick=None):
+                        timing, window_end_tick=None, duration_query_end_ticks=None):
     """Compile one original field, stopping at its first window-closing choice.
 
 ``ticks`` and ``censored_lower`` are complete *relative* values, never absolute
@@ -142,6 +142,12 @@ onsets. Terminal/censor metadata stays here, outside the network query input.
             break
         advance = query.advance(targets[0], window_end_tick=window_end_tick)
         closes, closed_by_continue = advance.closes_window, advance.closed_by_continue
+        if (kind != 'MOMENT' and targets[0] == CONTINUE
+                and duration_query_end_ticks is not None
+                and advance.query.elapsed_ticks >= duration_query_end_ticks):
+            # Only the observation/query chain ends. The exact GT duration is
+            # retained for teacher history and Physical action construction.
+            closes = closed_by_continue = True
         if closed_by_continue:
             closed_lower = advance.lower_bound_tick
         if closes or advance.complete_ticks is not None:
@@ -160,9 +166,28 @@ def duration_cap(kind, *, timing, local_end_tick, audio_end_seconds,
         raise ValueError('provide exactly one NOTE origin_tick or onset_tick')
     onset_tick = origin_tick if onset_tick is None else onset_tick
     start = timing.second(onset_tick + (TICKS_PER_BEAT if kind == 'SLIDE_DURATION' else 0))
-    end = min(timing.second(local_end_tick), audio_end_seconds)
+    end = min(timing.second(local_end_tick) if local_end_tick is not None else math.inf,
+              audio_end_seconds)
     # Matches Physical's tolerant inclusive integer audio-end comparison.
     return math.floor((end - start + 1e-10) / timing.written_tick_seconds(onset_tick))
+
+
+def duration_query_limit(kind, *, timing, local_end_tick, audio_end_seconds,
+                         onset_tick=None, origin_tick=None):
+    """First integer CONT cursor outside the half-open observed audio window.
+
+Unlike an endpoint cap this uses ceil: a cursor at 384 is still observable
+when the audio boundary is at 384.25 written ticks. Short predictions issued
+before the boundary may end beyond it.
+    """
+    if kind not in ('HOLD_DURATION', 'SLIDE_DURATION'):
+        raise ValueError('duration query limit requires a duration field')
+    if (onset_tick is None) == (origin_tick is None):
+        raise ValueError('provide exactly one NOTE origin_tick or onset_tick')
+    onset_tick = origin_tick if onset_tick is None else onset_tick
+    start = timing.second(onset_tick + (TICKS_PER_BEAT if kind == 'SLIDE_DURATION' else 0))
+    end = min(timing.second(local_end_tick), audio_end_seconds)
+    return math.ceil((end - start - 1e-10) / timing.written_tick_seconds(onset_tick))
 
 
 def local_z_indices(query_beat, *, moment=False):
@@ -185,7 +210,7 @@ def _bits(value):
 
 
 def substep_masks(kind, intervals, *, origin_tick, elapsed_ticks=0,
-                  window_end_tick=None, upper_tick=None):
+                  window_end_tick=None, upper_tick=None, duration_query_end_ticks=None):
     """Project full relative integer intervals into this query's 385 choices.
 
 ``basic`` permits grammar/audio candidates; ``hard`` additionally requires a
@@ -205,6 +230,8 @@ physical and first-attribution penalty fields.
         upper_tick = max((b for _, b, _ in intervals), default=0)
     close_delta = window_end_tick - origin_tick if kind == 'MOMENT' else math.inf
     closes = elapsed_ticks + TIME_BLOCK >= close_delta
+    if kind != 'MOMENT' and duration_query_end_ticks is not None:
+        closes = elapsed_ticks + TIME_BLOCK >= duration_query_end_ticks
 
     def record_at(value):
         if value < minimum:
@@ -240,14 +267,6 @@ physical and first-attribution penalty fields.
     physical.append((False,) * 4)
     penalty.append((False,) * 4)
     return SubstepMasks(tuple(basic), tuple(hard), tuple(physical), tuple(penalty), closes)
-
-
-class UnsupportedDurationError(ValueError):
-    """Exact source is retained; this local-window training case is deferred."""
-    def __init__(self, exact_ticks, cap_ticks):
-        self.exact_ticks, self.cap_ticks = exact_ticks, cap_ticks
-        super().__init__(f'exact duration {exact_ticks} exceeds local audio cap {cap_ticks}; '
-                         'source must be retained as unsupported, never clipped')
 
 
 @dataclass(frozen=True)
@@ -298,7 +317,8 @@ class TimeTree:
         return tuple(i < length for i in range(len(self.supports)))
 
 
-def compile_support_tree(stage, timing, *, kind, window_end, cap_tick, target=None):
+def compile_support_tree(stage, timing, *, kind, window_end, cap_tick, target=None,
+                         audio_end_seconds=math.inf):
     """Shared exact-source compiler for migration, new production and runtime.
 
 All reachable CONT depths are compiled, independently of the GT path length.
@@ -308,6 +328,7 @@ Existing MOMENT supports are absolute; duration supports are written ticks.
     from maidata.chart.windows import TimeTarget
 
     origin = stage['cursor_tick']
+    query_end = None
     if kind == 'MOMENT':
         support = stage['moment']
         intervals = tuple((a - origin, b - origin, r) for a, b, r in support['intervals'])
@@ -332,17 +353,24 @@ Existing MOMENT supports are absolute; duration supports are written ticks.
     else:
         support = stage['duration']
         intervals = tuple(support['intervals'])
-        upper = min(support['domain'][1], duration_cap(kind, timing=timing, onset_tick=origin,
-                     local_end_tick=cap_tick, audio_end_seconds=timing.second(cap_tick)))
-        if target is not None and target.ticks > upper:
-            raise UnsupportedDurationError(target.ticks, upper)
-        path = (compile_time_target(kind, ticks=target.ticks, origin_tick=origin, timing=timing)
+        upper = support['domain'][1]
+        if target is None:
+            # Generation still requires a completed duration within its cap.
+            upper = min(upper, duration_cap(kind, timing=timing, onset_tick=origin,
+                        local_end_tick=cap_tick, audio_end_seconds=audio_end_seconds))
+        else:
+            # Training uses full source supports; only observable queries stop.
+            query_end = duration_query_limit(kind, timing=timing, onset_tick=origin,
+                local_end_tick=cap_tick, audio_end_seconds=audio_end_seconds)
+        path = (compile_time_target(kind, ticks=target.ticks, origin_tick=origin, timing=timing,
+                                    duration_query_end_ticks=query_end)
                 if target is not None else None)
     queries, supports, elapsed = [], [], 0
     while True:
         query = TimeQuery(kind, origin, elapsed)
         masks = substep_masks(kind, intervals, origin_tick=origin, elapsed_ticks=elapsed,
-                              window_end_tick=window_end, upper_tick=upper)
+                              window_end_tick=window_end, upper_tick=upper,
+                              duration_query_end_ticks=query_end)
         if not any(masks.basic):
             raise ValueError('time field has no basic legal completion')
         queries.append((elapsed, query.query_beat(timing)))

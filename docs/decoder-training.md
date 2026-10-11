@@ -98,17 +98,17 @@ python -m maidata.decoder_training.export_windows --config decoder-stage2.json -
 
 将 `decoder_train_window_cache` 指向输出目录。该步骤复用已有字段、Physical，不重建源缓存或 P0/Z/plan；只处理计划中的基础窗和空尾窗，重复 occurrence 共用一份产物。每个窗口保存不压缩的 dtype 连续张量缓冲及轻量布局，新增产物在离线生成时检查一次落盘往返。历史长度和目标长度保存在 manifest。
 
-新窗口schema为`maidata.decoder-window-tensors.v3`。`export_windows.compile_window`从精确原谱v2和完整Physical整数区间构造字段条件、完整CONT树、精确目标/删失路径、原字段计数及独立查询成本。duration域按本地U和整曲音频边界相交；type/WiFi存在性按新域投影，缺少反事实候选区间时只补相关前缀并重新推进受影响首次归责。几何、真实动作、Mel/aux32、GT plan和split/occurrence复用。
+新监督窗口schema为`maidata.decoder-window-tensors.v4`。`export_windows.compile_window`从精确原谱v2和完整Physical整数区间构造字段条件、可观测CONT树、精确目标/删失路径、原字段计数及独立查询成本。duration训练保留完整源支持和真实动作，局部音频边界只截断查询链，不按它重投影type/WiFi。几何、Mel/aux32、GT plan和split/occurrence复用；原谱/Physical源schema及迁移不变。
 
 增量迁移从旧manifest选择窗口，但不读取旧4tick监督tensor猜精确duration；同样调用`compile_window`，旧资产只读，输出新目录：
 
 ```sh
-python -m maidata.decoder_training.migrate_windows --config decoder-stage2.json --source-windows OLD_WINDOW_CACHE --output NEW_V3_WINDOW_CACHE --workers 12
+python -m maidata.decoder_training.migrate_windows --config decoder-stage2.json --source-windows OLD_WINDOW_CACHE --output NEW_V4_WINDOW_CACHE --workers 12
 ```
 
-少量窗口可显式使用`--window-id ID`重复指定。从零生产先完成现有精确原谱及完整整数Physical生产，再运行同一`export_windows`。本次不默认执行整库迁移或新训练。旧`compact_windows`仅为旧v1/v2连续分布的等义压缩工具，不能生成新v3监督，也不能令旧checkpoint兼容新模型。
+少量窗口可显式使用`--window-id ID`重复指定。从零生产先完成现有精确原谱及完整整数Physical生产，再运行同一`export_windows`。旧v1/v2连续窗口与v3局部cap窗口可复用manifest选择，从不变的源资产重编译监督。旧`compact_windows`仅为旧v1/v2连续分布的等义压缩工具，不能生成新v4监督，也不能令旧checkpoint兼容新模型。
 
-超出本地U的GT duration精确值、源索引及完整支持保存在新产物中，manifest列出`unsupported_duration`；这些窗口不伪造训练labels，也不从计划删除。`select_window`明确抛`UnsupportedDurationBoundary`，说明自动延窗/续接机制尚未支持。这一已延后边界不能冒称已完成训练适配。
+超出本地U的GT duration保持完整值、源索引、真实主行和后续历史；监督包含跨出音频窗口的最后一个CONT后停止。窗内发出的非CONT即使终点在窗外也正常监督，并读取完整源Physical处罚。末尾CONT作为未完成字段的零罚叶保留概率质量，不形成假动作。`duration_window_crossings`只是记录信息，所有窗口照常生成labels，不再拒绝这些实例。生成时的局部cap行为未由本次监督变更修改。
 
 DataLoader worker 读取所选窗口输入/监督、固定 Z/plan 与去重歌曲的 Mel/aux32，按 seed/epoch/occurrence 选择历史视图、平移标签索引、padding，再按 dtype 打包。所选Encoder窗口共用一份布局，M有效行与各计算块的attention布局也在worker根据输入坐标和mask准备；P0数值由训练进程中的E_M提供，不传输占位的完整隐藏bank。标签、合法 mask、Physical 罚项及其计数已离线确定。训练进程不做整谱解压、校验、规则重放或候选生成；不扫描输入张量的形状、有限值及归属。模型投影和概率运算的重复输入检查在训练/validation 调用中关闭；合法性 mask、概率归一化与梯度裁剪是实际计算，继续保留。
 

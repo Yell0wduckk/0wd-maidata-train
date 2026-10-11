@@ -78,7 +78,8 @@ def prediction_loss(heads, h, type_logits, target, stage, *, timing, window_end,
             logits = heads.break_logits(h[None], torch.tensor([target.route_id], device=device))[0]
             discrete(logits, torch.ones(2, dtype=torch.bool, device=device), target.track_break)
     else:
-        tree = compile_support_tree(stage,timing,kind=name,window_end=window_end,cap_tick=cap_tick,target=target)
+        tree = compile_support_tree(stage,timing,kind=name,window_end=window_end,cap_tick=cap_tick,target=target,
+                                    audio_end_seconds=audio_end_seconds)
         if time_states is None or len(time_states) != len(tree.basic):
             raise ValueError('time supervision requires a separate state at every reachable CONT query')
         allowed = torch.tensor(tree.basic,device=device)
@@ -119,7 +120,8 @@ def decoder_loss(heads, output, examples, stages, timings, audio_ends, *, distri
                     h,time_states = query([origin/96],[0])[0],None
                 else:
                     tree = compile_support_tree(stage,timings[batch],kind=name,window_end=example.end_tick,
-                                                cap_tick=example.cap_tick,target=target)
+                                                cap_tick=example.cap_tick,target=target,
+                                                audio_end_seconds=audio_ends[batch])
                     h,time_states = output.hidden[batch,row],query(tree.query_beats,tree.elapsed_ticks)
                 result = result + prediction_loss(heads, h, output.type_logits[batch, row],
                     target, stages[batch][row], timing=timings[batch], window_end=example.end_tick,

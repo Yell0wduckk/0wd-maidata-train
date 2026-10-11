@@ -125,12 +125,20 @@ def test_planner_reads_all_target_beats_independently():
     assert grad[0, :4].count_nonzero() == grad[0, 20:].count_nonzero() == 0
 
 
-def test_deferred_duration_is_preserved_and_cannot_be_partial_training():
+def test_long_duration_retains_gt_and_supervises_crossing_continue():
     target = reconstruction_target(chart([(0, [Note.make('hold', 'A1'), HoldDuration(5000)])]),
                                    start_tick=0, target_beats=16)
-    assert target.deferred_durations[0]['exact_ticks'] == 5000
-    with pytest.raises(ValueError, match='deferred'):
-        collate_reconstruction([target], target_beats=16, device='cpu')
+    duration = [r for r in target.rows if r.query.role == 'HOLD_DURATION']
+    assert all(r.times['hold_duration_tick'] == 5000 for r in duration)
+    assert all(r.target_classes == (384,) for r in duration)
+    assert duration[-1].closed_by_continue
+    assert duration[-1].query.beat < 20
+    labels = collate_reconstruction([target], target_beats=16, device='cpu')
+    assert labels.time_valid['hold_duration_tick'].sum() == 1
+    output = model()(memory(), labels.queries)
+    terms = reconstruction_loss(output, labels, label_smoothing=.05)
+    sum(term.mean for term in terms.values()).backward()
+    assert all(torch.isfinite(term.mean) for term in terms.values())
 
 
 def test_padding_does_not_condition_other_queries_or_revive_biases():

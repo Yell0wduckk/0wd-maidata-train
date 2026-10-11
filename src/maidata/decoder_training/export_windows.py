@@ -32,7 +32,7 @@ def compile_window(chart, row, config, audio_end, onsets):
     if example.end_tick != row['end_tick']:
         raise ValueError('window geometry differs')
     from maidata.time.discrete import duration_cap
-    unsupported = []
+    crossings = []
     cursor = example.start_tick
     for offset, target in enumerate(example.targets[example.boundary_index:]):
         if isinstance(target, Moment):
@@ -41,21 +41,19 @@ def compile_window(chart, row, config, audio_end, onsets):
             cap = duration_cap(target.type, timing=chart.timing, onset_tick=cursor,
                                local_end_tick=example.cap_tick, audio_end_seconds=audio_end)
             if target.ticks > cap:
-                unsupported.append(dict(target_offset=offset, kind=target.type, onset_tick=cursor,
-                                        exact_ticks=target.ticks, cap_ticks=cap))
-    # Unsupported instances remain in the manifest and retain exact source and
-    # old full support. The reader reports this deferred boundary explicitly.
-    stages, audit = chart.window(example, duration_cap_seconds=None if unsupported else
-                                 min(audio_end, chart.timing.second(example.cap_tick)))
+                crossings.append(dict(target_offset=offset, kind=target.type, onset_tick=cursor,
+                                      exact_ticks=target.ticks, cap_ticks=cap))
+    # The GT action and candidate ledger retain the complete source duration.
+    # Only query supervision stops at the local observation boundary.
+    stages, audit = chart.window(example)
     tokens, types, _ = collate_windows([example], device='cpu')
-    labels = None if unsupported else prepare([dict(example=example, stages=stages,
-                                                   timing=chart.timing, audio_end=audio_end)])
+    labels = prepare([dict(example=example, stages=stages,
+                           timing=chart.timing, audio_end=audio_end)])
     # Store the shared supervision once; history dropout changes only input and
     # row offsets, never real Physical state or the target decision supports.
-    if labels is not None:
-        for group in labels.groups.values():
-            group['indices'][:, 1] -= example.boundary_index
-        labels.flags['indices'][:, 1] -= example.boundary_index
+    for group in labels.groups.values():
+        group['indices'][:, 1] -= example.boundary_index
+    labels.flags['indices'][:, 1] -= example.boundary_index
     exact = []
     for offset, (index, target) in enumerate(zip(chart.source_indices(example),
                                                 example.targets[example.boundary_index:])):
@@ -64,18 +62,17 @@ def compile_window(chart, row, config, audio_end, onsets):
                           origin_tick=stages[example.boundary_index+offset]['cursor_tick']))
     query_cost = sum(int(g['allowed'].any(-1).sum()) if g['allowed'].ndim == 3 else g['allowed'].shape[0]
                      for key, g in labels.groups.items()
-                     if key in ('kind','route') or g['allowed'].ndim == 3) if labels is not None else None
+                     if key in ('kind','route') or g['allowed'].ndim == 3)
     return dict(tokens={f.name: getattr(tokens, f.name)[0] for f in fields(tokens)}, next_types=types[0],
         history=example.boundary_index,
-        labels=None if labels is None else dict(groups=labels.groups, counts=labels.counts, flags=labels.flags),
+        labels=dict(groups=labels.groups, counts=labels.counts, flags=labels.flags),
         metadata=dict(chart_id=row.get('chart_id'), window_id=row.get('window_id'),
             source_schema=chart.record['schema'], time_representation='relative-tick384-continue',
             start_tick=example.start_tick, end_tick=example.end_tick, local_end_tick=example.cap_tick,
             history_beats=example.beats[:example.boundary_index], boundary_index=example.boundary_index,
             last_real_tick=example.last_real_tick, exact_fields=exact,
             main_sequence_length=len(types[0]), field_query_cost=query_cost,
-            unsupported_duration=unsupported, support_reuse=audit),
-        deferred_supports=stages if unsupported else None)
+            duration_window_crossings=crossings, support_reuse=audit))
 
 
 def initialize(config, hashes):
@@ -113,7 +110,7 @@ def export_chart(task):
             **{k: row[k] for k in ('chart_id','audio_variant','start_tick','end_tick')},
             lengths=[len(value['next_types'])-value['history'], value['history']],
             field_query_cost=value['metadata']['field_query_cost'],
-            unsupported_duration=value['metadata']['unsupported_duration'],
+            duration_window_crossings=value['metadata']['duration_window_crossings'],
             path='windows/'+name, bytes=path.stat().st_size, sha256=digest_file(path))
     return result
 
@@ -130,8 +127,9 @@ def export(config, *, workers=12, window_ids=None, source_windows=None):
     previous = None
     if source_windows is not None:
         previous = json.loads((Path(source_windows)/'manifest.json').read_text(encoding='utf-8-sig'))
-        if previous['schema'] not in ('maidata.decoder-window-tensors.v1', 'maidata.decoder-window-tensors.v2'):
-            raise ValueError('migration source must be an old continuous-time window cache')
+        if previous['schema'] not in ('maidata.decoder-window-tensors.v1', 'maidata.decoder-window-tensors.v2',
+                                      'maidata.decoder-window-tensors.v3'):
+            raise ValueError('migration source must be a previous v1/v2/v3 window cache')
         if window_ids is None:
             window_ids = set(previous['windows'])
     selected = None if window_ids is None else set(window_ids)
@@ -163,7 +161,6 @@ def export(config, *, workers=12, window_ids=None, source_windows=None):
             meta['windows'].update(result)
             print(json.dumps(dict(charts=n,total_charts=len(tasks),windows=len(meta['windows']))), flush=True)
     meta['complete'] = True
-    meta['unsupported_windows'] = [key for key, value in meta['windows'].items() if value['unsupported_duration']]
     write_json(root/'manifest.json', meta)
     return meta
 

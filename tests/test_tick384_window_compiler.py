@@ -1,4 +1,4 @@
-"""Exact-source compilation, local Physical reuse and deferred boundary records."""
+"""Exact-source compilation, Physical reuse and observed duration prefixes."""
 from dataclasses import replace
 from unittest.mock import patch
 import random
@@ -14,7 +14,7 @@ from maidata.decoder.supports import window_stages
 from maidata.decoder_training.export_windows import compile_window
 from maidata.decoder_training.support_cache import ChartSupports
 from maidata.decoder_training.window_cache import (tensor_pack, tensor_unpack, select_window,
-    collate_prepared, UnsupportedDurationBoundary)
+    collate_prepared)
 from maidata.physical import PhysicalState
 from maidata.physical.attribution import AttributionState
 from maidata.physical.attribution import Evaluation, Evidence
@@ -85,18 +85,41 @@ def test_compiler_keeps_exact_ticks_query_cost_and_dropout_coordinates(monkeypat
                        labels.groups['HOLD_DURATION']['query_beats'][1])
 
 
-def test_beyond_local_gt_is_preserved_and_explicitly_untrainable(monkeypatch):
+def test_beyond_local_gt_is_preserved_and_trains_observed_prefix(monkeypatch):
     tokens = [Moment(0), Note.make('hold','A1'), HoldDuration(900)]
     record, supports, geometry = field_fixture(monkeypatch, tokens, audio_end=12., bpm=60)
     chart = ChartSupports(record, supports, geometry)
     value = compile_window(chart, dict(chart_id='0:5',window_id='deferred',start_tick=0,end_tick=192),
                            config(),12.,real_onsets(chart.tokens,chart.timing,sequence_start_tick=0))
-    assert value['labels'] is None
-    assert value['metadata']['unsupported_duration'][0]['exact_ticks'] == 900
-    assert value['deferred_supports'][1]['duration']['domain'][1] > 900
+    assert value['labels'] is not None
+    assert value['metadata']['duration_window_crossings'][0]['exact_ticks'] == 900
     assert value['metadata']['exact_fields'][1]['target']['ticks'] == 900
-    with pytest.raises(UnsupportedDurationBoundary, match='deferred'):
-        select_window(tensor_unpack(tensor_pack(value)), False)
+    group = value['labels']['groups']['HOLD_DURATION']
+    assert group['target'][0].shape == (1,385)
+    assert group['target'][0,0,384] and group['closes'][0,0]
+    assert group['query_beats'][0].tolist() == [0.]
+    selected = select_window(tensor_unpack(tensor_pack(value)), False)
+    assert selected['labels']['counts']['main'] == value['labels']['counts']['main']
+    assert value['tokens']['time'][2] == 900/96
+
+
+@pytest.mark.parametrize('kind', ['hold', 'slide'])
+def test_window_compiler_supervises_short_endpoint_outside_audio_window(monkeypatch, kind):
+    duration = HoldDuration(300) if kind == 'hold' else SlideDuration(200)
+    tokens = [Moment(0), Note.make(kind, 'A1')]
+    if kind == 'slide':
+        tokens.append(Route(0, 0))
+    tokens.append(duration)
+    record, supports, geometry = field_fixture(monkeypatch, tokens, audio_end=12., bpm=60)
+    chart = ChartSupports(record, supports, geometry)
+    value = compile_window(chart, dict(chart_id='0:5',window_id='outside-short',start_tick=0,end_tick=192),
+        dict(config(), audio_after_beats=1), 12., real_onsets(chart.tokens,chart.timing,sequence_start_tick=0))
+    group = value['labels']['groups'][duration.type]
+    assert group['target'][0,0,duration.ticks-1]
+    assert group['allowed'][0,0,duration.ticks-1]
+    assert group['target_steps'][0].sum() == 1
+    assert value['metadata']['duration_window_crossings'][0]['exact_ticks'] == duration.ticks
+    assert value['tokens']['time'][-1] == duration.ticks/96
 
 
 def test_cap_removes_unique_legal_completion_for_duration_type_and_wifi():
@@ -152,7 +175,8 @@ def test_note_minimum_hold_proxy_is_reprojected_at_sharp_bpm_boundary(monkeypatc
     assert not note['kind']['tap']['basic']
 
 
-def test_synthetic_incremental_export_uses_exact_source_without_old_tensor_io(monkeypatch,tmp_path):
+@pytest.mark.parametrize('old_schema', ['maidata.decoder-window-tensors.v2', 'maidata.decoder-window-tensors.v3'])
+def test_synthetic_incremental_export_uses_exact_source_without_old_tensor_io(monkeypatch,tmp_path,old_schema):
     """Synthetic manifests test orchestration, not acceptance of a real old asset."""
     from maidata.decoder_training import export_windows
     from maidata.decoder_training.window_cache import SCHEMA
@@ -183,7 +207,7 @@ def test_synthetic_incremental_export_uses_exact_source_without_old_tensor_io(mo
     monkeypatch.setattr(export_windows,'ProcessPoolExecutor',SerialPool)
     old = tmp_path/'old-continuous'
     old.mkdir()
-    old_manifest = dict(schema='maidata.decoder-window-tensors.v2',windows={
+    old_manifest = dict(schema=old_schema,windows={
         row['window_id']:dict(row,path='intentionally-absent-rounded-labels.pt') for row in rows})
     (old/'manifest.json').write_text(json.dumps(old_manifest),'utf-8')
     destination = tmp_path/'new-v3'
@@ -201,3 +225,17 @@ def test_synthetic_incremental_export_uses_exact_source_without_old_tensor_io(mo
     assert target[0,0,384] and target[0,1,0]
     assert json.loads((old/'manifest.json').read_text('utf-8')) == old_manifest
     assert not (old/'intentionally-absent-rounded-labels.pt').exists()
+
+
+def test_migration_cli_reports_trainable_crossing_windows(monkeypatch, tmp_path, capsys):
+    from maidata.decoder_training import migrate_windows
+    from maidata.decoder_training.window_cache import SCHEMA
+    config_path = tmp_path/'config.json'
+    config_path.write_text('{}', encoding='utf-8')
+    monkeypatch.setattr('sys.argv', ['migrate_windows', '--config', str(config_path),
+        '--source-windows', str(tmp_path/'old'), '--output', str(tmp_path/'new')])
+    monkeypatch.setattr(migrate_windows, 'export', lambda *a, **kw: dict(schema=SCHEMA,
+        windows={'long':dict(duration_window_crossings=[{'exact_ticks':900}]),
+                 'short':dict(duration_window_crossings=[])}))
+    migrate_windows.main()
+    assert json.loads(capsys.readouterr().out) == dict(schema=SCHEMA,windows=2,duration_crossing_windows=1)

@@ -28,7 +28,7 @@ def main(argv=None):
         rows.append(dict(start_beat=start, target_beats=target_beats,
                          reconstruction=asdict(r), planner=asdict(p), query_rows_required=len(r.rows),
                          query_cost=r.query_cost, original_time_fields=sum(t.first_time_step for t in r.rows),
-                         trainable=not r.deferred_durations))
+                         trainable=True))
     result = dict(schema='maidata.draft-local-query-targets.v2',
                   representation='relative-tick384-continue', chart=str(args.chart), source_end_beat=str(planner.source_end_beat), windows=rows,
                   query_rows_required=required_query_rows([r['query_rows_required'] for r in rows]))

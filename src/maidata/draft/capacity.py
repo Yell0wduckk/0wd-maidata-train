@@ -65,7 +65,8 @@ def measure_capacity(plan_path, split_path, *, chart_cache=None):
                              query_rows=len(target.rows), query_cost=target.query_cost,
                              original_time_fields=sum(r.first_time_step for r in target.rows),
                              moment_counts=target.moment_counts, query_roles=dict(counts),
-                             deferred_durations=target.deferred_durations))
+                             truncated_time_fields=sum(r.first_time_step and r.closed_by_continue
+                                 and r.query.role != 'MOMENT' for r in target.rows)))
     summary = _summary(rows)
     report = dict(schema='maidata.draft-query-cost.v2', plan=str(plan_path.resolve()),
                   split=str(split_path.resolve()), chart_cache=str(cache.resolve()),

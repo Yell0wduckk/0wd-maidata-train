@@ -9,7 +9,7 @@ from maidata.chart.types import HoldDuration, Moment, SlideDuration
 from maidata.chart.windows import TimeTarget
 from maidata.time import TimingMap, duration_end
 from maidata.time.discrete import (CONTINUE, TIME_CLASSES, TimeQuery,
-    UnsupportedDurationError, compile_support_tree, compile_time_target,
+    compile_support_tree, compile_time_target,
     decode_ticks, duration_cap, encode_ticks, local_z_indices, substep_masks)
 from maidata.time.distribution import (complete_field_log_probabilities,
     masked_log_probs, physical_categories, physical_mean, time_path_nll)
@@ -201,13 +201,14 @@ def test_truncated_cont_chain_is_rejected():
                                          torch.zeros(1, dtype=torch.bool))
 
 
-def test_deferred_local_duration_and_inference_no_gt():
+def test_local_duration_query_prefix_and_inference_no_gt():
     timing = TimingMap([(0, 120), (2, 240)])
     support = stage('duration', 1, 10000, origin=96)
-    with pytest.raises(UnsupportedDurationError) as info:
-        compile_support_tree(support, timing, kind='SLIDE_DURATION', window_end=384,
-                             cap_tick=480, target=SlideDuration(1000))
-    assert info.value.exact_ticks == 1000 and info.value.cap_ticks == 144
+    trained = compile_support_tree(support, timing, kind='SLIDE_DURATION', window_end=384,
+                                   cap_tick=480, target=SlideDuration(1000))
+    assert trained.target_path.exact_ticks == 1000
+    assert trained.target_path.closed_by_continue
+    assert trained.elapsed_ticks == (0,)
     tree = compile_support_tree(support, timing, kind='SLIDE_DURATION', window_end=384, cap_tick=480)
     assert tree.target_path is None and not any(tree.target_steps)
     assert not any(any(row) for row in tree.target)

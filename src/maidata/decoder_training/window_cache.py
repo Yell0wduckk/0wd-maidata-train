@@ -9,7 +9,7 @@ from torch.nn.functional import pad
 from maidata.decoder.types import TokenBatch
 from .supervision import Prepared, KEYS
 
-SCHEMA = 'maidata.decoder-window-tensors.v3'
+SCHEMA = 'maidata.decoder-window-tensors.v4'
 CONFIG_KEYS = ('target_beats', 'audio_after_beats', 'chart_history_beats')
 
 
@@ -17,7 +17,7 @@ def contract(config, binding):
     # Source assets retain their producer identities; path relocation is harmless.
     return dict(config={k: config[k] for k in CONFIG_KEYS},
                 time_representation='relative-tick384-continue',
-                duration_domain='local-audio-window-intersect-song-end',
+                duration_domain='full-source-support-observed-query-prefix',
                 inputs={k: binding[k] for k in ('plans', 'physical', 'geometry', 'slide_data',
                                                'pretrain_chart_cache')})
 
@@ -62,7 +62,7 @@ class WindowCache:
         path = self.root / 'manifest.json'
         meta = json.loads(path.read_text(encoding='utf-8'))
         if meta.get('schema') != SCHEMA:
-            raise ValueError('Decoder requires exact tick384 query windows (v3); recompile from original-v2 fields/supports')
+            raise ValueError('Decoder requires observed-prefix tick384 query windows (v4); recompile supervision from unchanged original-v2 fields/supports')
         self.windows = meta['windows']
         for plan in plans:
             plan._lengths = {w['window_id']: tuple(self.windows[w['window_id']]['lengths']) for w in plan.windows}
@@ -77,17 +77,9 @@ class WindowCache:
                                         map_location='cpu', weights_only=True))
 
 
-class UnsupportedDurationBoundary(ValueError):
-    """An exact GT duration needs the explicitly deferred beyond-window mechanism."""
-
-
 def select_window(value, dropped):
-    unsupported = value.get('metadata', {}).get('unsupported_duration', ())
-    if unsupported:
-        meta = value['metadata']
-        raise UnsupportedDurationBoundary(
-            f"{meta.get('window_id')}: GT duration exceeds local audio window; "
-            f"exact source/support retained, training labels deferred: {unsupported}")
+    if value['labels'] is None:
+        raise ValueError('old deferred window has no supervision; compile labels from unchanged exact source/supports')
     history = value['history']
     start = history if dropped else 0
     tokens = {k: v[start:] for k, v in value['tokens'].items()}

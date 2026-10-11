@@ -85,7 +85,8 @@ def prepare(windows):
                         torch.arange(2)==target.track_break, physical=0, args=(target.route_id,))
             else:
                 tree = compile_support_tree(s,timing,target=target,kind=name,
-                                            window_end=w.end_tick,cap_tick=w.cap_tick)
+                                            window_end=w.end_tick,cap_tick=w.cap_tick,
+                                            audio_end_seconds=row['audio_end'])
                 allowed = torch.tensor(tree.basic, dtype=torch.bool)
                 penalty = torch.tensor(tree.penalty, dtype=torch.bool)
                 target_mask = torch.tensor(tree.target, dtype=torch.bool)

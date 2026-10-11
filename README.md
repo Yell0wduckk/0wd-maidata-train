@@ -8,7 +8,7 @@
 
 独立的 `maidata.chart`、`maidata.time` 与 `maidata.physical` 已实现新字段的数据与规则层：IR编解码、Route-71连续链/分支、时间标签、Physical候选查询及动作回退。它们不实现可学习字段模块或Decoder网络，说明见[新字段与Physical](docs/chart-fields-physical.md)。
 
-当前R采用独立局部字段查询，保留一拍一个128维Z与目标全部16拍Planner；主M保留type/kind/pad/flags/route，Router、真实历史KV和临时字段位置分开。三种时间均使用385类`1..384+CONT`，CONT不增加真实事件或主KV。训练入口默认GT plan，自由推理用P预测。新v3监督从精确原谱和完整整数支持重新编译，增量/从零共用入口，见[迁移命令](docs/time384-cache-migration.md)。超本地音频窗GT duration保持精确记录并明确报告为延期边界。
+当前R采用独立局部字段查询，保留一拍一个128维Z与目标全部16拍Planner；主M保留type/kind/pad/flags/route，Router、真实历史KV和临时字段位置分开。三种时间均使用385类`1..384+CONT`，CONT不增加真实事件或主KV。训练入口默认GT plan，自由推理用P预测。新v4监督从精确原谱和完整整数支持重新编译，增量/从零共用入口，见[迁移命令](docs/time384-cache-migration.md)。超本地音频窗GT duration保持完整值，监督到跨窗CONT或窗内发出的最后短值；源原谱/Physical资产不变。
 
 仅覆盖 Encoder 的模块、接口与验证要求见 [实施文档](../0wd-v3-refactor-docs/encoder-execution-plan.md)。
 

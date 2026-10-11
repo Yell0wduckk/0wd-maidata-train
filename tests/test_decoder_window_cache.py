@@ -49,7 +49,6 @@ def test_compiled_history_dropout_chain_and_terminal_match_oracle(config, monkey
         w = example(chart,start,start+192,drop=dropped,audio_end=12)
         oracle = AttributionState(PhysicalState(chart.timing,geo,audio_end_seconds=12))
         oracle.restore(chart.before_window(start))
-        oracle.duration_end_seconds = min(12,chart.timing.second(w.cap_tick))
         wanted.append(dict(example=w,stages=window_stages(w,oracle),timing=chart.timing,audio_end=12))
     tokens, types, actual = collate_prepared(cached)
     expected_tokens, expected_types, _ = collate_windows([w['example'] for w in wanted],device='cpu')
@@ -83,6 +82,13 @@ def test_window_manifest_supplies_lengths_and_reads_only_tensors(config,tmp_path
     assert plan._lengths == {'a':(3,2)}
     with patch('torch.isfinite',side_effect=AssertionError('runtime validation')):
         assert torch.equal(cache.read('a')['values'],torch.arange(7))
+
+
+def test_previous_v3_local_cap_labels_are_not_read_as_observed_prefix(config, tmp_path):
+    (tmp_path/'manifest.json').write_text(json.dumps(dict(schema='maidata.decoder-window-tensors.v3')),
+                                         encoding='utf-8')
+    with pytest.raises(ValueError, match='observed-prefix'):
+        WindowCache([], dict(config,decoder_train_window_cache=str(tmp_path)), {})
 
 
 def test_entire_training_batch_avoids_chart_rules_and_tensor_validation(config,monkeypatch):

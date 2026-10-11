@@ -1,7 +1,7 @@
 """Incrementally recompile selected old windows from exact original-v2 sources.
 
-Only the old small manifest is read. Rounded v1/v2 tensor labels are never
-decoded or used to infer ticks. Fresh export uses the same compile_window.
+Only the old small manifest is read. Rounded v1/v2 or local-cap v3 labels are
+never used to infer ticks. Fresh export uses the same compile_window.
 """
 import argparse
 import json
@@ -24,7 +24,8 @@ def main():
     result = export(config, workers=args.workers, window_ids=args.window_id,
                     source_windows=args.source_windows)
     print(json.dumps(dict(schema=result['schema'], windows=len(result['windows']),
-                          unsupported_windows=result['unsupported_windows'])), flush=True)
+        duration_crossing_windows=sum(bool(w['duration_window_crossings'])
+                                      for w in result['windows'].values()))), flush=True)
 
 
 if __name__ == '__main__':

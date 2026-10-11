@@ -35,7 +35,7 @@ P 使用独立窗口和 mask，读取目标 `[s,s+16)` 全部有效 Z。GT plan1
 
 窗首起音直接创建 NOTE 查询，无零 delta MOMENT。每个有效拍保留 97 类 MOMENT count，零类监督空拍。末尾创建角色仍为普通 MOMENT 的终止查询；exact/censored/closed-by-continue 元数据只用于标签和控制，不作为模型输入。首次短值或 CONT 跨谱面窗尾时停止该字段；CONT 不代表假起音。右删失使用短值尾部加 CONT 的集合 NLL。
 
-duration 保持 NOTE written-BPM 单位。Slide 从 `T(onset+96)` 启动；CONT query 用实际秒数反算拍位，跨 BPM 后不更换 written 单位。生成域为本地音频窗尾与真实音频尾的交集。超 cap GT 保存在 `WindowTarget.deferred_durations`，包含源索引、精确 tick、cap 和 route 链；导出明确标记 `trainable=false`。collator 报出受影响窗口，不截短、不删除实例、不生成部分训练样本。该边界处理机制仍延期。
+duration 保持 NOTE written-BPM 单位。Slide 从 `T(onset+96)` 启动；CONT query 用实际秒数反算拍位，跨 BPM 后不更换 written 单位。GT 组织和完整 tick 值不变，监督包含第一个将 query 游标推进到音频窗尾或其外的 CONT，之后不再查询。如果最后一个非 CONT 从窗内发出，即使落点在窗外也正常监督。音频边界取本地窗尾和真实音频尾的交集，按实际秒数判定：边界在 384.25 tick 时，384 处仍可查询。每个原字段仍只计一次分母，导出保持 `trainable=true`，不删除窗口或 occurrence。
 
 ## 张量和组合
 

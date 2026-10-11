@@ -8,7 +8,7 @@
 
 `training.data`使用原仓库同类PyTorch Dataset/Collator/DataLoader：默认12个persistent workers，每worker计算线程数为1。每个Dataset项是一整个audio_variant组；采样器保持既有seed/epoch组间和组内排列，不能跨组找小曲回填。训练与验证直接消费已验收的计划和缓存，不执行输入校验或启动扫描。
 
-Dataset/Collator关闭共享读取器和标签适配器的`validate_input`，不重复扫描Mel/aux32、重放谱面语法、验证token/拍时间表或核对窗口覆盖。Encoder/D/R/P前向和loss适配不再检查输入shape/dtype、有限值、坐标、条件范围、mask一致性或监督计数。正常mask、索引、归约和token预算仍参与计算；R使用动态padding的独立查询，无固定行容量。超本地音频窗GT duration保留精确记录并明确报出延期边界，不产生部分训练样本。离线缓存生产和显式验收保留独立校验；不新增训练校验配置开关。
+Dataset/Collator关闭共享读取器和标签适配器的`validate_input`，不重复扫描Mel/aux32、重放谱面语法、验证token/拍时间表或核对窗口覆盖。Encoder/D/R/P前向和loss适配不再检查输入shape/dtype、有限值、坐标、条件范围、mask一致性或监督计数。正常mask、索引、归约和token预算仍参与计算；R使用动态padding的独立查询，无固定行容量。超本地音频窗GT duration保留完整值，监督包含跨窗CONT后停止；窗内发出的最后非CONT即使落点在窗外也正常监督，仍按原字段计数。离线缓存生产和显式验收保留独立校验；不新增训练校验配置开关。
 
 `training.network.Pretrainer`负责组合，E/D/R/P不持有彼此。E每组计算一次全曲G0，每个音频覆盖窗编码一次，中心P0拼成全曲bank；同音频不同等级/难度各生成完整逐拍Z，共享音频计算。R/P读取所有基础窗；R按真实适用字段创建独立局部查询，三种时间使用385类CONT路径，P独立读取目标全部16拍并预测plan12。无detach或跨参数更新缓存。
 

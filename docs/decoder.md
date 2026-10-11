@@ -57,12 +57,12 @@ Hold query 从 NOTE 起音开始，Slide 从全局拍轴的 `onset+96` 启动位
 
 新监督从精确原谱 v2 和完整 Physical 整数区间编译，不能从旧 4 tick duration 标签反推精确 tick。训练仅以 basic support 归一化，首次 penalty 位只用于 Physical loss；生成以同一完整完成的 raw 四类联合合法性作 hard mask。CONT 合法要求存在一个完整合法长值，不能分别按四类存在性拼接。
 
-精确时间 loss 是规范路径各步 NLL 之和；右删失末步对兼容短值加 CONT 的集合概率取 NLL。一个原始时间字段只计一次主 loss 分母和一次 Physical 内容分母。Physical 展开全部可达 CONT 深度的短值叶，按 CONT 前缀概率相乘；首次跨窗 CONT 和跨窗短值是零罚终止叶，后续不再展开。稳定合法补集 logsumexp 与 FP32 epsilon floor 保留，避免 `1-q` 消减和全违规无穷梯度。
+精确时间 loss 是监督路径各步 NLL 之和；右删失末步对兼容短值加 CONT 的集合概率取 NLL。一个原始时间字段只计一次主 loss 分母和一次 Physical 内容分母。Physical 展开全部可达且 query 仍在窗口内的 CONT 深度，按 CONT 前缀概率相乘。MOMENT 跨谱面窗尾的短值和 CONT 是零罚终止叶；duration 跨音频窗尾的 CONT 是未完成字段的零罚叶，不再展开，但窗内发出、窗外结束的短值仍保留完整源区间的 Physical 处罚。稳定合法补集 logsumexp 与 FP32 epsilon floor 保留，避免 `1-q` 消减和全违规无穷梯度。
 
 NOTE 的 kind/pad 各 0.5，四类权重 `(1,1,4,1)/4`；flags 不连接 Physical 梯度。几何两项各按 ROUTE 数归约。所有窗口/分块先相加分子和计数，再使用逻辑 batch 的共同分母；内部查询成本与真实主序列长度分开记录。
 
-GT duration 超出本地 U 是明确延后的边界：缓存保留精确源值和旧完整支持，报告受影响窗口，训练读取时明确报 `UnsupportedDurationBoundary`；不截短、不删除 occurrence、不伪造标签。旧资产保持只读。
+GT duration 保留完整源值、组织、支持和真实动作。监督包含跨出本地音频 U 的最后一个 CONT 后停止；最后非 CONT 从窗内发出时，其落点超出 U 也正常监督。后续 teacher history/Physical 继续消费完整 GT，CONT 不变成主序列事件。`compile_support_tree` 有 GT 时采用此监督规则；无 GT 的生成路径保持现有完整 duration 的局部 cap，不把训练截断标记当成生成 MOMENT。原谱/Physical v2 源资产和迁移不受监督规则影响。
 
-新完整轮 checkpoint 为 `maidata.decoder-training.v3`，架构身份 `maidata.decoder-field-query-tick384.v1`。旧 v1/v2 的时间头和 optimizer 不能冒充新架构完整轮 resume。新窗口为 `maidata.decoder-window-tensors.v3`；迁移和从零生产共用编译器，命令见[阶段二训练](decoder-training.md)。
+新完整轮 checkpoint 为 `maidata.decoder-training.v3`，架构身份 `maidata.decoder-field-query-tick384.v1`。旧 v1/v2 的时间头和 optimizer 不能冒充新架构完整轮 resume。新监督窗口为 `maidata.decoder-window-tensors.v4`，区分旧 v3 的局部 cap 标签；完整原谱和 Physical 源仍为 v2。迁移和从零生产共用编译器，命令见[阶段二训练](decoder-training.md)。
 
 CPU 定向测试覆盖 Router 隔离、并行/增量等价、独立字段读取、梯度、完整字段概率/归约、CONT 不写 KV/Physical、链/分支回退与完整轮恢复。CPU 证据不代表 CUDA 原 batch、吞吐、正式训练或真实权重评谱已经执行。

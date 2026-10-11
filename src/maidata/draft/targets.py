@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 
 from maidata.chart.types import Note, Route, HoldDuration, SlideDuration, APPLICABLE
-from maidata.time.discrete import compile_time_target, duration_cap, TIME_CLASSES
+from maidata.time.discrete import compile_time_target, duration_cap, duration_query_limit, TIME_CLASSES
 from .schema import KINDS, FIELD_SIZES, TIME_FIELDS, QUERY_ROLES
 
 
@@ -39,7 +39,6 @@ class TargetRow:
 class WindowTarget:
     rows: tuple[TargetRow, ...]
     moment_counts: tuple[int, ...]
-    deferred_durations: tuple = ()
 
     @property
     def query_cost(self):
@@ -50,8 +49,8 @@ def reconstruction_target(chart, *, start_tick, target_beats, audio_after_beats=
                           audio_end_seconds=None, validate_input=True):
     """Labels arrange queries; each query sees only its own known prefix.
 
-    Out-of-cap GTs remain exact deferred records. Collation refuses those
-    windows so they cannot silently become shortened or partial examples.
+    Full GT durations remain exact; only their query supervision stops at the
+    first CONT that leaves the observed audio window.
     """
     if audio_after_beats is None:
         from maidata.entry import CONFIG
@@ -60,16 +59,17 @@ def reconstruction_target(chart, *, start_tick, target_beats, audio_after_beats=
         raise ValueError('R targets require an integer start tick and positive beat length')
     end_tick = start_tick + 96 * target_beats
     upper_tick = end_tick + 96 * audio_after_beats
-    rows, counts, deferred = [], [0] * target_beats, []
+    rows, counts = [], [0] * target_beats
     earlier = [g.tick for g in chart.groups if g.tick < start_tick]
     last_real = earlier[-1] if earlier else None
     cursor, cursor_boundary = start_tick, True
 
     def time_rows(role, origin, *, ticks=None, lower=None, ordinal=0, track=0,
-                  note_kind=-1, routes=(), source=None, cap=None):
+                  note_kind=-1, routes=(), source=None, cap=None, query_end=None):
         path = compile_time_target(role, ticks=ticks, censored_lower=lower,
             origin_tick=origin, timing=chart.timing,
-            window_end_tick=end_tick if role == 'MOMENT' else None)
+            window_end_tick=end_tick if role == 'MOMENT' else None,
+            duration_query_end_ticks=query_end)
         name = TIME_FIELDS[('MOMENT', 'HOLD_DURATION', 'SLIDE_DURATION').index(role)]
         for i, step in enumerate(path.steps):
             query = FieldQuery(role, step.query_beat, origin, step.elapsed_ticks,
@@ -77,7 +77,8 @@ def reconstruction_target(chart, *, start_tick, target_beats, audio_after_beats=
                                role == 'MOMENT' and cursor_boundary)
             minimum = 2 if role == 'HOLD_DURATION' else 1
             basic = tuple(c for c in range(TIME_CLASSES) if role == 'MOMENT' or
-                (minimum <= step.elapsed_ticks+c+1 <= cap if c < 384 else cap > step.elapsed_ticks+384))
+                (step.elapsed_ticks+c+1 >= minimum and (cap is None or step.elapsed_ticks+c+1 <= cap)
+                 if c < 384 else cap is None or cap > step.elapsed_ticks+384))
             rows.append(TargetRow({}, {name: ticks if ticks is not None else lower},
                 query, step.target_classes, i == 0, source, basic,
                 path.censored, path.closes_window, path.closed_by_continue, path.closed_lower_bound_tick))
@@ -108,14 +109,14 @@ def reconstruction_target(chart, *, start_tick, target_beats, audio_after_beats=
                 routes.append(token.route_id)
             elif isinstance(token, (HoldDuration, SlideDuration)):
                 role = token.type
-                cap = duration_cap(role, origin_tick=cursor, timing=chart.timing,
+                query_end = duration_query_limit(role, origin_tick=cursor, timing=chart.timing,
                     local_end_tick=upper_tick, audio_end_seconds=float('inf') if audio_end_seconds is None else audio_end_seconds)
-                if token.ticks > cap:
-                    deferred.append(dict(source_token_index=source, role=role, origin_tick=cursor,
-                        exact_ticks=token.ticks, local_cap=cap, route_prefix=tuple(routes)))
-                else:
-                    time_rows(role, cursor, ticks=token.ticks, ordinal=ordinal,
-                              track=track, note_kind=kind, routes=routes, source=source, cap=cap)
+                cap = None if audio_end_seconds is None else duration_cap(role,
+                    origin_tick=cursor, timing=chart.timing, local_end_tick=None,
+                    audio_end_seconds=audio_end_seconds)
+                time_rows(role, cursor, ticks=token.ticks, ordinal=ordinal,
+                          track=track, note_kind=kind, routes=routes, source=source,
+                          cap=cap, query_end=query_end)
                 if isinstance(token, SlideDuration):
                     track += 1
                     routes = []
@@ -126,7 +127,7 @@ def reconstruction_target(chart, *, start_tick, target_beats, audio_after_beats=
         time_rows('MOMENT', cursor, lower=max(1, upper_tick-cursor))
     if validate_input and any(n > 96 for n in counts):
         raise ValueError('more than 96 distinct MOMENTs in a beat')
-    return WindowTarget(tuple(rows), tuple(counts), tuple(deferred))
+    return WindowTarget(tuple(rows), tuple(counts))
 
 
 def required_query_rows(target_lengths):
@@ -142,10 +143,6 @@ def collate_reconstruction(targets, *, target_beats, device, query_rows=None, va
     from .types import ReconstructionQueries, ReconstructionTargets
     if not targets:
         raise ValueError('a nonempty reconstruction batch is required')
-    for w, target in enumerate(targets):
-        if target is not None and target.deferred_durations:
-            raise ValueError(f'GT duration beyond local audio window is deferred: batch window {w}: '
-                             f'{target.deferred_durations!r}')
     width = max(1, max((len(t.rows) for t in targets if t is not None), default=0))
     shape = (len(targets), width)
     fields = {n: torch.full(shape, -100, dtype=torch.long, device=device) for n in FIELD_SIZES}
