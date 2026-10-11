@@ -12,8 +12,10 @@ def parser():
     from .progress import DEFAULT_INTERVAL
     defaults = GenerationOptions()
     p = argparse.ArgumentParser(description='Current E/D/P + Decoder M full-song inference (new five-token fields).')
-    p.add_argument('--encoder-draft-checkpoint', help='Required for Z or predicted plan; unused for Z-off GT/none')
-    p.add_argument('--decoder-checkpoint', required=True)
+    p.add_argument('--encoder-draft-checkpoint', help='Required for legacy Z or predicted plan; unused for Z-off GT/none')
+    checkpoint = p.add_mutually_exclusive_group(required=True)
+    checkpoint.add_argument('--decoder-checkpoint', help='Stage-II M/E checkpoint; uses a separate Draft teacher')
+    checkpoint.add_argument('--joint-checkpoint', help='One jointly trained E/D/R/P/M checkpoint; shares E at inference')
     p.add_argument('--z-cross-attention', action=argparse.BooleanOptionalAction, default=None,
                    help='Inherit checkpoint by default; --no-z-cross-attention disables Z')
     p.add_argument('--plan-source', choices=('predicted', 'gt', 'none'), default='predicted')
@@ -61,7 +63,10 @@ def ir_metadata(timing, duration):
 
 
 def main(argv=None):
-    args = parser().parse_args(argv)
+    argument_parser = parser()
+    args = argument_parser.parse_args(argv)
+    if args.joint_checkpoint and args.encoder_draft_checkpoint:
+        argument_parser.error('--joint-checkpoint already supplies E/D/P/M; do not also supply --encoder-draft-checkpoint')
     from .progress import StderrProgress, stage
     progress = StderrProgress(interval=args.progress_interval) if args.progress else None
     with stage(progress, 'runtime'):
@@ -71,7 +76,7 @@ def main(argv=None):
         from maidata.physical import Geometry
         from maidata.preparation.cache import load_grid
         from maidata.time import TimingMap
-        from .checkpoint import load_models
+        from .checkpoint import load_models, load_joint_models
         from .conditioning import audio_grid, prepare_conditions, prepare_decoder_conditions, with_plan_source
         from .generation import generate, GenerationOptions
         from .materialize import read_json, write_json
@@ -86,8 +91,12 @@ def main(argv=None):
     timing_data = read_json(args.timing) if args.timing else dict(first_seconds=args.first_seconds, bpm=[[0, 1, args.bpm]])
     timing = TimingMap.from_audio_timing(timing_data)
     with stage(progress, 'models'):
-        models = load_models(args.encoder_draft_checkpoint, args.decoder_checkpoint, device=device,
-                             z_cross_attention=args.z_cross_attention, plan_source=args.plan_source)
+        if args.joint_checkpoint:
+            models = load_joint_models(args.joint_checkpoint, device=device,
+                z_cross_attention=args.z_cross_attention, plan_source=args.plan_source)
+        else:
+            models = load_models(args.encoder_draft_checkpoint, args.decoder_checkpoint, device=device,
+                                 z_cross_attention=args.z_cross_attention, plan_source=args.plan_source)
     with stage(progress, 'audio'):
         if args.grid:
             grid = load_grid(args.grid, mel_root=args.mel_root, validate_input=False)

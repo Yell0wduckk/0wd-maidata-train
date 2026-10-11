@@ -1,0 +1,21 @@
+{
+  "pretrain_train_plan": "/root/autodl-tmp/pilot320-encoder-draft-inputs-20261010/plans/train",
+  "pretrain_validation_plan": "/root/autodl-tmp/pilot320-encoder-draft-inputs-20261010/plans/validation",
+  "pretrain_chart_cache": "/root/autodl-tmp/chart-cache-original-v2-master-remaster-fields-20261010",
+  "pretrain_audio_cache": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/audio/encoder-inputs-all-official-20261010",
+  "pretrain_mel_root": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/audio/features",
+  "pretrain_source_root": "/root/autodl-tmp/pilot320-encoder-draft-inputs-20261010/sources",
+  "decoder_train_train_plan": "/root/autodl-tmp/0wd-v3-decoder-tests-11cfd7b-20261010/plans/train",
+  "decoder_train_validation_plan": "/root/autodl-tmp/0wd-v3-decoder-tests-11cfd7b-20261010/plans/validation",
+  "decoder_train_chart_cache": "/root/autodl-tmp/chart-cache-original-v2-master-remaster-fields-20261010",
+  "decoder_train_physical_cache": "/root/autodl-tmp/training-physical-v2-original-pilot320-20261010",
+  "decoder_train_audio_cache": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/audio/encoder-inputs-all-official-20261010",
+  "decoder_train_mel_root": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/audio/features",
+  "decoder_train_source_root": "/root/autodl-tmp/pilot320-encoder-draft-inputs-20261010/sources",
+  "decoder_train_geometry": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/physical/path-catalog",
+  "decoder_train_slide_data": "/root/autodl-tmp/0wd-v3-physical-20261010/resources/slide_data.json",
+  "decoder_train_route_distances": "/root/autodl-tmp/maimai-full-dataset-lr-fixed-20260911/slide-geometry/route-artifact/route_geometry.npz",
+  "decoder_train_window_cache": "/root/autodl-tmp/decoder-cont-token-20261011/windows-v5",
+  "decoder_train_gt_plan_cache": "/root/autodl-tmp/pilot320-gt-plan-7adb36c-20261010",
+  "joint_train_output": "/root/autodl-tmp/maidata-joint-z4-gt-20261011/training"
+}

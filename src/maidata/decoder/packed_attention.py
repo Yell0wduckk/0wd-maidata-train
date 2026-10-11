@@ -63,7 +63,8 @@ def condition_attention(module, x, beats, valid, kv, plan_index, layout):
         q = q.reshape(count, width, module.heads, 2*module.dim//module.heads).transpose(1, 2)
         k, v = [t.reshape(count, key_width, module.heads, 2*module.dim//module.heads).transpose(1, 2) for t in (k, v)]
         y = attend_condition(q, k, v, mask.reshape(count, key_width),
-            scale=1/math.sqrt(module.dim//module.heads), dropout_p=module.dropout if module.training else 0.)
+            scale=1/math.sqrt(module.dim//module.heads), dropout_p=module.dropout if module.training else 0.,
+            all_multiple='key_gather' in layout and key_width > 1)
         pieces.append(y[..., :module.dim//module.heads].transpose(1, 2).flatten(0, 1))
     selected = torch.cat(pieces).index_select(0, layout['restore']) if pieces else raw
     present = kv.valid.any(-1)[:, None].expand_as(valid).flatten().index_select(0, layout['indices'])

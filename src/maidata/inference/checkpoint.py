@@ -21,6 +21,44 @@ class Models:
     teacher_config: dict | None = None
 
 
+def load_joint_models(checkpoint, *, device, z_cross_attention=None, plan_source='predicted'):
+    """Load one jointly trained E/D/R/P/M file; inference does not construct R."""
+    payload = torch.load(checkpoint, map_location='cpu', weights_only=False)
+    if (payload.get('schema') != 'maidata.joint-training.v1'
+            or payload.get('architecture') != 'maidata.joint-encoder-draft-decoder.v1'):
+        raise ValueError('expected a v1 joint Encoder/Draft/Decoder checkpoint')
+    if plan_source not in ('predicted', 'gt', 'none'):
+        raise ValueError('plan_source must be predicted, gt or none')
+    config = dict(CONFIG, **payload['recipe'])
+    saved_z = config['decoder_z_cross_attention']
+    actual_z = saved_z if z_cross_attention is None else z_cross_attention
+    if type(actual_z) is not bool or actual_z and not saved_z:
+        raise ValueError('cannot enable Z on a checkpoint trained without its projection')
+    # Shared E supplies full-song center P0 to D and the original local P0 to M.
+    # This is the joint entry's audio contract, independent of legacy defaults.
+    config['decoder_train_audio_scope'] = 'window'
+    modules = dict(encoder=build_model(config), draft=build_draft(config),
+                   planner=build_planner(config), decoder=build_decoder(config))
+    state = {key: value for key, value in payload['model_state'].items()
+             if not key.startswith('reconstruction.')}
+    torch.nn.ModuleDict(modules).load_state_dict(state, strict=True)
+    for model in modules.values():
+        model.to(device).eval().requires_grad_(False)
+        for module in model.modules():
+            if hasattr(module, 'validate_inputs'):
+                module.validate_inputs = False
+    config['decoder_z_cross_attention'] = actual_z
+    modules['decoder'].condition.z_cross_attention = actual_z
+    description = dict(path=str(checkpoint), schema=payload['schema'],
+        epoch=payload.get('completed_epochs'), step=payload.get('step'), source=payload.get('source'))
+    provenance = dict(joint=description, encoder_draft=description, decoder=description,
+        training_plan_source=config.get('joint_train_plan_source', 'gt'),
+        inference_plan_source=plan_source, z_cross_attention=actual_z,
+        decoder_audio_scope='window', decoder_audio_encoder='shared_joint')
+    return Models(**modules, config=config, provenance=provenance,
+                  decoder_encoder=modules['encoder'], teacher_config=config)
+
+
 def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device, z_cross_attention=None, plan_source='predicted'):
     consumer = torch.load(decoder_checkpoint, map_location='cpu', weights_only=False)
     if (consumer.get('schema') != 'maidata.decoder-training.v4'

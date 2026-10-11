@@ -40,10 +40,10 @@ class ReconstructionHead(nn.Module):
                              self.base, self.scale).to(reference)
         return encoded.masked_fill(~mask[..., None], 0)
 
-    def _hidden(self, x, valid):
+    def _hidden(self, x, valid, indices=None):
         # Padding is never executed as an extra prediction query.
         flat = x.flatten(0, 1)
-        selected = valid.flatten().nonzero().flatten()
+        selected = valid.flatten().nonzero().flatten() if indices is None else indices
         active = flat.index_select(0, selected)
         hidden = self.norm(active + self.ffn(self.input_norm(active)))
         return flat.new_zeros(flat.shape).index_copy(0, selected, hidden).reshape_as(x)
@@ -70,7 +70,7 @@ class ReconstructionHead(nn.Module):
         return (self._positions(offset, valid, reference)
                 - self._positions(torch.zeros_like(offset), valid, reference))
 
-    def forward(self, windows, queries):
+    def forward(self, windows, queries, *, layout=None):
         m, q = windows.memory, queries
         active = windows.window_valid & m.valid.any(-1)
         # Use safe desired coordinates for inert padding, including NaN placeholders.
@@ -108,14 +108,14 @@ class ReconstructionHead(nn.Module):
         order = sinusoidal(prefix_positions, self.dim, self.base, self.scale).to(owned)
         prefix = self.route(prefix_ids)*(1+order)
         x = x + prefix.masked_fill(~prefix_valid[..., None], 0).sum(-2)
-        hidden = self._hidden(x, valid)
+        hidden = self._hidden(x, valid, None if layout is None else layout['query_indices'])
         count_beats = windows.target_start[:, None] + torch.arange(self.target_beats, device=owned.device)+.5
         centers, offset = self._block_coordinates(count_beats, windows.target_start)
         count_z, count_valid = self._owners(m, centers, active[:, None].expand(-1, self.target_beats))
         count_x = count_z+self.role.weight[QUERY_ROLES.index('COUNT')]
         if self.z_stride_beats > 1:
             count_x = count_x + self._beat_position(offset, count_valid, count_z)
-        count_hidden = self._hidden(count_x, count_valid)
+        count_hidden = self._hidden(count_x, count_valid, None if layout is None else layout['count_indices'])
         def predict(head, h, mask):
             return head(h).masked_fill(~mask[..., None], 0)
         return ReconstructionOutput(

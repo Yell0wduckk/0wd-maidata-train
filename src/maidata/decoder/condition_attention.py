@@ -10,7 +10,7 @@ def single_value(value, valid, query_length, dropout_p):
     return F.dropout(weights, p=dropout_p, training=dropout_p > 0) * value
 
 
-def attend(query, key, value, valid, *, scale, dropout_p):
+def attend(query, key, value, valid, *, scale, dropout_p, all_multiple=False):
     """Only rows with multiple valid keys enter Q/K softmax.
 
     Query validity is applied by the caller after its output projection. The
@@ -19,6 +19,10 @@ def attend(query, key, value, valid, *, scale, dropout_p):
     length = query.shape[2]
     if valid.shape[1] == 1:
         return single_value(value, valid, length, dropout_p)
+    if all_multiple:
+        # Worker buckets with key width > 1 contain only 2+ valid keys.
+        return F.scaled_dot_product_attention(query, key, value,
+            attn_mask=valid[:, None, None, :], scale=scale, dropout_p=dropout_p)
     counts = valid.sum(-1)
     single = (counts == 1).nonzero().flatten()
     multiple = (counts > 1).nonzero().flatten()

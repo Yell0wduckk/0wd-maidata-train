@@ -1,4 +1,4 @@
-"""Audio preparation, fixed E_D/D/P and optional joint-trained E_M execution."""
+"""Audio preparation for fixed teachers, independent E_M, or one shared joint E."""
 from dataclasses import dataclass, fields, is_dataclass, replace
 from contextlib import nullcontext
 
@@ -113,10 +113,42 @@ def prepare_decoder_conditions(encoder, config, grid, timing, duration, *, devic
 
 
 @torch.inference_mode()
+def prepare_joint_conditions(encoder, draft, planner, config, grid, timing, duration, *,
+                             difficulty, level, device, encoder_window_batch=8, progress=None):
+    """Encode each local window once; share its center P0 with the full-song D."""
+    c = dict(config, decoder_train_audio_scope='window')
+    local = prepare_decoder_conditions(encoder, c, grid, timing, duration, device=device,
+        encoder_window_batch=encoder_window_batch, progress=progress)
+    coverage, starts = local.coverage, local.starts
+    # The final complete target tail needs local audio for M, but contributes no
+    # new center coverage to D. Both banks reuse values from the same E forward.
+    centers = BeatMemory(*(getattr(local.audio, name)[:-1] for name in ('values', 'beats', 'valid')))
+    audio = assemble_full_p0(centers, torch.tensor(starts[:-1], device=device, dtype=torch.float32),
+        torch.zeros(len(starts)-1, device=device, dtype=torch.long), [coverage], p0_rate=c['fpn_rates'][0])
+    inputs, _ = make_draft_inputs([ChartCondition('inference', difficulty, level, str(level))],
+        ['inference'], [coverage], device=device, validate_input=False,
+        z_stride_beats=c['draft_z_stride_beats'])
+    with stage(progress, 'draft'):
+        z = draft(audio, inputs)
+    target_starts = torch.tensor(starts, device=device, dtype=torch.float32)
+    groups = torch.zeros(len(starts), device=device, dtype=torch.long)
+    valid = torch.ones(len(starts), device=device, dtype=torch.bool)
+    windows = select_windows(z, groups, target_starts, valid, target_beats=c['target_beats'],
+        before_beats=0, after_beats=0, z_stride_beats=c['draft_z_stride_beats'])
+    with stage(progress, 'planner'):
+        plans = planner(windows)
+    return Conditions(local.audio, z, plans.plan_values, plans.valid, starts, coverage, 'window')
+
+
+@torch.inference_mode()
 def prepare_conditions(encoder, draft, planner, config, grid, timing, duration, *,
                        difficulty, level, device, encoder_window_batch=8, progress=None,
                        decoder_encoder=None, teacher_config=None):
     """Fixed E_D -> D/P; optional independent E_M -> Decoder audio, each encoded once."""
+    if decoder_encoder is encoder:
+        return prepare_joint_conditions(encoder, draft, planner, config, grid, timing, duration,
+            difficulty=difficulty, level=level, device=device,
+            encoder_window_batch=encoder_window_batch, progress=progress)
     c = config if teacher_config is None else teacher_config
     if decoder_encoder is not None:
         check_shared_grid_config(c, config)

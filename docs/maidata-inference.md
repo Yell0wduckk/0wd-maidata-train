@@ -6,6 +6,7 @@
 
 ## 推理输入
 
+- 联合入口的 `maidata.joint-training.v1` 可单独通过 `--joint-checkpoint` 加载；E只构建一次，真实局部P0供D和M复用，包含完整空尾窗。训练/验证GT plan、默认推理P预测的差异仍明确记录。联合推理时不再传两个阶段checkpoint，其他参数沿用下方示例。见[联合训练](joint-training.md)。
 - 阶段二 `maidata.decoder-training.v4` checkpoint 提供联合训练后的 E_M/M。Z开启或使用预测plan时，还需阶段一 `maidata.encoder-draft-training.v3` checkpoint提供固定E_D/D/P；旧v1/v2及128维Z教师不通过隐式部分加载或补零扩维复用。Z关闭且plan为gt/none时只需阶段二权重。R不构建、不运行。
 - 教师与M分别按各自checkpoint的`recipe`构造，Encoder参数和网络容量独立，不用M配置覆盖D/P。当前推理共用一份音频grid，因此两者的`samples_per_beat`和`mel_bins`必须一致；加载器在构建网络前报告不匹配字段及两侧值，Python直接调用`prepare_conditions`也遵守同一输入约束。目标窗长度须一致，启用Z时M的Z投影宽度须匹配教师；关闭Z且使用GT/无plan时不加载或检查教师。不把E_M替换成E_D，也不让D读取E_M的P0。加载器严格恢复各模块，不比较权重或源码哈希，不加载optimizer、训练计划或训练缓存清单。
 - M要求架构身份`maidata.decoder-causal-cont-tick384.v2`，并严格加载v4的E_M/M成套参数。旧v1/v2连续时间头不兼容本次独立CONT序列与385类头，不能仅修改schema后加载或冒充完整轮续训。

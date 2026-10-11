@@ -27,6 +27,7 @@
 
 ## 导航
 
+- [从头联合训练：共享 Encoder、Z4、GT plan](docs/joint-training.md)
 - [当前源码状态](docs/current-runtime.md)
 - [Maidata Encoder 入口与张量接口](docs/maidata-entry.md)
 - [Draft D/R/P、窗口、标签与损失接口](docs/draft.md)
