@@ -43,7 +43,9 @@ python -m maidata.inference \
 {"first_seconds": 0.125, "bpm": [[0, 1, 120], [64, 1, 180]]}
 ```
 
-每个 BPM 项依次是拍坐标的分子、分母、BPM；首项拍坐标必须为0。恒定 BPM 可改用 `--bpm 120 --first-seconds 0.125`。输入 grid 必须是这首音频及该 timing 对应的 grid。直接从音频提取时，用 `--mel-stats /path/to/training-mel-stats.json` 替换 `--grid/--mel-root`。
+每个 BPM 项依次是拍坐标的分子、分母、BPM；首项拍坐标必须为0。恒定 BPM 可改用 `--bpm 120 --first-seconds 0.125`。输入 grid 必须是这首音频及该 timing 对应的 grid。直接从音频提取时，用 `--mel-stats /path/to/training-mel-stats.json` 替换 `--grid/--mel-root`。修改 first/BPM 后不能把旧 timing 的缓存重新标记为新 timing；调整偏移的推理可直接走 `--mel-stats`，按新 timing 提取输入。
+
+`first_seconds` 是谱面第0拍对应的音频秒数。推理目标窗固定从第0拍开始，随后为16、32……拍（实际步长沿用checkpoint的目标窗长度），不再从音频缓存的最早拍开始。全曲Encoder输入和局部音频输入都排除负拍；第一个窗的前4拍位置仍保留固定布局，但Mel/aux32全零且mask无效，不输入first之前的音频帧。后续窗口仅使用第0拍及之后的历史音频。first为负时，第0拍仍是推理起点，音频第0秒之前的部分补零并标为无效，原音频不移动、不裁切。既有grid只在内存裁剪或补齐，不修改缓存、训练窗口或特征算法；Physical仍按原音频范围限制真实音符。
 
 ```bash
 python -m maidata.inference.materialize \

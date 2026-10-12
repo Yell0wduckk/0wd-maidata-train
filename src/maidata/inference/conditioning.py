@@ -11,6 +11,7 @@ from maidata.draft.conditions import ChartCondition, make_draft_inputs
 from maidata.draft.types import BeatMemory
 from maidata.draft.windows import song_coverage, audio_windows, assemble_full_p0, select_windows
 from .input_contract import check_shared_grid_config
+from .inputs import beat_zero_grid
 from .progress import emit, stage
 
 
@@ -34,7 +35,7 @@ def audio_grid(audio_path, timing, stats, *, samples_per_beat):
     y, sr = read_wav(audio_path)
     duration = len(y) / sr
     pcm, tempo = linear_resample(y, sr, 24000), TempoMap(timing)
-    coordinates = grid_coordinates(tempo, duration, len(pcm), samples_per_beat)
+    coordinates = grid_coordinates(tempo, duration, len(pcm), samples_per_beat, first_beat=0)
     shape = coordinates['grid_k'].shape
     mel = mel_at_centers(pcm, coordinates['sample_indices'].ravel(),
                          coordinates['sample_valid'].ravel(), stats).reshape(*shape, 128)
@@ -83,7 +84,8 @@ def prepare_decoder_conditions(encoder, config, grid, timing, duration, *, devic
                                encoder_window_batch=8, progress=None):
     """Z-off GT/none inference runs only the independently trained E_M."""
     c = config
-    coverage = song_coverage(timing, duration, first_beat=int(grid['first_beat']), target_beats=c['target_beats'])
+    grid = beat_zero_grid(grid, timing)
+    coverage = song_coverage(timing, duration, first_beat=0, target_beats=c['target_beats'])
     starts = coverage.starts(include_tail=True)
     host = song_inputs([grid], validate_input=False)
     with stage(progress, 'decoder_encoder_global'):
@@ -149,13 +151,14 @@ def prepare_conditions(encoder, draft, planner, config, grid, timing, duration, 
         return prepare_joint_conditions(encoder, draft, planner, config, grid, timing, duration,
             difficulty=difficulty, level=level, device=device,
             encoder_window_batch=encoder_window_batch, progress=progress)
+    grid = beat_zero_grid(grid, timing)
     c = config if teacher_config is None else teacher_config
     if decoder_encoder is not None:
         check_shared_grid_config(c, config)
     local_decoder = decoder_encoder is not None and config.get('decoder_train_audio_scope', 'full_song') == 'window'
     separate_decoder = decoder_encoder is not None and any(c[k] != config[k] for k in ENCODER_KEYS)
     shared_decoder = None if separate_decoder else decoder_encoder
-    coverage = song_coverage(timing, duration, first_beat=int(grid['first_beat']), target_beats=c['target_beats'])
+    coverage = song_coverage(timing, duration, first_beat=0, target_beats=c['target_beats'])
     starts, mapping = audio_windows([coverage], device='cpu')
     with stage(progress, 'encoder_global'):
         host_song = song_inputs([grid], validate_input=False)

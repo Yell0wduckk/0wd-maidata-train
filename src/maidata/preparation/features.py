@@ -189,11 +189,11 @@ def aux32(acoustic_rhythm, times, beats, tempo, duration):
     return values
 
 
-def grid_coordinates(tempo, duration, num_samples, samples_per_beat):
+def grid_coordinates(tempo, duration, num_samples, samples_per_beat, *, first_beat=None):
     r = samples_per_beat
     if not isinstance(r,int) or r<=0:
         raise ValueError('samples_per_beat must be a positive integer')
-    first = int(np.floor(tempo.to_beats(0.)))
+    first = int(np.floor(tempo.to_beats(0.))) if first_beat is None else first_beat
     last = int(np.ceil(tempo.to_beats(duration)))
     integer_beats = np.arange(first, max(last, first+1))
     k = integer_beats[:,None]*r+np.arange(r,dtype=np.int64)

@@ -24,7 +24,8 @@ def parser():
     clock = p.add_mutually_exclusive_group(required=True)
     clock.add_argument('--timing', help='JSON: first_seconds and bpm=[[beat_num,beat_den,bpm], ...]')
     clock.add_argument('--bpm', type=float, help='Constant BPM; combine with --first-seconds')
-    p.add_argument('--first-seconds', type=float, default=0.)
+    p.add_argument('--first-seconds', type=float, default=0.,
+                   help='Audio time of chart beat zero; inference starts there, with no pre-zero audio context')
     features = p.add_mutually_exclusive_group(required=True)
     features.add_argument('--grid', help='Existing training-format audio grid NPZ; no feature recomputation')
     features.add_argument('--mel-stats', help='Fixed training Mel statistics JSON for extraction from audio')

@@ -77,14 +77,19 @@ def test_cli_end_to_end_cpu(config,tmp_path,native_miacode,precision,capsys):
     assert not (tmp_path/'result/model.ir.json').exists()
 
 
-def test_raw_audio_uses_training_features_and_partial_first_beat(tmp_path):
+@pytest.mark.parametrize('first', [.125, 0., -.125, -1.25])
+def test_raw_audio_uses_training_features_from_chart_beat_zero(tmp_path, first):
     import soundfile as sf
     signal=(.1*np.sin(np.arange(24000)*2*np.pi*440/24000)).astype(np.float32)
     sf.write(tmp_path/'audio.wav',signal,24000,subtype='FLOAT')
-    timing=dict(first_seconds=.125,bpm=[[0,1,120],[1,1,180]])
+    timing=dict(first_seconds=first,bpm=[[0,1,120],[1,1,180]])
     stats=dict(MEL_RECIPE,mean=[0.]*128,std=[1.]*128)
     grid,duration=audio_grid(tmp_path/'audio.wav',timing,stats,samples_per_beat=24)
-    assert duration==1 and int(grid['first_beat'])==-1
+    assert duration==1 and int(grid['first_beat'])==0
+    assert grid['sample_times_sec'][0,0]==pytest.approx(first)
+    assert grid['beat_centers'][0]==.5
+    if first < 0:
+        assert not grid['sample_valid'][grid['sample_times_sec'] < 0].any()
     assert grid['mel_patches'].shape[1:]==(24,128)
     assert grid['aux32_centers'].shape[-1]==32
     assert np.isfinite(grid['aux32_grid']).all()
