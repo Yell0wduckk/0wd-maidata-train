@@ -35,6 +35,10 @@ def parser():
     p.add_argument('--difficulty', type=int, required=True, choices=range(1, 8))
     p.add_argument('--level', type=float, required=True, help='Exact numeric target level, e.g. 14.5')
     p.add_argument('--output', required=True)
+    p.add_argument('--title', default='')
+    p.add_argument('--artist', default='')
+    p.add_argument('--designer', default='maidata')
+    p.add_argument('--cabinet', default='DX')
     p.add_argument('--device', default='cuda')
     p.add_argument('--precision', choices=('fp32', 'bf16'), default='bf16')
     p.add_argument('--temperature', type=float, default=defaults.temperature)
@@ -73,18 +77,20 @@ def main(argv=None):
     with stage(progress, 'runtime'):
         import torch
         import soundfile as sf
-        from maidata.chart import decode_chart, token_to_dict
         from maidata.physical import Geometry
         from maidata.preparation.cache import load_grid
         from maidata.time import TimingMap
         from .checkpoint import load_models, load_joint_models
         from .conditioning import audio_grid, prepare_conditions, prepare_decoder_conditions, with_plan_source
         from .generation import generate, GenerationOptions
-        from .materialize import read_json, write_json
+        from .materialize import read_json, write_json, write_playable
+        from .render import SimaiWriter
 
     output = Path(args.output)
-    names = ('generation.json', 'model.tokens.json', 'model.ir.json', 'generation-error.json')
-    if not args.force and any((output/n).exists() for n in names):
+    names = ('maidata.txt', 'generation.json', 'model.tokens.json', 'model.ir.json', 'generation-error.json')
+    track = output/('track'+Path(args.audio).suffix.lower())
+    if not args.force and (any((output/n).exists() for n in names)
+                           or track.exists() and track.resolve() != Path(args.audio).resolve()):
         raise FileExistsError(f'output already exists: {output}; use a new directory or --force')
     if args.encoder_window_batch < 1 or not math.isfinite(args.level):
         raise ValueError('encoder-window-batch must be positive and level finite')
@@ -112,7 +118,9 @@ def main(argv=None):
         max_tokens_per_window=args.max_tokens_per_window, max_tokens_per_moment=args.max_tokens_per_moment,
         max_backtracks_per_window=args.max_backtracks_per_window,
         rollback_tokens=args.rollback_tokens, physical_hard_mask=args.physical_hard_mask, trace=args.trace)
-    metadata = ir_metadata(timing, duration)
+    controls = [dict(kind='bpm', bpm=bpm, position_beats=dict(num=b.numerator, den=b.denominator))
+                for b, bpm in timing.points]
+    writer = SimaiWriter(controls, Fraction(math.ceil(timing.second_to_beat(duration)*96), 96))
     output.mkdir(parents=True, exist_ok=True)
     if args.force:
         # Remove only this command's previous products, so a failed replacement
@@ -133,10 +141,10 @@ def main(argv=None):
                     decoder_encoder=models.decoder_encoder, teacher_config=models.teacher_config)
             conditions = with_plan_source(conditions, args.plan_source, read_json(args.gt_plan) if args.gt_plan else None)
             with stage(progress, 'generation'):
-                encoded, windows = generate(models.decoder, conditions, timing, geometry, models.config, metadata,
-                                             duration, device=device, options=options, progress=progress)
-        with stage(progress, 'chart_ir'):
-            ir = decode_chart(encoded, geometry)
+                _, windows = generate(models.decoder, conditions, timing, geometry, models.config, {},
+                    duration, device=device, options=options, progress=progress,
+                    on_groups=writer.add_groups, return_chart=False)
+        chart = writer.finish()
     except Exception as exc:
         write_json(output/'generation-error.json', dict(error=str(exc), options=asdict(options),
                                                        checkpoints=models.provenance))
@@ -145,17 +153,17 @@ def main(argv=None):
     report = dict(schema='maidata.generation.v1', checkpoints=models.provenance,
         audio=str(Path(args.audio).resolve()), timing=timing_data, duration_seconds=duration,
         difficulty=args.difficulty, level=args.level, device=str(device), precision=args.precision,
-        options=asdict(options), config=models.config, windows=windows, moments=len(ir['moments']),
+        options=asdict(options), config=models.config, windows=windows, moments=writer.moments,
         physical_bypass_count=bypass, complete=True)
     with stage(progress, 'write_outputs'):
-        write_json(output/'model.tokens.json', dict(schema='maidata.generated-tokens.v1', start_tick=encoded.start_tick,
-            metadata=encoded.metadata, tokens=[token_to_dict(t) for t in encoded.tokens]))
-        write_json(output/'model.ir.json', ir)
+        report.update(write_playable(chart, timing.first_seconds, timing.points[0][1], args.audio, output,
+            difficulty=args.difficulty, level=args.level, title=args.title, artist=args.artist,
+            designer=args.designer, cabinet=args.cabinet))
         write_json(output/'generation.json', report)
         error_file = output/'generation-error.json'
         if error_file.exists():
             error_file.unlink()
-    print(json.dumps(dict(output=str(output.resolve()), windows=len(windows), moments=len(ir['moments']),
+    print(json.dumps(dict(output=str(output.resolve()), windows=len(windows), moments=writer.moments,
                           physical_hard_mask=args.physical_hard_mask, physical_bypass_count=bypass), ensure_ascii=False))
 
 

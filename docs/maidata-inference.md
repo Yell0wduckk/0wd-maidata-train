@@ -1,6 +1,6 @@
 # 当前模型整曲推理与 maidata 物化
 
-`python -m maidata.inference` 加载当前 `maidata` 的两套独立音频 Encoder、Draft D、Planner P 与 Decoder M，生成五类新字段和 Chart IR。阶段一 E_D 服务固定 Draft/Planner，阶段二 E_M 服务 M 的直接音频输入。`python -m maidata.inference.materialize` 独立把 IR 写成可播放的 `maidata.txt` 与配套音频。两者不导入旧 `maimai_*` Python 包，不读取旧模型版本表；旧仓库仅作为整曲调度、MiaCode 调用和 simai 排版的实现参考。
+`python -m maidata.inference` 加载当前 `maidata` 的两套独立音频 Encoder、Draft D、Planner P 与 Decoder M，生成五类新字段，按已提交窗口增量转译并直接输出可播放的 `maidata.txt`。阶段一 E_D 服务固定 Draft/Planner，阶段二 E_M 服务 M 的直接音频输入。`python -m maidata.inference.materialize` 独立把 IR 写成可播放的 `maidata.txt` 与配套音频。两者不导入旧 `maimai_*` Python 包，不读取旧模型版本表；物化写法从现有 MiaCode 导出器迁移，运行时不调用 MiaCode，不做回读。
 
 窗口与历史遵循 [推理设计](../../0wd-v3-refactor-docs/new-inference.md)、[Decoder 设计第5～6节](../../0wd-v3-refactor-docs/new-decoder.md)以及[当前字段接口](chart-fields-physical.md)。
 
@@ -49,14 +49,13 @@ python -m maidata.inference \
 
 ```bash
 python -m maidata.inference.materialize \
-  --ir /path/to/generated/song/model.ir.json \
+  --ir /path/to/existing/model.ir.json \
   --audio /path/to/song.wav \
-  --miacode /path/to/miacode_chart_ir \
   --difficulty 5 --level 14.5 --title "曲名" --artist "作者" \
   --output /path/to/playable/song
 ```
 
-`--miacode` 可为 Linux 可执行文件、Windows `miacode_chart_ir.exe`，或其所在目录。物化入口不需要 checkpoint、Torch 或 GPU。difficulty/level 与推理请求保持一致。
+上面的独立物化命令用于已有 IR；默认推理无需再执行此命令。物化使用纯 Python，不需要 MiaCode、checkpoint、Torch 或 GPU；`--miacode` 和 `--timeout` 已删除。两入口均支持 `--title/--artist/--designer/--cabinet`，difficulty/level 与推理请求保持一致。
 
 ## 配置与运行行为
 
@@ -128,16 +127,16 @@ Python接口`prepare_conditions(..., progress=None)`与`generate(..., progress=N
 | `time.discrete` | 与训练/迁移共用的时间编码、支持和临时query坐标 |
 | `physical.inference` | 推理专用raw规则查询、局部字段支撑及前缀缓存 |
 | `generation` | 全曲窗口、真实历史、prefill与增量K/V、同步规则快照回退 |
-| `materialize / simai` | 原生MiaCode调用、simai排版、语义回读、音频配套 |
+| `render / simai / materialize` | 已提交字段及已有IR的纯Python转译、持续拍号与四拍排版、音频配套 |
 
-推理写出 `model.tokens.json`（字段/NA/起始锚点）、`model.ir.json`、`generation.json`（权重路径与来源、实际配方、窗口/预测plan12、终端、bypass与是否完成）。不将源码来源说明变为加载门禁。
+默认推理逐窗将已提交的真实起音组直接转为simai文本，跳过IR构造和最终token包重建。搜索中的候选不写入文本，只有窗口成功结束后才发布该窗的完整音符，回退、CONT、空窗和跨窗动作不会产生重复音符。最后补齐尾部和排版后写出 `maidata.txt`、`track.<原扩展名>` 与 `generation.json`（权重来源、实际配方、窗口/预测plan12、终端、bypass与是否完成）；不再默认生成 `model.ir.json` 或 `model.tokens.json`。失败保留 `generation-error.json`，不导出未完成谱面。
 
-物化先调用MiaCode render，再dump回读，比较新字段的绝对起音、NOTE/flags、路线顺序/分支、duration及BPM时间轴；允许each组内原生排序和派生180Hz投影取整。超过4拍的空白间隔沿原仓库方式压缩，按4拍换行，不移动真实事件。出现负拍起音时平移导出拍原点并同步调整 `&first` 和BPM控制，音符的音频绝对时间不变。
+独立物化入口仍消费已有Chart IR，保留NOTE/flags、连续链、并行分支、WiFi、短hold、written-BPM时值和BPM/meter/HS控制的写法。超过4拍的空白间隔保持原有压缩和四拍换行，不移动真实事件。`{n}`持续生效，排版后删除重复声明，包括跨行的重复拍号：连续24tick输出 `{16}1,1,`，72tick接24tick输出 `{16}1,,,1,`。出现负拍起音时仍平移导出拍原点并同步调整 `&first` 和BPM控制，音符的音频绝对时间不变。
 
-成功写出 `maidata.txt`、`track.<原扩展名>`、`render.ir.json`、`reparsed.ir.json` 和 `materialization.json`。音频原样复制，不裁切、不变速；连续链保持共同head，分支保持并行，WiFi/短hold恢复为对应simai写法。
+独立物化写出 `maidata.txt`、`track.<原扩展名>`、`render.ir.json` 和 `materialization.json`（v2，renderer为python-simai），不生成 `reparsed.ir.json`，不报告未经执行的roundtrip。音频原样复制，不裁切、不变速。运行时完全没有MiaCode render/dump步骤；独立解析器的语义对照仅在开发测试中执行。
 
 ## 验证范围
 
-小型真实模型的CPU执行覆盖v3严格权重加载、全曲条件复用、Encoder分块等价、预测plan12、增量/prefill一致、字段条件采样、CONT不写KV/Physical、窗尾控制、回退、生成上限、跨窗完整动作及连续空窗。原生MiaCode保持完整语义token消费；CONT从不进入IR/maidata。CPU测试不代表真实权重CUDA整曲生成或谱面质量验收。
+小型真实模型的CPU执行覆盖v3严格权重加载、全曲条件复用、Encoder分块等价、预测plan12、增量/prefill一致、字段条件采样、CONT不写KV/Physical、窗尾控制、回退、生成上限、跨窗完整动作及连续空窗。测试使用原生MiaCode独立解析Python输出，对照全部71条路线及8个起点、flags、链/分支、时值和变BPM时间轴；CONT从不进入maidata。CPU测试不代表真实权重CUDA整曲生成或谱面质量验收。
 
 这些测试使用小模型/合成输入，不代表已对真实训练checkpoint完成CUDA整曲生成、速度或谱面质量验收。实际谱面质量以用户评谱为准。

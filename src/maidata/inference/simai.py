@@ -4,7 +4,7 @@ import math
 import re
 
 SPACING_POLICY = "over-four-beats-4-remainder-96-tick-384-v2"
-_INTERVAL = re.compile(r"\{(\d+)\}([^,\n]*)(,+)")
+_INTERVAL = re.compile(r"\{(\d+)\}([^,]*)(,+)")
 
 
 def bounded_render_document(document):
@@ -56,7 +56,10 @@ def four_beat_lines(chart):
     Commas and braces inside duration/slide expressions are never interpreted.
     This changes whitespace/subdivision spelling only, never musical time.
     """
-    text = ''.join(chart.splitlines())
+    # Meter directives consume the rest of their line in simai. Their newline
+    # is syntax; ordinary layout newlines may be removed before reflowing.
+    text = ''.join(part.replace('\r', '') if part.startswith('||') else ''.join(part.splitlines())
+                   for part in re.split(r'(\|\|[^\r\n]*(?:\r?\n|$))', chart))
     out, pending, tick, subdivision, depth, i = [], [], 0, 4, 0, 0
     while i < len(text):
         c = text[i]
@@ -90,3 +93,18 @@ def four_beat_lines(chart):
             pending.append(c)
         i += 1
     return ''.join(out + pending)
+
+
+def persistent_subdivisions(chart):
+    """A top-level {n} stays active across notes, controls and line breaks."""
+    active = None
+    def replace(match):
+        nonlocal active
+        if match[0].startswith('['):
+            return match[0]
+        subdivision = int(match[1])
+        if subdivision == active:
+            return ''
+        active = subdivision
+        return match[0]
+    return re.sub(r'\[[^\]]*\]|\{(\d+)\}', replace, chart)

@@ -9,6 +9,7 @@ import torch
 from test_inference import config, producer_config
 from test_chart_physical import geometry
 from test_pretrain_runtime import item
+from test_inference_materialize import write_audio
 from maidata.inference.__main__ import main
 from maidata.inference import conditioning
 from maidata.inference.checkpoint import load_models
@@ -109,6 +110,7 @@ def test_two_audio_encoders_share_only_inputs_and_layouts_not_draft_features(con
 
 def test_cli_v3_runs_both_encoders_and_reports_the_audio_source(config, tmp_path, geometry, capsys):
     paths, _, _, _, _ = checkpoints(config, tmp_path)
+    write_audio(tmp_path/'audio.wav')
     arguments = ['--encoder-draft-checkpoint', str(paths[0]), '--decoder-checkpoint', str(paths[1]),
                  '--audio', str(tmp_path/'audio.wav'), '--grid', str(tmp_path/'grid.npz'), '--bpm', '120',
                  '--geometry', 'unused', '--slide-data', 'unused', '--difficulty', '5', '--level', '14.5',
@@ -146,6 +148,7 @@ def test_unnormalized_cont_architecture_is_not_silently_loaded(config,tmp_path):
 def test_z_off_cli_uses_only_stage_two_and_masks_absent_plan(config, tmp_path, geometry, plan_source):
     c = dict(config, decoder_z_cross_attention=False, decoder_train_audio_scope='window')
     paths, _, _, _, _ = checkpoints(c, tmp_path)
+    write_audio(tmp_path/'audio.wav')
     plan = tmp_path/'gt-plan.json'
     # Audio duration 1.2 seconds produces one real window and one complete tail.
     coverage = conditioning.song_coverage(TimingMap([(0, 120)]), 1.2,
@@ -154,7 +157,7 @@ def test_z_off_cli_uses_only_stage_two_and_masks_absent_plan(config, tmp_path, g
     plan.write_text(json.dumps(dict(windows=[dict(start_beat=s, plan12=values)
                     for s in coverage.starts(include_tail=True)])))
     args = ['--decoder-checkpoint', str(paths[1]), '--no-z-cross-attention', '--plan-source', plan_source,
-            '--audio', 'unused.wav', '--grid', 'unused.npz', '--bpm', '120', '--geometry', 'unused',
+            '--audio', str(tmp_path/'audio.wav'), '--grid', 'unused.npz', '--bpm', '120', '--geometry', 'unused',
             '--slide-data', 'unused', '--difficulty', '5', '--level', '14.5', '--device', 'cpu',
             '--precision', 'fp32', '--encoder-window-batch', '1', '--output', str(tmp_path/'result'), '--no-progress']
     if plan_source == 'gt':

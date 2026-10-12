@@ -141,7 +141,8 @@ def chart_from_groups(groups, timing, metadata):
 
 
 @torch.inference_mode()
-def generate(decoder, conditions, timing, geometry, config, metadata, duration, *, device, options=None, progress=None):
+def generate(decoder, conditions, timing, geometry, config, metadata, duration, *, device, options=None,
+             progress=None, on_groups=None, return_chart=True):
     options = options or GenerationOptions()
     if (options.max_tokens_per_window < 1 or options.max_tokens_per_moment < 1
             or options.rollback_tokens < 1 or options.max_backtracks_per_window < 0):
@@ -186,6 +187,10 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
             previous = groups[-1].tick if groups else min(0, new[0].tick)
             new[0] = replace(new[0], delta_ms=timing.delta_ms(previous, new[0].tick))
             groups.extend(new)
+            # Only committed window content is published: search rollback cannot
+            # leak abandoned candidates into the playable chart.
+            if on_groups is not None:
+                on_groups(tuple(new))
         windows.append(dict(start_beat=start, end_beat=end_tick/96, history_tokens=history_count,
             boundary_delta_ms=boundary.delta_ms, generated_tokens=len(tokens), onsets=len(new),
             plan12=conditions.plans[i].float().cpu().tolist(),
@@ -194,4 +199,4 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
         emit(progress, 'window_done', window=i+1, windows=len(conditions.starts), tokens=len(tokens),
              backtracks=report['backtracks'], cursor_beat=session.rules.grammar.state.cursor/96,
              onsets=len(new))
-    return chart_from_groups(groups, timing, metadata), windows
+    return (chart_from_groups(groups, timing, metadata) if return_chart else None), windows

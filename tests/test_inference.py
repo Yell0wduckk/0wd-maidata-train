@@ -124,10 +124,18 @@ def test_new_fields_history_empty_windows_and_cross_window_actions(config, geome
         return original_prefill(model,memory,groups,clock,start_tick,history_beats,**kwargs)
     # Explicitly disable Physical hard rejection for this synthetic long-action
     # fixture; bypasses remain recorded. Actual rule state is still used.
+    committed = []
     with patch.object(Sampler,'choices',scripted), patch('maidata.inference.generation.prefill',capture):
         result, windows = generate(decoder,prepared,timing,geometry,c,ir_metadata(timing,duration),duration,
-            device='cpu',options=GenerationOptions(temperature=0,physical_hard_mask=False))
+            device='cpu',options=GenerationOptions(temperature=0,physical_hard_mask=False),
+            on_groups=committed.extend)
     groups = real_onsets(result.tokens,timing,sequence_start_tick=result.start_tick)
+    assert tuple(committed) == tuple(groups)
+    from maidata.inference.render import SimaiWriter, render_document, position
+    ir = decode_chart(result,geometry)
+    writer = SimaiWriter(ir['controls'],position(ir['render_end_beat']))
+    writer.add_groups(committed)
+    assert writer.finish() == render_document(ir)
     assert [g.tick for g in groups]==[192,1440,1536,1920]
     assert groups[2].delta_ms==pytest.approx(timing.delta_ms(1440,1536))
     history16, coords16, boundary16, last16 = seen[1][1]

@@ -1,4 +1,4 @@
-"""Exercise both user entrypoints with small real networks and native MiaCode."""
+"""Exercise both user entrypoints with small real networks and Python simai output."""
 import json
 from pathlib import Path
 import wave
@@ -10,16 +10,14 @@ import torch
 
 from test_inference import config, producer_config
 from test_pretrain_runtime import item
-from test_inference_materialize import native_miacode
 from maidata.model import build_model, build_draft, build_planner, build_decoder
 from maidata.inference.__main__ import main
-from maidata.inference.materialize import main as materialize_main
 from maidata.inference.conditioning import audio_grid
 from maidata.preparation.features import MEL_RECIPE
 
 
 @pytest.mark.parametrize('precision',['fp32','bf16'])
-def test_cli_end_to_end_cpu(config,tmp_path,native_miacode,precision,capsys):
+def test_cli_end_to_end_cpu(config,tmp_path,precision,capsys):
     root=Path(__file__).resolve().parents[3]
     geometry=root/'repos/maidata-baseline/training-dataset/full-dataset/runtime-lr-repaired/physical/path-catalog'
     slides=root/'tools/MiaCode/assets/reference/slide_data.json'
@@ -52,7 +50,11 @@ def test_cli_end_to_end_cpu(config,tmp_path,native_miacode,precision,capsys):
         '--audio',str(tmp_path/'audio.wav'),'--grid',str(tmp_path/'grid.npz'),'--bpm','120',
         '--geometry',str(geometry),'--slide-data',str(slides),'--difficulty','5','--level','14.5',
         '--device','cpu','--precision',precision,'--temperature','0','--output',str(tmp_path/'result')]
-    main(arguments)
+    # Default inference spells committed groups without constructing Chart IR
+    # or the otherwise optional final token bundle.
+    with patch('maidata.chart.decode_chart',side_effect=AssertionError('IR construction')), \
+         patch('maidata.inference.generation.chart_from_groups',side_effect=AssertionError('token bundle')):
+        main(arguments)
     captured=capsys.readouterr()
     assert json.loads(captured.out)['windows']==2
     assert 'Model loading: started' in captured.err and 'Writing outputs: done' in captured.err
@@ -60,10 +62,10 @@ def test_cli_end_to_end_cpu(config,tmp_path,native_miacode,precision,capsys):
     report=json.loads((tmp_path/'result/generation.json').read_text(encoding='utf-8'))
     assert report['complete'] and report['physical_bypass_count']==0 and len(report['windows'])==2
     assert report['moments']>0
-    materialize_main(['--ir',str(tmp_path/'result/model.ir.json'),'--audio',str(tmp_path/'audio.wav'),
-        '--output',str(tmp_path/'playable'),'--miacode',str(native_miacode),'--difficulty','5','--level','14.5'])
-    assert (tmp_path/'playable/maidata.txt').is_file()
-    assert (tmp_path/'playable/track.wav').is_file()
+    assert (tmp_path/'result/maidata.txt').is_file()
+    assert (tmp_path/'result/track.wav').read_bytes() == (tmp_path/'audio.wav').read_bytes()
+    assert not (tmp_path/'result/model.ir.json').exists()
+    assert not (tmp_path/'result/model.tokens.json').exists()
     with pytest.raises(FileExistsError):
         main(arguments)
     capsys.readouterr()
@@ -75,6 +77,7 @@ def test_cli_end_to_end_cpu(config,tmp_path,native_miacode,precision,capsys):
     assert (tmp_path/'result/generation-error.json').is_file()
     assert not (tmp_path/'result/generation.json').exists()
     assert not (tmp_path/'result/model.ir.json').exists()
+    assert not (tmp_path/'result/maidata.txt').exists()
 
 
 @pytest.mark.parametrize('first', [.125, 0., -.125, -1.25])

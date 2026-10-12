@@ -1,5 +1,4 @@
 """Native playable-file round trips, independently of the inference networks."""
-from copy import deepcopy
 import json
 import os
 from pathlib import Path
@@ -13,7 +12,13 @@ from test_chart_fields import geometry, complex_tokens
 from maidata.chart import EncodedChart, Moment, Note, Route, SlideDuration, decode_chart
 from maidata.time import TimingMap
 from maidata.inference.__main__ import ir_metadata
-from maidata.inference.materialize import materialize, write_json, check_roundtrip, render_origin
+from maidata.inference.materialize import materialize, write_json, render_origin
+
+
+def write_audio(path):
+    with wave.open(str(path), 'wb') as audio:
+        audio.setparams((1, 2, 24000, 0, 'NONE', 'not compressed'))
+        audio.writeframes(bytes(28800*2))
 
 
 @pytest.fixture
@@ -26,7 +31,7 @@ def native_miacode():
 
 
 @pytest.mark.parametrize('case',['complex','empty','negative','wait_across_bpm'])
-def test_native_playable_materialization(case,geometry,tmp_path,native_miacode):
+def test_playable_materialization(case,geometry,tmp_path):
     timing=TimingMap([(0,120),(1.5,240)],.125)
     tokens,start = complex_tokens(timing),0
     if case=='empty':
@@ -40,25 +45,41 @@ def test_native_playable_materialization(case,geometry,tmp_path,native_miacode):
     with wave.open(str(tmp_path/'audio.wav'),'wb') as f:
         f.setparams((1,2,24000,0,'NONE','not compressed'))
         f.writeframes(bytes(24000*2*5))
-    report=materialize(tmp_path/'model.ir.json',tmp_path/'audio.wav',tmp_path/'playable',native_miacode,
+    report=materialize(tmp_path/'model.ir.json',tmp_path/'audio.wav',tmp_path/'playable',
         difficulty=5,level=14.5,title='中文曲名',artist='test',designer='model')
-    assert report['roundtrip']
+    assert report['renderer'] == 'python-simai'
+    assert 'roundtrip' not in report and 'miacode' not in report
     result=(tmp_path/'playable/maidata.txt').read_text(encoding='utf-8')
     assert '&title=中文曲名' in result and '&lv_5=14.5' in result and '&inote_5=' in result
     assert (tmp_path/'playable/track.wav').read_bytes()==(tmp_path/'audio.wav').read_bytes()
-    recovered=json.loads((tmp_path/'playable/reparsed.ir.json').read_text(encoding='utf-8'))
-    check_roundtrip(render_origin(ir),recovered)
+    assert not (tmp_path/'playable/reparsed.ir.json').exists()
     with pytest.raises(FileExistsError):
-        materialize(tmp_path/'model.ir.json',tmp_path/'audio.wav',tmp_path/'playable',native_miacode,difficulty=5,level=14.5)
+        materialize(tmp_path/'model.ir.json',tmp_path/'audio.wav',tmp_path/'playable',difficulty=5,level=14.5)
 
 
-def test_semantic_roundtrip_rejects_changed_fields(geometry):
-    timing=TimingMap([(0,120)])
-    ir=decode_chart(EncodedChart((Moment(0),Note.make('tap','A1')),ir_metadata(timing,1.)),geometry)
-    changed=deepcopy(ir)
-    changed['moments'][0]['groups'][0]['notes'][0]['pad']='A2'
-    with pytest.raises(ValueError,match='changed generated'):
-        check_roundtrip(ir,changed)
+def check_roundtrip(expected, actual):
+    # Test-only independent parser comparison; production never reads back.
+    from maidata.chart import encode_chart, token_to_dict
+    from maidata.chart.types import Note
+    from maidata.decoder.windows import real_onsets
+    def events(document):
+        encoded = encode_chart(document)
+        result = []
+        for group in real_onsets(encoded.tokens, encoded.timing, sequence_start_tick=encoded.start_tick):
+            notes = []
+            for token in group.content:
+                if isinstance(token, Note):
+                    notes.append([])
+                notes[-1].append(token_to_dict(token))
+            result.append((group.tick, sorted(json.dumps(n, sort_keys=True) for n in notes)))
+        return encoded.timing, result
+    first, original = events(expected)
+    second, recovered = events(actual)
+    assert original == recovered
+    assert first.first_seconds == pytest.approx(second.first_seconds, abs=1e-8)
+    for beat in {b for b, _ in first.points} | {b for b, _ in second.points}:
+        assert first.bpm_at_beat(beat) == pytest.approx(second.bpm_at_beat(beat), abs=1e-8)
+        assert first.beat_to_second(beat) == pytest.approx(second.beat_to_second(beat), abs=1e-8)
 
 
 def test_materializer_import_does_not_load_models_torch_or_legacy_packages():

@@ -9,6 +9,7 @@ import torch
 from test_inference import config, producer_config
 from test_chart_physical import geometry
 from test_pretrain_runtime import item
+from test_inference_materialize import write_audio
 from maidata.inference.__main__ import main
 from maidata.inference.checkpoint import load_joint_models
 from maidata.inference.conditioning import prepare_conditions
@@ -161,7 +162,7 @@ def test_shared_encoder_reuses_exact_local_p0_including_tail(joint_config, tmp_p
 
 
 def arguments(path, tmp_path, precision='fp32'):
-    return ['--joint-checkpoint', str(path), '--audio', 'unused.wav', '--grid', 'unused.npz',
+    return ['--joint-checkpoint', str(path), '--audio', str(tmp_path/'audio.wav'), '--grid', 'unused.npz',
         '--bpm', '120', '--geometry', 'unused', '--slide-data', 'unused', '--difficulty', '5',
         '--level', '14.5', '--device', 'cpu', '--precision', precision, '--temperature', '0',
         '--output', str(tmp_path/'result'), '--no-progress']
@@ -170,6 +171,7 @@ def arguments(path, tmp_path, precision='fp32'):
 @pytest.mark.parametrize('precision', ['fp32', 'bf16'])
 def test_single_checkpoint_cli_generates_with_predicted_plan(joint_config, tmp_path, geometry, precision):
     path, _, _ = joint_checkpoint(joint_config, tmp_path)
+    write_audio(tmp_path/'audio.wav')
     with patch('maidata.preparation.cache.load_grid', return_value=item(0, joint_config)['grid']), \
          patch('soundfile.info', return_value=SimpleNamespace(frames=28800, samplerate=24000)), \
          patch('maidata.physical.Geometry.from_resources', return_value=geometry):
