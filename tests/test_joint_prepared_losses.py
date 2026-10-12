@@ -35,8 +35,9 @@ def compare_gradients(actual, expected, parameters, bf16):
 
 @pytest.mark.parametrize('empty', [False, True])
 @pytest.mark.parametrize('bf16', [False, True])
-def test_prepared_auxiliary_sparse_empty_padding_values_gradients_and_no_nonzero(config, empty, bf16):
-    c = dict(config, target_beats=16, draft_z_stride_beats=4)
+@pytest.mark.parametrize('count_loss', ['ce', 'mse'])
+def test_prepared_auxiliary_sparse_empty_padding_values_gradients_and_no_nonzero(config, empty, bf16, count_loss):
+    c = dict(config, target_beats=16, draft_z_stride_beats=4, reconstruction_count_loss=count_loss)
     source = chart() if empty else chart([(0, [Note.make('tap', 'A1')]),
         (95, [Note.make('slide', 'A2'), Route(0, 1), Route(3), SlideDuration(97)]),
         (4*96, [Note.make('touch', 'C')])])
@@ -82,14 +83,18 @@ def test_prepared_auxiliary_sparse_empty_padding_values_gradients_and_no_nonzero
         a, b = actual_terms[name], reference_terms[name]
         torch.testing.assert_close(a.total, b.total, rtol=0, atol=0)
         torch.testing.assert_close(a.count, b.count, rtol=0, atol=0)
-    assert actual_terms['empty'].count == 32
+    assert actual_terms['count' if count_loss == 'mse' else 'empty'].count == 32
     if empty:
-        assert actual_terms['moment96'].count == actual_terms['positive_count'].count == 0
+        assert actual_terms['moment96'].count == 0
+        if count_loss == 'ce':
+            assert actual_terms['positive_count'].count == 0
         assert all(term.count == 0 for name, term in actual_terms.items() if name.startswith('field/'))
     for a, b in zip(actual, reference):
         for name in a.__dataclass_fields__:
             one, two = getattr(a, name), getattr(b, name)
-            if isinstance(one, dict):
+            if one is None or two is None:
+                assert one is two
+            elif isinstance(one, dict):
                 for field in one:
                     torch.testing.assert_close(one[field], two[field], rtol=0, atol=0)
             else:

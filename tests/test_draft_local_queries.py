@@ -33,7 +33,7 @@ def memory():
 
 
 def model():
-    return build_reconstruction(dict(CONFIG, reconstruction_dropout=0.)).eval()
+    return build_reconstruction(dict(CONFIG, reconstruction_count_loss='ce', reconstruction_dropout=0.)).eval()
 
 
 def indices(target, role):
@@ -164,7 +164,7 @@ def test_empty_tail_has_no_field_queries_and_two_count_heads():
 
 def test_planner_reads_all_target_beats_independently():
     w = memory()
-    p = build_planner(dict(CONFIG, planner_dropout=0.)).eval()
+    p = build_planner(dict(CONFIG, reconstruction_count_loss='ce', planner_dropout=0.)).eval()
     grad = torch.autograd.grad((p(w).plan_values*torch.arange(12)).sum(), w.memory.values)[0]
     assert grad[0, 4:20].abs().sum(-1).gt(0).all()
     assert grad[0, :4].count_nonzero() == grad[0, 20:].count_nonzero() == 0

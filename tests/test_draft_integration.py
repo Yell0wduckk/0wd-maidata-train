@@ -50,7 +50,7 @@ def test_ownership_sorted_centers_padding_and_nonzero_origins():
 
 def small_chain():
     torch.manual_seed(5)
-    config = dict(CONFIG, mel_bins=7, samples_per_beat=5, d_model=18, heads=3, ffn_dim=28,
+    config = dict(CONFIG, reconstruction_count_loss='ce', mel_bins=7, samples_per_beat=5, d_model=18, heads=3, ffn_dim=28,
         stage_depths=(1, 1, 1), temporal_kernel_size=3, stem_channels=4, frequency_dim=6,
         frequency_queries=2, fpn_rates=(3, 2, 1), target_beats=3,
         audio_before_beats=2, audio_after_beats=1, dropout=0.,
@@ -79,7 +79,7 @@ def small_chain():
 
 @pytest.mark.parametrize('target,after,rate', [(2, 1, 1.5), (3, 0, .75)])
 def test_fractional_encoder_grid_is_preserved_by_full_p0(target, after, rate):
-    config = dict(CONFIG, mel_bins=7, samples_per_beat=4, d_model=12, heads=3, ffn_dim=20,
+    config = dict(CONFIG, reconstruction_count_loss='ce', mel_bins=7, samples_per_beat=4, d_model=12, heads=3, ffn_dim=20,
                   stage_depths=(1, 1, 1), temporal_kernel_size=3, stem_channels=4,
                   frequency_dim=4, frequency_queries=2, target_beats=target,
                   audio_before_beats=1, audio_after_beats=after,
@@ -188,8 +188,8 @@ def test_default_network_shapes_and_decoupled_imports():
         labels = collate_reconstruction([reconstruction_target(empty_chart, start_tick=16*96,
             target_beats=16)], target_beats=16, device='cpu')
         output = r(rw, labels.queries)
-        assert output.empty_logits.shape == (1, 16, 2)
-        assert output.positive_count_logits.shape == (1, 16, 96)
+        assert output.empty_logits is output.positive_count_logits is None
+        assert output.count_values.shape == (1, 16)
         assert output.moment_logits.shape == (1, labels.queries.valid.shape[1], 96)
         assert 'type' not in output.field_logits
     source = str(Path(__file__).resolve().parents[1] / 'src')

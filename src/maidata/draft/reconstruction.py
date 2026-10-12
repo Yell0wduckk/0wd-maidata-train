@@ -10,7 +10,7 @@ from .types import ReconstructionOutput
 
 class ReconstructionHead(nn.Module):
     def __init__(self, *, latent_dim, ffn_dim, dropout, norm_eps,
-                 target_beats, position_base, position_scale, z_stride_beats):
+                 target_beats, position_base, position_scale, z_stride_beats, count_loss):
         super().__init__()
         positive_ints(latent_dim=latent_dim, ffn_dim=ffn_dim, target_beats=target_beats)
         numerical_config(dropout, norm_eps, position_base, position_scale)
@@ -32,8 +32,14 @@ class ReconstructionHead(nn.Module):
         self.field_heads = nn.ModuleDict({'field_' + name: nn.Linear(latent_dim, n)
                                          for name, n in FIELD_SIZES.items()})
         self.moment_head = nn.Linear(latent_dim, MOMENT_CLASSES)
-        self.empty_head = nn.Linear(latent_dim, 2)
-        self.positive_count_head = nn.Linear(latent_dim, POSITIVE_COUNT_CLASSES)
+        if count_loss not in ('mse', 'ce'):
+            raise ValueError('unsupported reconstruction count loss')
+        self.count_loss = count_loss
+        if count_loss == 'mse':
+            self.count_head = nn.Linear(latent_dim, 1)
+        else:  # Explicit legacy checkpoint/recipe support.
+            self.empty_head = nn.Linear(latent_dim, 2)
+            self.positive_count_head = nn.Linear(latent_dim, POSITIVE_COUNT_CLASSES)
 
     def _positions(self, values, mask, reference):
         encoded = sinusoidal(values.masked_fill(~mask, 0).float(), self.dim,
@@ -122,6 +128,7 @@ class ReconstructionHead(nn.Module):
             {name.removeprefix('field_'): predict(head, hidden, valid)
              for name, head in self.field_heads.items()},
             predict(self.moment_head, hidden, valid),
-            predict(self.empty_head, count_hidden, count_valid),
-            predict(self.positive_count_head, count_hidden, count_valid),
-            active, valid, count_valid)
+            predict(self.empty_head, count_hidden, count_valid) if self.count_loss == 'ce' else None,
+            predict(self.positive_count_head, count_hidden, count_valid) if self.count_loss == 'ce' else None,
+            active, valid, count_valid,
+            predict(self.count_head, count_hidden, count_valid).squeeze(-1) if self.count_loss == 'mse' else None)

@@ -55,6 +55,8 @@ CONFIG = {
     "reconstruction_label_smoothing": 0.05,
     "reconstruction_classification_weight": 1.0,
     "reconstruction_moment_weight": 1.0,
+    "reconstruction_count_loss": "mse",
+    "reconstruction_count_weight": 1.0,
     "reconstruction_empty_weight": 1.0,
     "reconstruction_positive_count_weight": 1.0,
     "planner_continuous_weight": 1.0,

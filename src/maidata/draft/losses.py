@@ -29,7 +29,7 @@ def prepare_supervision(target, planner_target):
     beats = target.valid[:, None].expand_as(target.moment_counts)
     masks = {FIELD_PREFIX + name: active & (labels != -100)
              for name, labels in target.fields.items()}
-    masks.update(moment96=active & (target.moment_tick != -100), empty=beats,
+    masks.update(moment96=active & (target.moment_tick != -100), count=beats, empty=beats,
                  positive_count=beats & (target.moment_counts > 0))
     indices = {name: mask.flatten().nonzero().flatten() for name, mask in masks.items()}
     return dict(readout=dict(query_indices=active.flatten().nonzero().flatten(),
@@ -56,7 +56,7 @@ def _categorical(logits, labels, active, smoothing, indices=None):
 def reconstruction_loss(output, target, *, label_smoothing, prepared=None):
     if not 0 <= label_smoothing <= 1:
         raise ValueError('invalid reconstruction label smoothing')
-    device = output.empty_logits.device
+    device = output.moment_logits.device
     with torch.autocast(device_type=device.type, enabled=False):
         query_valid = target.valid[:, None] & target.queries.valid & output.query_valid
         terms = {}
@@ -69,6 +69,20 @@ def reconstruction_loss(output, target, *, label_smoothing, prepared=None):
         terms['moment96'] = _categorical(output.moment_logits, target.moment_tick,
                                         query_valid & (target.moment_tick != -100), 0., selected('moment96'))
         beat_valid = target.valid[:, None] & output.count_valid
+        if getattr(output, 'count_values', None) is not None:
+            # Linear raw count, no rounding/clipping/sigmoid in the training graph.
+            # Empty beats and the complete empty tail share the same denominator.
+            index = selected('count')
+            if index is None:
+                prediction = output.count_values.float()[beat_valid]
+                truth = target.moment_counts.float()[beat_valid]
+                count = beat_valid.sum()
+            else:
+                prediction = output.count_values.float().flatten().index_select(0, index)
+                truth = target.moment_counts.float().flatten().index_select(0, index)
+                count = target.moment_counts.new_tensor(len(index))
+            terms['count'] = LossTerm((prediction-truth).square().sum(), count)
+            return terms
         terms['empty'] = _categorical(output.empty_logits, (target.moment_counts > 0).long(),
                                       beat_valid, label_smoothing, selected('empty'))
         terms['positive_count'] = _categorical(output.positive_count_logits,

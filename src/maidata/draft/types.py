@@ -60,11 +60,12 @@ class PlannerOutput:
 class ReconstructionOutput:
     field_logits: dict[str, Tensor]
     moment_logits: Tensor
-    empty_logits: Tensor
-    positive_count_logits: Tensor
+    empty_logits: Tensor | None
+    positive_count_logits: Tensor | None
     valid: Tensor
     query_valid: Tensor
     count_valid: Tensor
+    count_values: Tensor | None = None
 
 
 @dataclass

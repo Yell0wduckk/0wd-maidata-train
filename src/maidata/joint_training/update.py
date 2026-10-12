@@ -55,8 +55,9 @@ class AuxiliaryMetrics:
         classification = sum(fields)/max(1, len(fields))
         reconstruction = classification * config['reconstruction_classification_weight']
         reconstruction += sum(terms[key]['mean'] * config[weight] for key, weight in (
-            ('moment96', 'reconstruction_moment_weight'), ('empty', 'reconstruction_empty_weight'),
-            ('positive_count', 'reconstruction_positive_count_weight')))
+            ('moment96', 'reconstruction_moment_weight'), ('count', 'reconstruction_count_weight'),
+            ('empty', 'reconstruction_empty_weight'), ('positive_count', 'reconstruction_positive_count_weight'))
+            if key in terms)
         planner = sum(terms[key]['mean'] * config[key+'_weight']
                       for key in ('planner_continuous', 'planner_category'))
         return dict(loss=reconstruction+planner, reconstruction=reconstruction, planner=planner,
@@ -90,7 +91,8 @@ class JointMetrics:
         r_weight = config['joint_train_reconstruction_weight']
         parts = dict(fields=auxiliary['classification']['mean'] * config['reconstruction_classification_weight'] * r_weight,
             moment=mean('moment96') * config['reconstruction_moment_weight'] * r_weight,
-            count=(mean('empty') * config['reconstruction_empty_weight']
+            count=(mean('count') * config['reconstruction_count_weight']
+                   + mean('empty') * config['reconstruction_empty_weight']
                    + mean('positive_count') * config['reconstruction_positive_count_weight']) * r_weight)
         losses = dict(main_decoder=weighted['decoder'],
             drafter=weighted['reconstruction'] + weighted['planner'],

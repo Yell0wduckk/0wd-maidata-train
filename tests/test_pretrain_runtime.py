@@ -29,7 +29,7 @@ from maidata.training import runner, checkpoint
 @pytest.fixture
 def config():
     torch.set_num_threads(1)
-    return dict(CONFIG, mel_bins=7, samples_per_beat=5, d_model=18, heads=3, ffn_dim=28,
+    return dict(CONFIG, reconstruction_count_loss='ce', mel_bins=7, samples_per_beat=5, d_model=18, heads=3, ffn_dim=28,
         stage_depths=(1, 1, 1), temporal_kernel_size=3, stem_channels=4, frequency_dim=6,
         frequency_queries=2, fpn_rates=(3, 2, 1), target_beats=3,
         audio_before_beats=2, audio_after_beats=1, dropout=0.,

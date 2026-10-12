@@ -20,7 +20,7 @@ from maidata.time import TimingMap
 
 @pytest.fixture
 def config():
-    return dict(CONFIG, d_model=18, draft_layers=2, draft_dim=24, draft_heads=3,
+    return dict(CONFIG, reconstruction_count_loss='ce', d_model=18, draft_layers=2, draft_dim=24, draft_heads=3,
                 draft_experts=3, draft_expert_ffn_dim=29, draft_latent_dim=24,
                 draft_dropout=0., planner_dim=16, planner_heads=2, planner_mlp_dim=23,
                 planner_dropout=0., reconstruction_ffn_dim=25, reconstruction_dropout=0.,

@@ -1,5 +1,6 @@
 """Whole-song E/D/R/P updates, validation and complete-epoch continuation."""
 from itertools import islice
+from collections import Counter
 import json
 import math
 from pathlib import Path
@@ -25,6 +26,7 @@ def supports(batch):
     return dict({FIELD_PREFIX + name: int(((labels != -100) & active).sum())
                  for name, labels in r.fields.items()},
         moment96=int(((r.moment_tick != -100) & active).sum()),
+        count=int(r.valid.sum()) * r.moment_counts.shape[1],
         empty=int(r.valid.sum()) * r.moment_counts.shape[1],
         positive_count=int(((r.moment_counts > 0) & r.valid[:, None]).sum()),
         planner_continuous=int(p.valid.sum()), planner_category=int(p.valid.sum()))
@@ -102,6 +104,8 @@ class Diagnostics:
         self.empty = torch.zeros(2, 2, dtype=torch.long)
         self.positive = torch.zeros(96, 96, dtype=torch.long)
         self.composed = [0, 0]
+        self.regression = dict(squared_error=0., absolute_error=0., correct=0, count=0)
+        self.count_truth, self.count_prediction = Counter(), Counter()
 
     @staticmethod
     def add_confusion(table, logits, labels, active):
@@ -118,6 +122,18 @@ class Diagnostics:
         self.add_confusion(self.moment, output.moment_logits, target.moment_tick,
                            active & (target.moment_tick != -100))
         beats = target.valid[:, None] & output.count_valid
+        if getattr(output, 'count_values', None) is not None:
+            prediction = output.count_values.float()[beats].detach().cpu()
+            truth = target.moment_counts[beats].detach().cpu()
+            rounded = prediction.round().clamp_min(0).long()
+            error = prediction-truth
+            self.regression['squared_error'] += float(error.square().sum())
+            self.regression['absolute_error'] += float(error.abs().sum())
+            self.regression['correct'] += int((rounded == truth).sum())
+            self.regression['count'] += len(truth)
+            self.count_truth.update(truth.tolist())
+            self.count_prediction.update(rounded.tolist())
+            return
         self.add_confusion(self.empty, output.empty_logits, (target.moment_counts > 0).long(), beats)
         self.add_confusion(self.positive, output.positive_count_logits, target.moment_counts - 1,
                            beats & (target.moment_counts > 0))
@@ -141,13 +157,33 @@ class Diagnostics:
             fields[name] = dict(**self.accuracy(table), confusion=table.tolist(),
                 class_support=support.tolist(), class_recall=recall,
                 rare_class_rule='least-supported observed classes', rare_class_recall=rare)
-        return dict(fields=fields,
+        result = dict(fields=fields,
             moment96_conditional=dict(**self.accuracy(self.moment),
                 true_distribution=self.moment.sum(1).tolist(), predicted_distribution=self.moment.sum(0).tolist()),
             empty=self.accuracy(self.empty),
             positive_count_gt_nonempty=self.accuracy(self.positive),
             composed_count=dict(correct=self.composed[0], count=self.composed[1],
                                 accuracy=self.composed[0]/max(1, self.composed[1])))
+        if self.regression['count']:
+            row, n = self.regression, self.regression['count']
+            result = {key: value for key, value in result.items()
+                      if key not in ('empty', 'positive_count_gt_nonempty', 'composed_count')}
+            result['count_regression'] = dict(count=n, mse=row['squared_error']/n,
+                mae=row['absolute_error']/n, rounded_correct=row['correct'],
+                rounded_accuracy=row['correct']/n,
+                rounding='nearest integer, clamped only below zero; raw values used for MSE/MAE',
+                true_distribution=dict(sorted(self.count_truth.items())),
+                predicted_distribution=dict(sorted(self.count_prediction.items())))
+        return result
+
+
+def count_example(output, index):
+    if getattr(output, 'count_values', None) is not None:
+        raw = output.count_values[index].float()
+        return dict(predicted_count_raw=raw.cpu().tolist(),
+                    predicted_count=raw.round().clamp_min(0).long().cpu().tolist())
+    return dict(predicted_empty=output.empty_logits[index].argmax(-1).cpu().tolist(),
+                predicted_positive_count=(output.positive_count_logits[index].argmax(-1)+1).cpu().tolist())
 
 
 @torch.no_grad()
@@ -170,8 +206,7 @@ def validate(model, loader, config, *, final, restored_rng=None):
                             target_fields={k: v[i].cpu().tolist() for k,v in batch.reconstruction.fields.items()},
                             predicted_moment96=r.moment_logits[i].argmax(-1).cpu().tolist(),
                             target_moment96=batch.reconstruction.moment_tick[i].cpu().tolist(),
-                            predicted_empty=r.empty_logits[i].argmax(-1).cpu().tolist(),
-                            predicted_positive_count=(r.positive_count_logits[i].argmax(-1)+1).cpu().tolist(),
+                            **count_example(r, i),
                             target_count=batch.reconstruction.moment_counts[i].cpu().tolist(),
                             plan12=p.plan_values[i].float().cpu().tolist()))
         result = metrics.report(config)

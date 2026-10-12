@@ -12,6 +12,7 @@ from maidata.draft.losses import FIELD_PREFIX
 LOSS_WEIGHT_KEYS = {
     'classification': 'reconstruction_classification_weight',
     'moment96': 'reconstruction_moment_weight',
+    'count': 'reconstruction_count_weight',
     'empty': 'reconstruction_empty_weight',
     'positive_count': 'reconstruction_positive_count_weight',
     'planner_continuous': 'planner_continuous_weight',

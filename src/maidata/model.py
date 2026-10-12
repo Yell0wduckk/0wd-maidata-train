@@ -39,6 +39,7 @@ def build_reconstruction(config):
             'position_base', 'position_scale')
     return ReconstructionHead(latent_dim=config['draft_latent_dim'], target_beats=config['target_beats'],
                                z_stride_beats=config['draft_z_stride_beats'],
+                               count_loss=config.get('reconstruction_count_loss', 'ce'),
                                **{key: config['reconstruction_' + key] for key in keys})
 
 

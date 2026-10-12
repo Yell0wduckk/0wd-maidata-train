@@ -100,8 +100,9 @@ def runtime_dependencies(monkeypatch, config, items):
     monkeypatch.setattr(checkpoint, 'source_identity', lambda: {'commit': 'source-before'})
 
 
-def test_real_five_module_nonzero_dropout_complete_epoch_resume_is_exact(config, tmp_path, monkeypatch):
-    c = joint_config(config, tmp_path / 'full')
+@pytest.mark.parametrize('count_loss', ['ce', 'mse'])
+def test_real_five_module_nonzero_dropout_complete_epoch_resume_is_exact(config, tmp_path, monkeypatch, count_loss):
+    c = dict(joint_config(config, tmp_path / 'full'), reconstruction_count_loss=count_loss)
     items = [joint_item(i, c, monkeypatch, remaster=i == 0, training=False) for i in range(2)]
     runtime_dependencies(monkeypatch, c, items)
     runner.run(c)
