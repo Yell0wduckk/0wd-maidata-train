@@ -6,10 +6,10 @@
 
 ## 推理输入
 
-- 联合入口的 `maidata.joint-training.v1` 可单独通过 `--joint-checkpoint` 加载；E只构建一次，真实局部P0供D和M复用，包含完整空尾窗。训练/验证GT plan、默认推理P预测的差异仍明确记录。联合推理时不再传两个阶段checkpoint，其他参数沿用下方示例。见[联合训练](joint-training.md)。
-- 阶段二 `maidata.decoder-training.v4` checkpoint 提供联合训练后的 E_M/M。Z开启或使用预测plan时，还需阶段一 `maidata.encoder-draft-training.v3` checkpoint提供固定E_D/D/P；旧v1/v2及128维Z教师不通过隐式部分加载或补零扩维复用。Z关闭且plan为gt/none时只需阶段二权重。R不构建、不运行。
+- `--joint-checkpoint` 按保存的 `recipe` 构造 E/D/P/M，分别严格加载 `model_state` 中对应组件；E只构建一次，真实局部P0供D和M复用，包含完整空尾窗。`schema`、`architecture` 的训练版本标签仅作来源记录，可不同或缺省，不作为推理门槛；训练方式、优化器、训练计划和仅训练使用的辅助头也不限制推理。联合推理时不再传两个阶段checkpoint，其他参数沿用下方示例。见[联合训练](joint-training.md)。
+- 两阶段路线的 Decoder checkpoint 提供 E_M/M。Z开启或使用预测plan时，还需另一 checkpoint 提供固定E_D/D/P。两个文件同样不限制训练版本标签或 joint/cached 等训练方式；所有必要组件必须有完整且兼容的权重。Z关闭且plan为gt/none时只需 E_M/M 权重。R不构建、不运行。
 - 教师与M分别按各自checkpoint的`recipe`构造，Encoder参数和网络容量独立，不用M配置覆盖D/P。当前推理共用一份音频grid，因此两者的`samples_per_beat`和`mel_bins`必须一致；加载器在构建网络前报告不匹配字段及两侧值，Python直接调用`prepare_conditions`也遵守同一输入约束。目标窗长度须一致，启用Z时M的Z投影宽度须匹配教师；关闭Z且使用GT/无plan时不加载或检查教师。不把E_M替换成E_D，也不让D读取E_M的P0。加载器严格恢复各模块，不比较权重或源码哈希，不加载optimizer、训练计划或训练缓存清单。
-- M要求架构身份`maidata.decoder-causal-cont-tick384.v2`，并严格加载v4的E_M/M成套参数。旧v1/v2连续时间头不兼容本次独立CONT序列与385类头，不能仅修改schema后加载或冒充完整轮续训。
+- 兼容性依据实际网络配置、组件权重名称与形状，以及跨模型音频 / Z / 窗口维度。必要组件缺失、组件内部多余参数或形状不符仍报错，保持 `load_state_dict(strict=True)`，不随机补参数、忽略必要权重或补零扩维。旧连续时间头等真实架构差异仍无法加载。预编码只加载 E，预解码只加载 D/P，常驻会话与生成按所需组件使用相同规则；缓存自身的内容版本和身份匹配不变。本次仅调整推理，训练续训规则不变。
 - 阶段二默认GT plan，见[plan对照](decoder-plan-comparison.md)。推理默认读取P预测plan12；用户可显式指定gt或none作对照。`generation.json`分别记录`training_plan_source`与实际`inference_plan_source`，不会把GT结果标为predicted。
 - 音频、完整 BPM/first 时间映射、目标 difficulty_id 与精确数值 level。无需源谱、真实 planner 或谱面结束时间。
 - 二选一：`--grid` 直接读取既有训练格式音频 NPZ，或者 `--mel-stats` 使用训练时固定的 Mel 统计从原音频提取 Mel128/全曲 aux32。引用旧 Mel 的 grid 可用 `--mel-root` 搬迁路径。已验收 grid 按指定输入直接读取，不全量扫描或重哈希。

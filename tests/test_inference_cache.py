@@ -113,6 +113,9 @@ def test_online_cold_hot_exact_and_only_required_modules(joint_config, tmp_path,
 @pytest.mark.parametrize('first', [.02, -1.25])
 def test_independent_stages_and_cached_tensor_equality(joint_config, tmp_path, capsys, precision, first):
     checkpoint_path, grid = inputs(joint_config, tmp_path)
+    payload = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    payload.update(schema='different-training.v999', architecture='same-model-different-training')
+    torch.save(payload, checkpoint_path)
     timing_data = dict(first_seconds=first, bpm=[[0, 1, 120], [1, 1, 180]])
     timing_path = tmp_path/'timing.json'
     timing_path.write_text(json.dumps(timing_data), 'utf-8')

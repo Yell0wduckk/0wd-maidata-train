@@ -104,23 +104,31 @@ def test_joint_loader_never_substitutes_missing_weights(joint_config, tmp_path, 
 
 
 @pytest.mark.parametrize('key,value', [('schema', 'maidata.decoder-training.v4'),
-                                     ('architecture', 'other-joint-architecture')])
-def test_joint_loader_rejects_other_checkpoint_families(joint_config, tmp_path, key, value):
+                                     ('architecture', 'other-training-architecture'),
+                                     ('schema', None), ('architecture', None)])
+def test_joint_loader_uses_real_architecture_not_training_labels(joint_config, tmp_path, key, value):
     path, _, payload = joint_checkpoint(joint_config, tmp_path)
-    payload[key] = value
+    if value is None:
+        payload.pop(key)
+    else:
+        payload[key] = value
     torch.save(payload, path)
-    with patch('maidata.inference.checkpoint.build_model', side_effect=AssertionError('reject before building')):
-        with pytest.raises(ValueError, match='v1 joint'):
-            load_joint_models(path, device='cpu')
+    models = load_joint_models(path, device='cpu')
+    assert models.provenance['joint'][key] == value
+    assert all(torch.equal(v, models.decoder.state_dict()[k.removeprefix('decoder.')])
+               for k, v in payload['model_state'].items() if k.startswith('decoder.'))
 
 
-def test_joint_loader_only_omits_reconstruction_and_keeps_strict_state(joint_config, tmp_path):
+def test_joint_loader_ignores_auxiliary_heads_but_keeps_strict_component_state(joint_config, tmp_path):
     path, _, payload = joint_checkpoint(joint_config, tmp_path)
     payload['model_state']['unknown.weight'] = torch.ones(1)
     torch.save(payload, path)
+    load_joint_models(path, device='cpu')
+    payload['model_state']['encoder.unknown.weight'] = torch.ones(1)
+    torch.save(payload, path)
     with pytest.raises(RuntimeError, match='Unexpected key'):
         load_joint_models(path, device='cpu')
-    payload['model_state'].pop('unknown.weight')
+    payload['model_state'].pop('encoder.unknown.weight')
     key = next(key for key in payload['model_state'] if key.startswith('encoder.'))
     payload['model_state'][key] = payload['model_state'][key].flatten()[:1]
     torch.save(payload, path)

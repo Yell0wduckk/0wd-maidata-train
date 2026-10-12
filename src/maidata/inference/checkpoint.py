@@ -5,7 +5,6 @@ import torch
 
 from maidata.entry import CONFIG
 from maidata.model import build_model, build_draft, build_planner, build_decoder
-from maidata.decoder_training.producer import teacher_configuration
 from .input_contract import check_shared_grid_config
 
 
@@ -22,7 +21,7 @@ class Models:
 
 
 class JointCheckpoint:
-    """Read the checkpoint once; construct only the components needed by a stage."""
+    """Load required components strictly; training version tags are provenance."""
 
     def __init__(self, checkpoint, *, z_cross_attention=None, plan_source='predicted'):
         from pathlib import Path
@@ -31,13 +30,9 @@ class JointCheckpoint:
         self.identity = dict(path=str(self.path), size=stat.st_size, mtime_ns=stat.st_mtime_ns)
         self.payload = torch.load(checkpoint, map_location='cpu', weights_only=False)
         payload = self.payload
-        if (payload.get('schema') != 'maidata.joint-training.v1'
-                or payload.get('architecture') != 'maidata.joint-encoder-draft-decoder.v1'):
-            raise ValueError('expected a v1 joint Encoder/Draft/Decoder checkpoint')
-        unknown = [key for key in payload['model_state'] if key.split('.', 1)[0]
-                   not in ('encoder', 'draft', 'planner', 'decoder', 'reconstruction')]
-        if unknown:
-            raise RuntimeError(f'Unexpected key(s) in joint state_dict: {unknown}')
+        # Training schema/architecture labels and auxiliary heads do not decide
+        # inference compatibility. Each consumed component is constructed from
+        # its saved recipe and load_state_dict(strict=True) checks real weights.
         if plan_source not in ('predicted', 'gt', 'none'):
             raise ValueError('plan_source must be predicted, gt or none')
         self.config = dict(CONFIG, **payload['recipe'])
@@ -48,7 +43,7 @@ class JointCheckpoint:
         if type(self.actual_z) is not bool or self.actual_z and not saved_z:
             raise ValueError('cannot enable Z on a checkpoint trained without its projection')
         self.config['decoder_train_audio_scope'] = 'window'
-        description = dict(path=str(checkpoint), schema=payload['schema'],
+        description = dict(path=str(checkpoint), schema=payload.get('schema'), architecture=payload.get('architecture'),
             epoch=payload.get('completed_epochs'), step=payload.get('step'), source=payload.get('source'))
         self.provenance = dict(joint=description, encoder_draft=description, decoder=description,
             training_plan_source=self.config.get('joint_train_plan_source', 'gt'),
@@ -85,9 +80,6 @@ def load_joint_models(checkpoint, *, device, z_cross_attention=None, plan_source
 
 def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device, z_cross_attention=None, plan_source='predicted'):
     consumer = torch.load(decoder_checkpoint, map_location='cpu', weights_only=False)
-    if (consumer.get('schema') != 'maidata.decoder-training.v4'
-            or consumer.get('architecture') != 'maidata.decoder-causal-cont-tick384.v2'):
-        raise ValueError('expected a v4 causal CONT Decoder checkpoint with normalized-plan architecture v2; older architectures are not resume-compatible')
     if plan_source not in ('predicted', 'gt', 'none'):
         raise ValueError('plan_source must be predicted, gt or none')
     saved_z = consumer['recipe']['decoder_z_cross_attention']
@@ -99,8 +91,16 @@ def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device, z_cross
         if not encoder_draft_checkpoint:
             raise ValueError('Z or predicted plan requires an Encoder/Draft checkpoint')
         producer = torch.load(encoder_draft_checkpoint, map_location='cpu', weights_only=False)
-    teacher = teacher_configuration(producer) if producer is not None else None
+    teacher = None
+    if producer is not None:
+        # This inference path must not call the training export loader's schema
+        # gate. D/P architecture and cross-model dimensions are still checked.
+        teacher = dict(CONFIG, **producer['recipe'])
+        teacher['fpn_p0_normalization'] = producer['recipe'].get('fpn_p0_normalization', False)
+        if teacher['draft_latent_dim'] != teacher['draft_dim']:
+            raise ValueError('split Drafter Z must equal the final normalized draft width')
     config = dict(CONFIG, **consumer['recipe'])
+    config['fpn_p0_normalization'] = consumer['recipe'].get('fpn_p0_normalization', False)
     config['decoder_train_audio_scope'] = consumer['recipe'].get('decoder_train_audio_scope', 'full_song')
     if teacher is not None:
         check_shared_grid_config(teacher, config)
@@ -118,13 +118,14 @@ def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device, z_cross
         prefix = name + '.'
         module.load_state_dict({k[len(prefix):]: v for k, v in producer['model_state'].items()
                                 if k.startswith(prefix)}, strict=True)
-    decoder_encoder = None
-    if consumer['schema'] == 'maidata.decoder-training.v4':
-        decoder_encoder = build_model(config)
-        # The stage-II encoder is independently trained with M. It must never
-        # replace the stage-I encoder used by the fixed Draft/Planner.
-        torch.nn.ModuleDict(dict(encoder=decoder_encoder, decoder=modules[-1])).load_state_dict(
-            consumer['model_state'], strict=True)
+    decoder_encoder = build_model(config)
+    # E/M can be jointly trained or adapted with a frozen E; in both cases load
+    # the saved Encoder, never use a version label to skip loading actual weights.
+    # Other training-only components are irrelevant to these two consumers.
+    for name, module in (('encoder', decoder_encoder), ('decoder', modules[-1])):
+        prefix = name + '.'
+        module.load_state_dict({k[len(prefix):]: v for k, v in consumer['model_state'].items()
+                                if k.startswith(prefix)}, strict=True)
     for model in modules + ([decoder_encoder] if decoder_encoder is not None else []):
         if model is None:
             continue
@@ -136,7 +137,8 @@ def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device, z_cross
     config['decoder_z_cross_attention'] = actual_z
     modules[-1].condition.z_cross_attention = actual_z
     def describe(path, payload):
-        return dict(path=str(path), schema=payload['schema'], epoch=payload.get('completed_epochs'), step=payload.get('step'),
+        return dict(path=str(path), schema=payload.get('schema'), architecture=payload.get('architecture'),
+                    epoch=payload.get('completed_epochs'), step=payload.get('step'),
                     source=payload.get('source'))
     return Models(*modules, config, dict(encoder_draft=describe(encoder_draft_checkpoint, producer) if producer is not None else None,
                                         decoder=describe(decoder_checkpoint, consumer),
