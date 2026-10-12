@@ -11,11 +11,12 @@ def parser():
     from .options import GenerationOptions
     from .progress import DEFAULT_INTERVAL
     defaults = GenerationOptions()
-    p = argparse.ArgumentParser(description='Current E/D/P + Decoder M full-song inference (new five-token fields).')
+    p = argparse.ArgumentParser(description='Joint E/D/P/M full-song inference (recommended); optional legacy two-stage checkpoints.')
     p.add_argument('--encoder-draft-checkpoint', help='Required for legacy Z or predicted plan; unused for Z-off GT/none')
     checkpoint = p.add_mutually_exclusive_group(required=True)
-    checkpoint.add_argument('--decoder-checkpoint', help='Stage-II M/E checkpoint; uses a separate Draft teacher')
-    checkpoint.add_argument('--joint-checkpoint', help='One jointly trained E/D/R/P/M checkpoint; shares E at inference')
+    checkpoint.add_argument('--joint-checkpoint', help='Recommended: one jointly trained E/D/R/P/M checkpoint; shares E')
+    checkpoint.add_argument('--decoder-checkpoint', help='Legacy stage-II M/E checkpoint; uses a separate Draft teacher')
+    p.add_argument('--cache-dir', help='Joint model only: reuse audio and Draft/Plan; compute and save missing entries')
     p.add_argument('--z-cross-attention', action=argparse.BooleanOptionalAction, default=None,
                    help='Inherit checkpoint by default; --no-z-cross-attention disables Z')
     p.add_argument('--plan-source', choices=('predicted', 'gt', 'none'), default='predicted')
@@ -74,6 +75,8 @@ def main(argv=None):
     args = argument_parser.parse_args(argv)
     if args.joint_checkpoint and args.encoder_draft_checkpoint:
         argument_parser.error('--joint-checkpoint already supplies E/D/P/M; do not also supply --encoder-draft-checkpoint')
+    if args.cache_dir and not args.joint_checkpoint:
+        argument_parser.error('--cache-dir currently requires --joint-checkpoint')
     from .progress import StderrProgress, stage
     progress = StderrProgress(interval=args.progress_interval) if args.progress else None
     with stage(progress, 'runtime'):
@@ -82,7 +85,9 @@ def main(argv=None):
         from maidata.physical import Geometry
         from maidata.preparation.cache import load_grid
         from maidata.time import TimingMap
-        from .checkpoint import load_models, load_joint_models
+        from .checkpoint import load_models, JointCheckpoint
+        from .cache import JointCache
+        from .precompute import requested_audio_identity
         from .conditioning import audio_grid, prepare_conditions, prepare_decoder_conditions, with_plan_source
         from .generation import generate, GenerationOptions
         from .materialize import read_json, write_json, write_playable
@@ -100,15 +105,28 @@ def main(argv=None):
     device = torch.device(args.device)
     timing_data = read_json(args.timing) if args.timing else dict(first_seconds=args.first_seconds, bpm=[[0, 1, args.bpm]])
     timing = TimingMap.from_audio_timing(timing_data)
+    cache, encoded = None, None
     with stage(progress, 'models'):
-        if args.joint_checkpoint:
-            models = load_joint_models(args.joint_checkpoint, device=device,
+        if args.joint_checkpoint and args.cache_dir:
+            checkpoint = JointCheckpoint(args.joint_checkpoint,
                 z_cross_attention=args.z_cross_attention, plan_source=args.plan_source)
+            cache = JointCache(args.cache_dir, checkpoint, device=device, precision=args.precision, progress=progress)
+            identity = requested_audio_identity(checkpoint, args, timing, device)
+            encoded = cache.find_audio(identity)
+            models = checkpoint.models(device=device, components=('decoder',))
+        elif args.joint_checkpoint:
+            checkpoint = JointCheckpoint(args.joint_checkpoint,
+                z_cross_attention=args.z_cross_attention, plan_source=args.plan_source)
+            components = ('encoder', 'draft', 'planner', 'decoder') if (
+                checkpoint.actual_z or args.plan_source == 'predicted') else ('encoder', 'decoder')
+            models = checkpoint.models(device=device, components=components)
         else:
             models = load_models(args.encoder_draft_checkpoint, args.decoder_checkpoint, device=device,
                                  z_cross_attention=args.z_cross_attention, plan_source=args.plan_source)
     with stage(progress, 'audio'):
-        if args.grid:
+        if encoded is not None:
+            grid, duration = None, encoded.duration
+        elif args.grid:
             grid = load_grid(args.grid, mel_root=args.mel_root, validate_input=False)
             info = sf.info(args.audio)
             duration = info.frames/info.samplerate
@@ -137,7 +155,12 @@ def main(argv=None):
             difficulty=args.difficulty, level=args.level, title=args.title, artist=args.artist,
             designer=args.designer, cabinet=args.cabinet) if args.stream_output else None
         with torch.inference_mode(), torch.autocast(device.type, dtype=torch.bfloat16, enabled=args.precision == 'bf16'):
-            if models.draft is None:
+            if cache is not None:
+                if encoded is None:
+                    encoded = cache.encode(identity, grid, timing, duration)
+                conditions = (cache.draft(encoded, difficulty=args.difficulty, level=args.level)
+                    if models.config['decoder_z_cross_attention'] or args.plan_source == 'predicted' else encoded.local)
+            elif models.draft is None:
                 conditions = prepare_decoder_conditions(models.decoder_encoder, models.config, grid, timing, duration,
                     device=device, encoder_window_batch=args.encoder_window_batch, progress=progress)
             else:
@@ -157,6 +180,8 @@ def main(argv=None):
             difficulty=args.difficulty, level=args.level, device=str(device), precision=args.precision,
             options=asdict(options), config=models.config, windows=windows, moments=writer.moments,
             physical_bypass_count=bypass, complete=True, stream_output=args.stream_output)
+        if cache is not None:
+            report['cache'] = cache.report
         with stage(progress, 'write_outputs'):
             if preview:
                 preview.write(chart)
@@ -170,8 +195,11 @@ def main(argv=None):
             if error_file.exists():
                 error_file.unlink()
     except Exception as exc:
-        write_json(output/'generation-error.json', dict(error=str(exc), options=asdict(options),
-            checkpoints=models.provenance, complete=False, stream_output=args.stream_output))
+        failure = dict(error=str(exc), options=asdict(options), checkpoints=models.provenance,
+                       complete=False, stream_output=args.stream_output)
+        if cache is not None:
+            failure['cache'] = cache.report
+        write_json(output/'generation-error.json', failure)
         raise
     print(json.dumps(dict(output=str(output.resolve()), windows=len(windows), moments=writer.moments,
                           physical_hard_mask=args.physical_hard_mask, physical_bypass_count=bypass), ensure_ascii=False))

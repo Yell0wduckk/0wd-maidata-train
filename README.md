@@ -37,6 +37,7 @@
 - [冻结 Encoder/Drafter、读取 P0/Z 的 Decoder 适配入口](docs/decoder-frozen-adaptation.md)
 - [384 tick 时间监督缓存迁移与从零生产](docs/time384-cache-migration.md)
 - [当前模型整曲推理与可播放 maidata 导出](docs/maidata-inference.md)
+- [联合模型音频预编码、Draft/Plan 预解码与推理缓存](docs/maidata-inference.md#联合模型预编码与预解码)
 - [全官谱音频输入缓存](docs/encoder-audio-cache.md)
 - [新字段、时间与 Physical](docs/chart-fields-physical.md)
 - [全官谱原谱全曲缓存](docs/chart-cache.md)

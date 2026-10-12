@@ -37,6 +37,8 @@ class StderrProgress:
         'planner': 'Window Planner', 'generation': 'Autoregressive generation',
         'decoder_audio': 'Decoder audio projection',
         'chart_ir': 'Chart IR conversion', 'write_outputs': 'Writing outputs',
+        'audio_cache_read': 'Audio cache loading', 'audio_cache_write': 'Audio cache saving',
+        'draft_cache_read': 'Draft/Plan cache loading', 'draft_cache_write': 'Draft/Plan cache saving',
     }
 
     def __init__(self, *, interval=DEFAULT_INTERVAL, stream=None, clock=None):

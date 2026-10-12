@@ -115,9 +115,9 @@ def prepare_decoder_conditions(encoder, config, grid, timing, duration, *, devic
 
 
 @torch.inference_mode()
-def prepare_joint_conditions(encoder, draft, planner, config, grid, timing, duration, *,
-                             difficulty, level, device, encoder_window_batch=8, progress=None):
-    """Encode each local window once; share its center P0 with the full-song D."""
+def encode_joint_audio(encoder, config, grid, timing, duration, *, device,
+                       encoder_window_batch=8, progress=None):
+    """Return original local P0 and its center bank, including the target tail."""
     c = dict(config, decoder_train_audio_scope='window')
     local = prepare_decoder_conditions(encoder, c, grid, timing, duration, device=device,
         encoder_window_batch=encoder_window_batch, progress=progress)
@@ -127,6 +127,14 @@ def prepare_joint_conditions(encoder, draft, planner, config, grid, timing, dura
     centers = BeatMemory(*(getattr(local.audio, name)[:-1] for name in ('values', 'beats', 'valid')))
     audio = assemble_full_p0(centers, torch.tensor(starts[:-1], device=device, dtype=torch.float32),
         torch.zeros(len(starts)-1, device=device, dtype=torch.long), [coverage], p0_rate=c['fpn_rates'][0])
+    return local, audio
+
+
+@torch.inference_mode()
+def decode_joint_draft(draft, planner, config, local, audio, *, difficulty, level,
+                       device, progress=None):
+    """D/P consume encoded audio only; no Encoder or feature preparation."""
+    c, coverage, starts = config, local.coverage, local.starts
     inputs, _ = make_draft_inputs([ChartCondition('inference', difficulty, level, str(level))],
         ['inference'], [coverage], device=device, validate_input=False,
         z_stride_beats=c['draft_z_stride_beats'])
@@ -140,6 +148,18 @@ def prepare_joint_conditions(encoder, draft, planner, config, grid, timing, dura
     with stage(progress, 'planner'):
         plans = planner(windows)
     return Conditions(local.audio, z, plans.plan_values, plans.valid, starts, coverage, 'window')
+
+
+@torch.inference_mode()
+def prepare_joint_conditions(encoder, draft, planner, config, grid, timing, duration, *,
+                             difficulty, level, device, encoder_window_batch=8, progress=None):
+    """Encode each local window once; share its center P0 with the full-song D."""
+    local, audio = encode_joint_audio(encoder, config, grid, timing, duration, device=device,
+        encoder_window_batch=encoder_window_batch, progress=progress)
+    if draft is None:
+        return local
+    return decode_joint_draft(draft, planner, config, local, audio, difficulty=difficulty,
+        level=level, device=device, progress=progress)
 
 
 @torch.inference_mode()

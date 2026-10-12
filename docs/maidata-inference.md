@@ -1,6 +1,6 @@
 # 当前模型整曲推理与 maidata 物化
 
-`python -m maidata.inference` 加载当前 `maidata` 的两套独立音频 Encoder、Draft D、Planner P 与 Decoder M，生成五类新字段，实时转译完整音符并更新可播放的 `maidata.txt`。阶段一 E_D 服务固定 Draft/Planner，阶段二 E_M 服务 M 的直接音频输入。`python -m maidata.inference.materialize` 独立把 IR 写成可播放的 `maidata.txt` 与配套音频。两者不导入旧 `maimai_*` Python 包，不读取旧模型版本表；物化写法从现有 MiaCode 导出器迁移，运行时不调用 MiaCode，不做回读。
+`python -m maidata.inference` 推荐使用单个联合 checkpoint：共享音频 Encoder E、Draft D、Planner P 与 Decoder M，生成五类新字段，实时转译完整音符并更新可播放的 `maidata.txt`。联合模型可用两层硬盘缓存复用 E 的 P0 和 D/P 的 Z、plan12。显式 `--decoder-checkpoint` 保留两阶段路线，E_D 服务固定 Draft/Planner，E_M 服务 M，本次缓存不支持此路线。`python -m maidata.inference.materialize` 独立把 IR 写成可播放的 `maidata.txt` 与配套音频。运行时不导入旧 `maimai_*` 包、不调用 MiaCode、不做回读。
 
 窗口与历史遵循 [推理设计](../../0wd-v3-refactor-docs/new-inference.md)、[Decoder 设计第5～6节](../../0wd-v3-refactor-docs/new-decoder.md)以及[当前字段接口](chart-fields-physical.md)。
 
@@ -24,8 +24,7 @@
 ```bash
 export PYTHONPATH=src
 python -m maidata.inference \
-  --encoder-draft-checkpoint /path/to/encoder-draft/last.ckpt \
-  --decoder-checkpoint /path/to/decoder/last.ckpt \
+  --joint-checkpoint /path/to/joint/last.ckpt \
   --audio /path/to/song.wav \
   --timing /path/to/timing.json \
   --grid /path/to/audio-cache/grids/song.npz \
@@ -34,6 +33,7 @@ python -m maidata.inference \
   --slide-data /path/to/slide_data.json \
   --difficulty 5 --level 14.5 \
   --device cuda --precision bf16 --temperature 1 --seed 20261010 \
+  --cache-dir /path/to/inference-cache \
   --output /path/to/generated/song
 ```
 
@@ -57,6 +57,39 @@ python -m maidata.inference.materialize \
 
 上面的独立物化命令用于已有 IR；默认推理无需再执行此命令。物化使用纯 Python，不需要 MiaCode、checkpoint、Torch 或 GPU；`--miacode` 和 `--timeout` 已删除。两入口均支持 `--title/--artist/--designer/--cabinet`，difficulty/level 与推理请求保持一致。
 
+## 联合模型预编码与预解码
+
+`--cache-dir` 为可选参数。不传时照常在线计算；指定后按需补算缺失层，命中时不再读取 grid/Mel 载荷或提取音频特征。全部命中只构建、运行 M，不构建 E/D/P；修改 difficulty/level 复用音频层，仅重算 D/P。关闭 Z 且 plan 为 gt/none 时完全跳过 D/P。M 的音频投影及因果 KV 仍按本次生成计算，不保存在这两层缓存中。
+
+也可以在生成谱面之前独立完成两步预计算，无需 Physical 几何、源谱或输出目录：
+
+```bash
+python -m maidata.inference.preencode \
+  --joint-checkpoint /path/to/joint/last.ckpt \
+  --audio /path/to/song.wav --timing /path/to/timing.json \
+  --grid /path/to/audio-cache/grids/song.npz \
+  --cache-dir /path/to/inference-cache --device cuda --precision bf16
+
+# audio-cache 使用上一条 stdout JSON 中 audio_cache.path 的实际路径。
+python -m maidata.inference.predraft \
+  --joint-checkpoint /path/to/joint/last.ckpt \
+  --audio-cache /path/to/inference-cache/audio/KEY.pt \
+  --difficulty 5 --level 14.5 \
+  --cache-dir /path/to/inference-cache --device cuda --precision bf16
+```
+
+`preencode` 仅构建 E，按原有 batch 顺序编码含完整空尾窗的局部 P0，并保存 D 所需全曲中心 P0；局部 P0 不从全曲中心裁剪。`predraft` 仅构建 D/P，只读取已编码缓存与联合权重，不读取原音频或 grid。两个入口重复调用也会命中；stdout 仅输出一次最终 JSON（路径、hit、窗口数），stderr 沿用进度输出，支持 `--no-progress`。不复制音频、不写谱面或 `generation.json`。
+
+随后运行上面的普通推理命令并使用同一 `--cache-dir`，即可直接复用。更改 `--seed`、`--temperature`、生成上限或标题后再次推理，使用新的 `--output` 目录；这些参数不影响缓存身份。普通推理仍保留原音频、timing 和 grid/Mel 统计参数，用于选择正确缓存及写出配套音频。`generation.json.cache` 记录 audio/draft 的路径和命中情况；不需要 D/P 时 draft 为 null。`--force` 只覆盖生成目录的既有产物，不清理缓存。
+
+音频项存放在 `audio/KEY.pt`，schema 为 `maidata.inference-audio.v1`；Draft 项位于 `draft/KEY.pt`，schema 为 `maidata.inference-draft-plan.v1`。文件保存完整身份、coverage、窗口起点、原 dtype 的 CPU 张量及完成状态，读取时迁移至目标设备。音频层身份包含完整 BPM/first、音频与特征来源、checkpoint、Encoder 配方（含 P0 归一化）、窗口 batch、设备和精度；Draft 层另含音频缓存 key、D/P 配方、Z 间隔和 difficulty/level。预测 plan 缓存不受 gt/none 覆盖影响。
+
+来源只比较绝对路径、文件大小、纳秒修改时间及配方元数据；引用 Mel 的 grid 还读取小型侧车 JSON 并记录引用文件元数据。不扫描目录、不计算音频/权重/源码内容哈希；KEY 仅是小型身份文档的摘要。同路径替换文件须更新文件元数据。历史联合配方未记录 P0 归一化时沿用 False，不继承新训练默认值。
+
+不同身份使用不同缓存项，每项通过同目录唯一临时文件原子替换，Windows 占用最多重试约一秒；未发布的临时文件不会命中。损坏、截断或身份/张量形状不一致的已有项明确报错，不静默重算覆盖。某层失败时保留已成功发布的其他层，下次调用可继续复用；不把预计算成功当成整曲生成成功。
+
+Python 在线与缓存入口共用 `encode_joint_audio(...) -> (local_conditions, center_p0)` 和 `decode_joint_draft(..., local_conditions, center_p0, difficulty=..., level=...) -> Conditions`。`JointCheckpoint.models(device=..., components=...)` 严格恢复所选模块；原 `load_joint_models(...)` 默认仍加载 E/D/P/M。缓存不包含 R、IR 或可变生成状态。
+
 ## 配置与运行行为
 
 | 参数 | 默认值与含义 |
@@ -68,6 +101,7 @@ python -m maidata.inference.materialize \
 | `--gt-plan` | `{"windows":[{"start_beat":0,"plan12":[12个数值],"valid":true}]}`，覆盖含完整尾窗的全部目标窗 |
 | `--seed` | 20261010；独立 CPU sampling generator，重试不重复同一候选 |
 | `--encoder-window-batch` | 8；控制两套Encoder的局部窗口分块大小，不改变全曲P0/Z或AR目标窗 |
+| `--cache-dir` | 默认不启用；仅联合模型，复用或自动补算音频、Draft/Plan 两层硬盘缓存 |
 | `--max-tokens-per-window` | 512；当前新字段 token 数上限，不是旧行数或历史截断预算 |
 | `--max-tokens-per-moment` | 20；不含MOMENT本身；达到阈值后停止扩展，只补齐当前动作必需的ROUTE/时值，再推进MOMENT或合法窗末终端；必要收束字段允许超出阈值 |
 | `--max-backtracks-per-window` | 128；合法补全搜索的回退次数上限 |
@@ -81,7 +115,7 @@ python -m maidata.inference.materialize \
 
 网络容量、RoPE、音频余量、Z范围、谱面历史和目标窗口使用 checkpoint 保存的模型配方；时间词表固定为1..384 tick加CONT，共385类。目标 stride 必须等于目标长度，保证目标中心连续、无重复。换容量须使用相应训练权重，不能用 CLI 强行宽松加载。
 
-推理读取并准备一次音频输入，E_D与E_M分别计算自己的G0；可学习K/V和隐藏表示不共享。E_D按覆盖窗拼接全曲P0_D，D一次生成含完整空尾窗的Z，P预测各窗plan12。E_M按需要生成的目标窗编码局部24拍P0_M，含完整空尾窗，M只读取当前窗的对应bank。每窗选择固定Z上下文和plan12，内容重试及Physical回退不重跑Encoder或D/P。
+联合路线共享 E 的真实局部 P0，中心拼接后供 D 读取；两阶段路线则由 E_D 与 E_M 分别计算自己的 G0 和 P0。D 一次生成含完整空尾窗的 Z，P 预测各窗 plan12，M 读取当前窗对应的局部 P0。内容重试及 Physical 回退不重跑 Encoder 或 D/P；联合路线启用硬盘缓存后可跨生成调用复用这些固定输入。
 
 显式使用`--no-z-cross-attention --plan-source gt --gt-plan ...`，或`--no-z-cross-attention --plan-source none`时，仅加载阶段二E_M/M，不需要`--encoder-draft-checkpoint`，不构建或执行E_D/D/P。none将独立plan有效位设为false，不把全零向量当有效条件；Z和plan均关闭时条件attention没有有效key。GT与none报告分别记录来源、实际Z开关及每窗`plan_valid`。关闭Z的推理覆盖在严格加载原始checkpoint参数结构之后应用，不更改训练配置或checkpoint。
 
