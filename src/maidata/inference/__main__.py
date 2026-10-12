@@ -45,7 +45,7 @@ def parser():
     p.add_argument('--temperature', type=float, default=defaults.temperature)
     p.add_argument('--top-k', type=int, default=defaults.top_k, help='Legal candidate limit; 0 disables')
     p.add_argument('--top-p', type=float, default=defaults.top_p, help='Legal nucleus mass in (0, 1]; 1 disables')
-    p.add_argument('--seed', type=int, default=defaults.seed)
+    p.add_argument('--seed', type=int, default=defaults.seed, help='Fixed seed; -1 draws a random seed for this run')
     p.add_argument('--encoder-window-batch', type=int, default=8)
     p.add_argument('--max-tokens-per-window', type=int, default=defaults.max_tokens_per_window)
     p.add_argument('--max-tokens-per-moment', type=int, default=defaults.max_tokens_per_moment,

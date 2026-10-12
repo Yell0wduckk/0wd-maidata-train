@@ -169,13 +169,15 @@ def arguments(path, tmp_path, precision='fp32'):
 
 
 @pytest.mark.parametrize('precision', ['fp32', 'bf16'])
-def test_single_checkpoint_cli_generates_with_predicted_plan(joint_config, tmp_path, geometry, precision):
+@pytest.mark.parametrize('seed', [20261010, -1])
+def test_single_checkpoint_cli_generates_with_predicted_plan(joint_config, tmp_path, geometry, precision, seed):
     path, _, _ = joint_checkpoint(joint_config, tmp_path)
     write_audio(tmp_path/'audio.wav')
     with patch('maidata.preparation.cache.load_grid', return_value=item(0, joint_config)['grid']), \
          patch('soundfile.info', return_value=SimpleNamespace(frames=28800, samplerate=24000)), \
-         patch('maidata.physical.Geometry.from_resources', return_value=geometry):
-        main(arguments(path, tmp_path, precision))
+         patch('maidata.physical.Geometry.from_resources', return_value=geometry), \
+         patch('maidata.inference.options.secrets.randbelow', return_value=37) as entropy:
+        main([*arguments(path, tmp_path, precision), '--seed', str(seed)])
     report = json.loads((tmp_path/'result/generation.json').read_text(encoding='utf-8'))
     assert report['complete'] and report['physical_bypass_count'] == 0
     assert report['checkpoints']['decoder_audio_encoder'] == 'shared_joint'
@@ -184,6 +186,8 @@ def test_single_checkpoint_cli_generates_with_predicted_plan(joint_config, tmp_p
     assert len(report['windows']) == 2 and all(w['plan_valid'] for w in report['windows'])
     assert report['config']['draft_z_stride_beats'] == 4
     assert all('trace' not in window for window in report['windows'])
+    assert report['options']['seed'] == (37 if seed == -1 else seed)
+    assert entropy.call_count == (1 if seed == -1 else 0)
 
 
 @pytest.mark.parametrize('extra', [['--decoder-checkpoint', 'unused.ckpt'],

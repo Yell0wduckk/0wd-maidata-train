@@ -367,7 +367,7 @@ class Interactive:
                          **({'content': [token_to_dict(t) for t in g.content]} if request.get('content') else {}))
                     for g in generated],
             tokens=produced, reused_rows=reused, computed_rows=computed,
-            skipped_notes=self.skipped, physical_bypass=bypass)
+            skipped_notes=self.skipped, physical_bypass=bypass, seed=options.seed)
 
 
 class Server:

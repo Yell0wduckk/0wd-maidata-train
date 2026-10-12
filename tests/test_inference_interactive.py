@@ -2,6 +2,7 @@ from collections import OrderedDict
 from fractions import Fraction
 import re
 import threading
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -137,6 +138,19 @@ def test_range_replaces_only_the_selected_interval(window_config, geometry):
     assert (result['start_tick'], result['end_tick']) == (96, 1632)
     assert all(96 <= o['tick'] < 1632 for o in result['onsets'])
     assert span_beats(result['text']) == Fraction(1632 - 96, 96)
+
+
+@pytest.mark.parametrize('mode', ['continue', 'range'])
+def test_interactive_random_seed_is_resolved_per_request_and_reported(window_config, geometry, mode):
+    timing = TimingMap([(0, 120)])
+    session = stub(window_config, geometry, timing, timing.beat_to_second(40))
+    request = dict(id=1, revision=1, mode=mode, start_tick=384, end_tick=768,
+                   max_tokens=4, temperature=1., seed=-1)
+    with patch('maidata.inference.options.secrets.randbelow', side_effect=[7, 11]) as entropy:
+        first = session.suggest(request, threading.Event())
+        second = session.suggest(dict(request, id=2), threading.Event())
+    assert (first['seed'], second['seed']) == (7, 11)
+    assert entropy.call_count == 2
 
 
 def span_beats(text):

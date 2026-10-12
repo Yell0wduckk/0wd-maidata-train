@@ -7,6 +7,7 @@ from maidata.chart.types import (GENERATED_TYPES, KINDS, FLAGS, APPLICABLE,
     BUTTON_PADS, TOUCH_PADS, Moment, Note, Route, HoldDuration, SlideDuration)
 from maidata.chart.windows import TimeTarget
 from maidata.time.discrete import compile_support_tree, TimeQuery, CONTINUE
+from .options import resolve_seed
 
 
 class Sampler:
@@ -23,7 +24,8 @@ class Sampler:
         if not 0 < top_p <= 1:
             raise ValueError('top_p must be in (0, 1]')
         self.top_k, self.top_p = top_k, top_p
-        self.generator = torch.Generator(device='cpu').manual_seed(seed)
+        self.seed = resolve_seed(seed)
+        self.generator = torch.Generator(device='cpu').manual_seed(self.seed)
         self.physical_hard_mask = physical_hard_mask
 
     def order(self, scores, allowed=None):

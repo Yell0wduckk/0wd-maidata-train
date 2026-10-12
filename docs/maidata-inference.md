@@ -99,7 +99,7 @@ Python 在线与缓存入口共用 `encode_joint_audio(...) -> (local_conditions
 | `--z-cross-attention / --no-z-cross-attention` | 默认沿用checkpoint；可显式关闭Z。不能给未训练Z投影的checkpoint启用Z |
 | `--plan-source` | 默认predicted；gt读取`--gt-plan`逐窗JSON，none完全屏蔽plan key |
 | `--gt-plan` | `{"windows":[{"start_beat":0,"plan12":[12个数值],"valid":true}]}`，覆盖含完整尾窗的全部目标窗 |
-| `--seed` | 20261010；独立 CPU sampling generator，重试不重复同一候选 |
+| `--seed` | 默认20261010；`-1` 在每次任务开始时随机抽取一次实际种子，写入 `generation.json.options.seed`；独立 CPU sampling generator，重试不重复同一候选 |
 | `--encoder-window-batch` | 8；控制两套Encoder的局部窗口分块大小，不改变全曲P0/Z或AR目标窗 |
 | `--cache-dir` | 默认不启用；仅联合模型，复用或自动补算音频、Draft/Plan 两层硬盘缓存 |
 | `--max-tokens-per-window` | 512；当前新字段 token 数上限，不是旧行数或历史截断预算 |
@@ -183,7 +183,7 @@ Python接口`generate(..., stream=None)`与`decode_window(..., stream=None)`可�
 
 `--emit-ir` 为可选参数，独立 CLI 默认关闭；MiaCode 启用后每至多 250 ms 原子发布 `chart.snapshot.json`，字段为 `revision/chart/ir/complete`，成功结束强制同步并写出 `model.ir.json`。原 `maidata.txt` 输出保持兼容。IR 直接从完成的生成字段构造，已提交窗口复用已解码 IR，当前窗口仅包含完整前缀；回滚同时撤销文本和 IR，复用已加载 Geometry，不额外执行物化或原谱解析。
 
-`python -m maidata.inference.interactive` 使用相同联合 checkpoint 和预计算目录，NDJSON `chart` 请求携带完整 `maimai.chart_ir.v1` 与 revision，后端确认 `chart_ready` 后可发送对应 revision 的 `suggest`。空谱也是有效初始请求。`suggest` 支持 continue/range、温度、top-k、top-p、seed；result 包含文本、区间及 `ir_fragment`，由编辑器在接受结果时合入本地缓存。取消或过期建议不修改正式谱面。
+`python -m maidata.inference.interactive` 使用相同联合 checkpoint 和预计算目录，NDJSON `chart` 请求携带完整 `maimai.chart_ir.v1` 与 revision，后端确认 `chart_ready` 后可发送对应 revision 的 `suggest`。空谱也是有效初始请求。`suggest` 支持 continue/range、温度、top-k、top-p、seed；seed=-1 时每次请求独立抽取一次实际种子，result.seed 返回实际值。result 包含文本、区间及 `ir_fragment`，由编辑器在接受结果时合入本地缓存。取消或过期建议不修改正式谱面。
 
 窗口内使用真实前缀的最长公共部分复用 K/V；前缀修改使受影响后缀失效，跨窗口分别 prefill，Physical 由对应真实前缀恢复。`reused_rows/computed_rows` 统计前缀复用/补算行数，不含新生成字段的全部计算量。详细 trace 仍默认关闭。
 
