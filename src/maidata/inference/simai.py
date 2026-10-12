@@ -62,8 +62,33 @@ def four_beat_lines(chart, *, start_tick=0):
     text = ''.join(part.replace('\r', '') if part.startswith('||') else ''.join(part.splitlines())
                    for part in re.split(r'(\|\|[^\r\n]*(?:\r?\n|$))', chart))
     out, pending, tick, subdivision, depth, i = [], [], start_tick % 384, 4, 0, 0
+    active = None
+
+    def emit(body, division):
+        nonlocal active
+        # Input subdivisions and output subdivisions differ when an interval
+        # straddles a bar. Restore only when the next interval actually needs it.
+        for line in body.splitlines(keepends=True):
+            if active != division:
+                out.append(f'{{{division}}}')
+                active = division
+            out.append(line)
+            if line.endswith('\n'):
+                active = None
+
+    def advance(size):
+        nonlocal tick, active
+        tick += size
+        if tick % 384 == 0:
+            out.append('\n')
+            active = None
+
     while i < len(text):
         c = text[i]
+        if depth == 0 and text.startswith('||', i):
+            end = text.find('\n', i)
+            end = len(text) if end < 0 else end + 1
+            pending.append(text[i:end]); i = end; continue
         if c == '[': depth += 1
         elif c == ']': depth -= 1
         if c == '{' and depth == 0:
@@ -71,36 +96,38 @@ def four_beat_lines(chart, *, start_tick=0):
             subdivision = int(text[i+1:end])
             if not 0 < subdivision <= 384 or 384 % subdivision:
                 raise ValueError('four-beat layout requires a 1/96-beat subdivision')
-            pending.append(text[i:end+1]); i=end+1; continue
+            i=end+1; continue
         if c == ',' and depth == 0:
             duration = 384 // subdivision
+            body = ''.join(pending)
             if tick % 384 + duration <= 384:
-                out.extend(pending); out.append(','); tick += duration
-                if tick % 384 == 0: out.append('\n')
+                emit(body + ',', subdivision)
+                advance(duration)
             else:
                 remaining = duration
-                body = re.sub(r'\{\d+\}', '', ''.join(pending))
                 while remaining:
                     size = min(remaining, 384 - tick % 384)
                     unit = math.gcd(size, 384)
                     # A subdivision must precede the note, not follow it.
-                    out.append('{' + str(384 // unit) + '}' + body + ',' * (size // unit))
+                    emit(body + ',' * (size // unit), 384 // unit)
                     body = ''
-                    tick += size; remaining -= size
-                    if tick % 384 == 0: out.append('\n')
-                out.append('{' + str(subdivision) + '}')
+                    advance(size); remaining -= size
             pending = []
         else:
             pending.append(c)
         i += 1
-    return ''.join(out + pending)
+    emit(''.join(pending), subdivision)
+    return ''.join(out)
 
 
 def persistent_subdivisions(chart):
-    """A top-level {n} stays active across notes, controls and line breaks."""
+    """Deduplicate within a line; retain explicit subdivisions at line starts."""
     active = None
     def replace(match):
         nonlocal active
+        if match[0].startswith('||') or match[0] == '\n':
+            active = None
+            return match[0]
         if match[0].startswith('['):
             return match[0]
         subdivision = int(match[1])
@@ -108,4 +135,4 @@ def persistent_subdivisions(chart):
             return ''
         active = subdivision
         return match[0]
-    return re.sub(r'\[[^\]]*\]|\{(\d+)\}', replace, chart)
+    return re.sub(r'\|\|[^\n]*(?:\n|$)|\[[^\]]*\]|\n|\{(\d+)\}', replace, chart)

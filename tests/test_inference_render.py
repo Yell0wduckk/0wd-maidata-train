@@ -12,7 +12,7 @@ from maidata.decoder.windows import real_onsets
 from maidata.inference.__main__ import ir_metadata
 from maidata.inference.materialize import render_origin
 from maidata.inference.render import SimaiWriter, render_document, position
-from maidata.inference.simai import persistent_subdivisions
+from maidata.inference.simai import four_beat_lines, persistent_subdivisions
 from maidata.time import TimingMap
 
 
@@ -37,9 +37,56 @@ def test_persistent_delta_examples(ticks, expected, geometry):
     assert render_document(ir) == expected+'E'
 
 
-def test_brace_dedup_keeps_duration_text_and_persists_across_lines():
+def test_brace_dedup_keeps_duration_text_and_line_start_subdivisions():
     assert persistent_subdivisions('{16}1[16:1],\n{16}(180)1,{8}2,{8}3,') == \
-           '{16}1[16:1],\n(180)1,{8}2,3,'
+           '{16}1[16:1],\n{16}(180)1,{8}2,3,'
+
+
+@pytest.mark.parametrize('source,expected', [
+    ('{4}1,2,3,4,5,E', '{4}1,2,3,4,\n{4}5,E'),
+    ('{8}1,,,,,,,{4}2,{8}3,E', '{8}1,,,,,,,2,\n{8},3,E'),
+    ('{8}1,,,,,,,{4}2,3,E', '{8}1,,,,,,,2,\n{8},{4}3,E'),
+    ('{8}1,,,,,,,{4}2,{4}{8}3,E', '{8}1,,,,,,,2,\n{8},3,E'),
+    ('{4}1,2,3,4,E', '{4}1,2,3,4,\n{4}E'),
+    ('{4}(120)|| 3 / 4\n<HS*1.25>1,2,E',
+     '{4}(120)|| 3 / 4\n{4}<HS*1.25>1,2,E'),
+])
+def test_four_beat_layout_has_explicit_line_starts_without_stale_restores(source, expected):
+    chart = persistent_subdivisions(four_beat_lines(source))
+    assert chart == expected
+    assert four_beat_lines(chart) == chart
+
+
+@pytest.mark.parametrize('offset', [0, 1, 24, 48, 95, 96, 144, 192, 240, 288, 336, 360, 383])
+@pytest.mark.parametrize('division', [n for n in range(1, 385) if 384 % n == 0])
+def test_interval_splitting_preserves_time_and_exact_bar_boundaries(offset, division):
+    # Each note has one original interval; split commas must add no onset.
+    import re
+    source = f'{{{division}}}1,2,3,E'
+    chart = persistent_subdivisions(four_beat_lines(source, start_tick=offset))
+    tick, active, notes = offset, None, []
+    for token in re.findall(r'\{\d+\}|[123E,\n]', chart):
+        if token.startswith('{'):
+            active = int(token[1:-1])
+        elif token == ',':
+            tick += 384 // active
+        elif token == '\n':
+            assert tick % 384 == 0
+        else:
+            notes.append((token, tick))
+    step = 384 // division
+    assert notes == [(note, offset+i*step) for i, note in enumerate('123E')]
+    assert all(re.match(r'^\{\d+\}', line) for line in chart.splitlines())
+    assert not re.search(r'\{\d+\}\{\d+\}', chart)
+
+
+def test_cross_bar_layout_preserves_native_note_and_control_semantics(native_miacode):
+    source = ('{8}(120)1h[4:1],,,,,,,{4}<HS*1.25>2-4[8:1]*-6[8:1],'
+              '{8}(180)3,4,E')
+    chart = persistent_subdivisions(four_beat_lines(source))
+    check_roundtrip(native_dump(native_miacode, source, .125), native_dump(native_miacode, chart, .125))
+    assert '\n{8},' in chart
+    assert '{4}{8}' not in chart
 
 
 @pytest.mark.parametrize('case',['complex','empty','negative','wait_across_bpm','long_spacing'])

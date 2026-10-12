@@ -175,7 +175,7 @@ Python接口`generate(..., stream=None)`与`decode_window(..., stream=None)`可�
 
 默认推理将已接受的完整音符直接转为simai预览，跳过IR构造和最终token包重建；搜索回滚同步撤销预览。窗口成功结束后将完整真实起音组提交，回退、CONT、空窗和跨窗动作不会产生重复音符。最后补齐尾部和排版，产物为 `maidata.txt`、`track.<原扩展名>` 与 `generation.json`（权重来源、实际配方、窗口/预测plan12、终端、bypass、stream_output与是否完成）；不生成 `model.ir.json` 或 `model.tokens.json`。失败保留最后预览与 `generation-error.json`，不报告完整生成。
 
-独立物化入口仍消费已有Chart IR，保留NOTE/flags、连续链、并行分支、WiFi、短hold、written-BPM时值和BPM/meter/HS控制的写法。超过4拍的空白间隔保持原有压缩和四拍换行，不移动真实事件。`{n}`持续生效，排版后删除重复声明，包括跨行的重复拍号：连续24tick输出 `{16}1,1,`，72tick接24tick输出 `{16}1,,,1,`。出现负拍起音时仍平移导出拍原点并同步调整 `&first` 和BPM控制，音符的音频绝对时间不变。
+独立物化入口仍消费已有Chart IR，保留NOTE/flags、连续链、并行分支、WiFi、短hold、written-BPM时值和BPM/meter/HS控制的写法。超过4拍的空白间隔保持原有压缩和四拍换行，不移动真实事件。每行起始显式写出细分 `{n}`，同一行内才合并重复声明：连续24tick输出 `{16}1,1,`，72tick接24tick输出 `{16}1,,,1,`。跨越四拍边界的间隔按边界拆开，例如第3.5拍起的一拍间隔拆为行尾和下一行行首的两个八分间隔；拆分后按下一段的实际细分输出，不提前恢复旧细分，避免 `{4}{8}` 连写。整曲、流式预览、独立物化及交互片段共用该排版，片段依据自身绝对拍位换行。出现负拍起音时仍平移导出拍原点并同步调整 `&first` 和BPM控制，音符的音频绝对时间不变。
 
 独立物化写出 `maidata.txt`、`track.<原扩展名>`、`render.ir.json` 和 `materialization.json`（v2，renderer为python-simai），不生成 `reparsed.ir.json`，不报告未经执行的roundtrip。音频原样复制，不裁切、不变速。运行时完全没有MiaCode render/dump步骤；独立解析器的语义对照仅在开发测试中执行。
 
