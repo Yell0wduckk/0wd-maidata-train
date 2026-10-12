@@ -37,7 +37,7 @@ def prefill(decoder, memory, groups, timing, start_tick, history_beats, *, devic
 
 
 def decode_window(decoder, memory, session, boundary, sampler, distributions, timing, *,
-                  start_tick, end_tick, cap_tick, device, options, progress=None, window=1):
+                  start_tick, end_tick, cap_tick, device, options, progress=None, window=1, stream=None):
     # Every frame binds the complete rule state to the exact causal model prefix.
     # Keeping a bounded search frontier does NOT truncate the history fed to M.
     accepted, frames, trace, bypass = [], [], [], []
@@ -69,12 +69,16 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
             distributions, end_tick=end_tick, cap_tick=cap_tick,
             moment_remaining=options.max_tokens_per_moment-count),token)
 
+    emit(stream, 'window_start', window=window, start_tick=start_tick)
     frames.append(frame(boundary))
     while frames:
         snapshot, count, bypass_count, choices, input_token = frames[-1]
         session.restore(snapshot)
+        rolled_back = len(accepted) > count
         del accepted[count:]
         del bypass[bypass_count:]
+        if rolled_back:
+            emit(stream, 'rollback', window=window, token_count=count)
         try:
             token, cache = next(choices)
         except StopIteration:
@@ -109,7 +113,7 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
             # A complete action is authoritative even after a deferred field query.
             continue
         if len(accepted) >= options.max_tokens_per_window:
-            raise GenerationError(f'window {start_tick/96:g}: token limit {options.max_tokens_per_window}; no chart exported')
+            raise GenerationError(f'window {start_tick/96:g}: token limit {options.max_tokens_per_window}; generation incomplete')
         if sampler.physical_hard_mask:
             session.rules.accept(token)
         else:
@@ -118,6 +122,8 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
                 bypass.append(dict(token_index=len(accepted), token=token_to_dict(token), reasons=sorted(decision.physical)))
         session.cache = cache
         accepted.append(token)
+        emit(stream, 'token', window=window, token=token, token_count=len(accepted),
+             complete=session.rules.grammar.state.phase in ('done', 'track_done'))
         emit(progress, 'window_progress', window=window, tokens=len(accepted), backtracks=backtracks,
              cursor_beat=session.rules.grammar.state.cursor / 96)
         if options.trace:
@@ -142,7 +148,7 @@ def chart_from_groups(groups, timing, metadata):
 
 @torch.inference_mode()
 def generate(decoder, conditions, timing, geometry, config, metadata, duration, *, device, options=None,
-             progress=None, on_groups=None, return_chart=True):
+             progress=None, on_groups=None, return_chart=True, stream=None):
     options = options or GenerationOptions()
     if (options.max_tokens_per_window < 1 or options.max_tokens_per_moment < 1
             or options.rollback_tokens < 1 or options.max_backtracks_per_window < 0):
@@ -176,7 +182,7 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
         try:
             tokens, report = decode_window(decoder, memory, session, boundary, sampler, distributions, timing,
                 start_tick=start_tick, end_tick=end_tick, cap_tick=cap_tick, device=device, options=options,
-                progress=progress, window=i+1)
+                progress=progress, window=i+1, stream=stream)
         finally:
             # The next window starts with the requested hard-mask policy again.
             sampler.physical_hard_mask = options.physical_hard_mask
@@ -191,6 +197,7 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
             # leak abandoned candidates into the playable chart.
             if on_groups is not None:
                 on_groups(tuple(new))
+        emit(stream, 'window_end', window=i+1, groups=tuple(new))
         windows.append(dict(start_beat=start, end_beat=end_tick/96, history_tokens=history_count,
             boundary_delta_ms=boundary.delta_ms, generated_tokens=len(tokens), onsets=len(new),
             plan12=conditions.plans[i].float().cpu().tolist(),

@@ -78,7 +78,7 @@ pilot320的320份Master及23份Re:Master已有8,828个基础窗和1,587个复杂
 
 `python -m maidata.inference`加载阶段二v4的E_M/M；Z开启或使用预测plan时另加载阶段一v3的E_D/D/P，关闭Z且GT/无plan时不加载教师。两套配置独立恢复，M保持自己的架构；共享grid要求每拍采样数和Mel频带数一致，目标窗长度一致，Z启用时投影宽度匹配教师。固定E_D产生Draft的P0并计算全曲Z/预测plan；独立E_M产生M的全曲P0，参数与隐藏表示分开。GT plan训练的M自由推理仍读取P预测，报告分别记录训练和推理plan来源。读取配套grid或使用固定Mel统计提取音频，按新字段规则维护真实起音组、边界MOMENT、跨窗活动动作与完整规则快照。两套Encoder各自按曲复用准备结果，D/P及M音频投影整次生成复用；各窗重新prefill历史，始终覆盖音频及一个完整空尾窗。旧连续时间头不兼容新385类架构。Physical硬约束默认开启，trace默认关闭；路径、温度、种子与生成上限可配置。
 
-默认推理按已提交窗口直接将真实起音字段转译为simai，最终写出`maidata.txt`、`track.<音频扩展名>`和`generation.json`，不构造/写出Chart IR或最终token包。`python -m maidata.inference.materialize`保留为已有IR的独立转换入口；两入口共用纯Python写法，不调用MiaCode、不做运行时回读。拍号`{n}`持续生效，相邻相同声明合并，长休止压缩及四拍换行保持。两入口不导入旧模型包、不增加源码哈希门禁。小型真实E/D/P/M已完成CPU FP32/BF16到直接maidata输出的端到端测试；原生解析器仅在开发测试中对照语义。真实训练checkpoint的CUDA生成与谱面质量未验收。命令、跨窗合同和模块边界见[推理与物化](maidata-inference.md)。
+默认推理在每个完整音符/轨道分支接受后直接转译simai并原子更新`maidata.txt`，搜索回滚同步撤销，窗口结束后提交。音频只复制一次；成功后按完整音频终点收尾并写出`generation.json`，失败保留最后预览及错误报告。`--no-stream-output`仅在整曲成功后写谱面。推理不构造/写出Chart IR或最终token包。`python -m maidata.inference.materialize`保留为已有IR的独立转换入口；两入口共用纯Python写法，不调用MiaCode、不做运行时回读。拍号`{n}`持续生效，相邻相同声明合并，长休止压缩及四拍换行保持。两入口不导入旧模型包、不增加源码哈希门禁。小型真实E/D/P/M已完成CPU FP32/BF16到直接maidata输出的端到端测试；原生解析器仅在开发测试中对照语义。真实训练checkpoint的CUDA生成与谱面质量未验收。命令、跨窗合同和模块边界见[推理与物化](maidata-inference.md)。
 
 ## 已复制的旧模型实现
 

@@ -7,8 +7,10 @@ from copy import deepcopy
 from fractions import Fraction
 import json
 import math
+import os
 from pathlib import Path
 import shutil
+import time
 
 from maidata.time import TimingMap
 from .render import render_document
@@ -43,20 +45,48 @@ def render_origin(document):
     return result
 
 
-def write_playable(chart, first, bpm, audio_path, output, *, difficulty, level,
-                   title='', artist='', designer='maidata', cabinet='DX'):
-    output, audio_path = Path(output), Path(audio_path).resolve()
-    target_audio = output/('track'+audio_path.suffix.lower())
+def maidata_text(chart, first, bpm, *, difficulty, level,
+                 title='', artist='', designer='maidata', cabinet='DX'):
     clean = lambda s: str(s).replace('\r', ' ').replace('\n', ' ').replace('&', ' ').strip()
-    text = '\n'.join([f'&title={clean(title)}', f'&artist={clean(artist)}', f'&first={first:.17g}',
+    return '\n'.join([f'&title={clean(title)}', f'&artist={clean(artist)}', f'&first={first:.17g}',
         f'&wholebpm={bpm:.17g}', f'&cabinet={clean(cabinet)}', '&shortid=generated',
         f'&lv_{difficulty}={level:.4g}', f'&des_{difficulty}={clean(designer)}',
         f'&inote_{difficulty}={chart.strip()}', ''])
+
+
+def atomic_text(path, text):
+    """Readers keep a complete snapshot, including briefly occupied Windows files."""
+    path = Path(path)
+    temporary = path.with_suffix(path.suffix+'.tmp')
+    try:
+        temporary.write_text(text, encoding='utf-8', newline='\n')
+        for attempt in range(101):
+            try:
+                os.replace(temporary, path)
+                return
+            except PermissionError:
+                if attempt == 100:
+                    raise
+                time.sleep(.01)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def install_audio(audio_path, output):
+    output, audio_path = Path(output), Path(audio_path).resolve()
     output.mkdir(parents=True, exist_ok=True)
+    target_audio = output/('track'+audio_path.suffix.lower())
     if target_audio.resolve() != audio_path:
         shutil.copy2(audio_path, target_audio)
-    (output/'maidata.txt').write_text(text, encoding='utf-8', newline='\n')
     return dict(maidata=str((output/'maidata.txt').resolve()), track=str(target_audio.resolve()))
+
+
+def write_playable(chart, first, bpm, audio_path, output, *, difficulty, level,
+                   title='', artist='', designer='maidata', cabinet='DX'):
+    paths = install_audio(audio_path, output)
+    atomic_text(paths['maidata'], maidata_text(chart, first, bpm, difficulty=difficulty, level=level,
+        title=title, artist=artist, designer=designer, cabinet=cabinet))
+    return paths
 
 
 def materialize(ir_path, audio_path, output, *, difficulty, level, title='', artist='',

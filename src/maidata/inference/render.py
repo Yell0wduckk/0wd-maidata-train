@@ -1,5 +1,6 @@
 """Pure Python simai spelling, shared by IR export and committed inference groups."""
 from fractions import Fraction
+from copy import copy
 import math
 import re
 
@@ -187,6 +188,15 @@ class SimaiWriter:
     def add_groups(self, groups):
         for group in groups:
             self.add(Fraction(group.tick, 96), render_group(group))
+
+    def preview(self, groups=()):
+        """Render a temporary tail without consuming committed text or controls."""
+        writer = copy(self)
+        writer.parts = self.parts.copy()
+        writer.add_groups(groups)
+        writer.end = writer.pending[0] + Fraction(1, 96)
+        writer.controls = [c for c in writer.controls if c[0] < writer.end]
+        return writer.finish()
 
     def finish(self):
         for control in self.controls[self.control_index:]:

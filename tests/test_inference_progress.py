@@ -68,9 +68,9 @@ def test_cli_progress_defaults_and_opt_out():
               '--geometry', 'geometry', '--slide-data', 'slides.json', '--difficulty', '5',
               '--level', '14.5', '--output', 'result']
     args = parser().parse_args(common)
-    assert args.progress and args.progress_interval == 2 and not args.trace
-    args = parser().parse_args([*common, '--no-progress', '--progress-interval', '5'])
-    assert not args.progress and args.progress_interval == 5 and not args.trace
+    assert args.progress and args.progress_interval == 2 and not args.trace and args.stream_output
+    args = parser().parse_args([*common, '--no-progress', '--progress-interval', '5', '--no-stream-output'])
+    assert not args.progress and args.progress_interval == 5 and not args.trace and not args.stream_output
 
 
 def test_conditioning_events_leave_model_outputs_unchanged(config, capsys):

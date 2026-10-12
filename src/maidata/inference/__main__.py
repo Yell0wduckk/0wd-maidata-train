@@ -53,6 +53,8 @@ def parser():
     p.add_argument('--trace', action='store_true', default=defaults.trace, help='Explicit opt-in detailed generation trace')
     p.add_argument('--progress', action=argparse.BooleanOptionalAction, default=True, help='Stage/window progress on stderr; stdout remains final JSON')
     p.add_argument('--progress-interval', type=float, default=DEFAULT_INTERVAL, help='Minimum seconds between encoder/token progress updates')
+    p.add_argument('--stream-output', action=argparse.BooleanOptionalAction, default=True,
+                   help='Update maidata.txt after complete notes and rollbacks while generating')
     p.add_argument('--force', action='store_true')
     return p
 
@@ -85,6 +87,7 @@ def main(argv=None):
         from .generation import generate, GenerationOptions
         from .materialize import read_json, write_json, write_playable
         from .render import SimaiWriter
+        from .streaming import StreamingPreview
 
     output = Path(args.output)
     names = ('maidata.txt', 'generation.json', 'model.tokens.json', 'model.ir.json', 'generation-error.json')
@@ -130,6 +133,9 @@ def main(argv=None):
             if path.is_file():
                 path.unlink()
     try:
+        preview = StreamingPreview(writer, timing, args.audio, output,
+            difficulty=args.difficulty, level=args.level, title=args.title, artist=args.artist,
+            designer=args.designer, cabinet=args.cabinet) if args.stream_output else None
         with torch.inference_mode(), torch.autocast(device.type, dtype=torch.bfloat16, enabled=args.precision == 'bf16'):
             if models.draft is None:
                 conditions = prepare_decoder_conditions(models.decoder_encoder, models.config, grid, timing, duration,
@@ -143,26 +149,30 @@ def main(argv=None):
             with stage(progress, 'generation'):
                 _, windows = generate(models.decoder, conditions, timing, geometry, models.config, {},
                     duration, device=device, options=options, progress=progress,
-                    on_groups=writer.add_groups, return_chart=False)
+                    on_groups=None if preview else writer.add_groups, return_chart=False, stream=preview)
         chart = writer.finish()
+        bypass = sum(len(w['physical_bypass']) for w in windows)
+        report = dict(schema='maidata.generation.v1', checkpoints=models.provenance,
+            audio=str(Path(args.audio).resolve()), timing=timing_data, duration_seconds=duration,
+            difficulty=args.difficulty, level=args.level, device=str(device), precision=args.precision,
+            options=asdict(options), config=models.config, windows=windows, moments=writer.moments,
+            physical_bypass_count=bypass, complete=True, stream_output=args.stream_output)
+        with stage(progress, 'write_outputs'):
+            if preview:
+                preview.write(chart)
+                report.update(preview.paths)
+            else:
+                report.update(write_playable(chart, timing.first_seconds, timing.points[0][1], args.audio, output,
+                    difficulty=args.difficulty, level=args.level, title=args.title, artist=args.artist,
+                    designer=args.designer, cabinet=args.cabinet))
+            write_json(output/'generation.json', report)
+            error_file = output/'generation-error.json'
+            if error_file.exists():
+                error_file.unlink()
     except Exception as exc:
         write_json(output/'generation-error.json', dict(error=str(exc), options=asdict(options),
-                                                       checkpoints=models.provenance))
+            checkpoints=models.provenance, complete=False, stream_output=args.stream_output))
         raise
-    bypass = sum(len(w['physical_bypass']) for w in windows)
-    report = dict(schema='maidata.generation.v1', checkpoints=models.provenance,
-        audio=str(Path(args.audio).resolve()), timing=timing_data, duration_seconds=duration,
-        difficulty=args.difficulty, level=args.level, device=str(device), precision=args.precision,
-        options=asdict(options), config=models.config, windows=windows, moments=writer.moments,
-        physical_bypass_count=bypass, complete=True)
-    with stage(progress, 'write_outputs'):
-        report.update(write_playable(chart, timing.first_seconds, timing.points[0][1], args.audio, output,
-            difficulty=args.difficulty, level=args.level, title=args.title, artist=args.artist,
-            designer=args.designer, cabinet=args.cabinet))
-        write_json(output/'generation.json', report)
-        error_file = output/'generation-error.json'
-        if error_file.exists():
-            error_file.unlink()
     print(json.dumps(dict(output=str(output.resolve()), windows=len(windows), moments=writer.moments,
                           physical_hard_mask=args.physical_hard_mask, physical_bypass_count=bypass), ensure_ascii=False))
 

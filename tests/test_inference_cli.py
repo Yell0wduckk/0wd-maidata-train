@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import wave
+import shutil
 from unittest.mock import patch
 
 import numpy as np
@@ -14,6 +15,8 @@ from maidata.model import build_model, build_draft, build_planner, build_decoder
 from maidata.inference.__main__ import main
 from maidata.inference.conditioning import audio_grid
 from maidata.preparation.features import MEL_RECIPE
+from maidata.chart import Note
+from maidata.inference.streaming import StreamingPreview
 
 
 @pytest.mark.parametrize('precision',['fp32','bf16'])
@@ -50,11 +53,21 @@ def test_cli_end_to_end_cpu(config,tmp_path,precision,capsys):
         '--audio',str(tmp_path/'audio.wav'),'--grid',str(tmp_path/'grid.npz'),'--bpm','120',
         '--geometry',str(geometry),'--slide-data',str(slides),'--difficulty','5','--level','14.5',
         '--device','cpu','--precision',precision,'--temperature','0','--output',str(tmp_path/'result')]
-    # Default inference spells committed groups without constructing Chart IR
-    # or the otherwise optional final token bundle.
+    snapshots = []
+    original_stream = StreamingPreview.__call__
+    def inspect_stream(live,event):
+        original_stream(live,event)
+        if event['event'] == 'token' and event['complete']:
+            assert not (tmp_path/'result/generation.json').exists()
+            snapshots.append((event['window'], (tmp_path/'result/maidata.txt').read_bytes()))
+    # Default inference spells live fields without constructing IR/token bundles.
     with patch('maidata.chart.decode_chart',side_effect=AssertionError('IR construction')), \
-         patch('maidata.inference.generation.chart_from_groups',side_effect=AssertionError('token bundle')):
+         patch('maidata.inference.generation.chart_from_groups',side_effect=AssertionError('token bundle')), \
+         patch.object(StreamingPreview,'__call__',inspect_stream), \
+         patch('maidata.inference.materialize.shutil.copy2',wraps=shutil.copy2) as copies:
         main(arguments)
+    assert copies.call_count == 1
+    assert snapshots and snapshots[0][0] == 1
     captured=capsys.readouterr()
     assert json.loads(captured.out)['windows']==2
     assert 'Model loading: started' in captured.err and 'Writing outputs: done' in captured.err
@@ -66,6 +79,11 @@ def test_cli_end_to_end_cpu(config,tmp_path,precision,capsys):
     assert (tmp_path/'result/track.wav').read_bytes() == (tmp_path/'audio.wav').read_bytes()
     assert not (tmp_path/'result/model.ir.json').exists()
     assert not (tmp_path/'result/model.tokens.json').exists()
+    main([*arguments,'--no-stream-output','--no-progress','--output',str(tmp_path/'plain')])
+    plain = json.loads((tmp_path/'plain/generation.json').read_text(encoding='utf-8'))
+    assert report['stream_output'] and not plain['stream_output']
+    assert report['windows'] == plain['windows'] and report['options'] == plain['options']
+    assert (tmp_path/'plain/maidata.txt').read_bytes() == (tmp_path/'result/maidata.txt').read_bytes()
     with pytest.raises(FileExistsError):
         main(arguments)
     capsys.readouterr()
@@ -78,6 +96,18 @@ def test_cli_end_to_end_cpu(config,tmp_path,precision,capsys):
     assert not (tmp_path/'result/generation.json').exists()
     assert not (tmp_path/'result/model.ir.json').exists()
     assert not (tmp_path/'result/maidata.txt').exists()
+    def fail_with_preview(*args,stream,**kwargs):
+        stream(dict(event='window_start',window=1,start_tick=0))
+        stream(dict(event='token',window=1,token=Note.make('tap','A1'),token_count=1,complete=True))
+        raise RuntimeError('failed after live note')
+    with patch('maidata.inference.generation.generate',side_effect=fail_with_preview), \
+         pytest.raises(RuntimeError,match='failed after live note'):
+        main([*arguments,'--force','--no-progress'])
+    assert '&inote_5={384}(120)1,E' in (tmp_path/'result/maidata.txt').read_text(encoding='utf-8')
+    assert not (tmp_path/'result/generation.json').exists()
+    error = json.loads((tmp_path/'result/generation-error.json').read_text(encoding='utf-8'))
+    assert error['complete'] is False and error['stream_output'] is True
+    assert capsys.readouterr().out == ''
 
 
 @pytest.mark.parametrize('first', [.125, 0., -.125, -1.25])

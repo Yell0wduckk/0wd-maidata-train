@@ -1,6 +1,6 @@
 # 当前模型整曲推理与 maidata 物化
 
-`python -m maidata.inference` 加载当前 `maidata` 的两套独立音频 Encoder、Draft D、Planner P 与 Decoder M，生成五类新字段，按已提交窗口增量转译并直接输出可播放的 `maidata.txt`。阶段一 E_D 服务固定 Draft/Planner，阶段二 E_M 服务 M 的直接音频输入。`python -m maidata.inference.materialize` 独立把 IR 写成可播放的 `maidata.txt` 与配套音频。两者不导入旧 `maimai_*` Python 包，不读取旧模型版本表；物化写法从现有 MiaCode 导出器迁移，运行时不调用 MiaCode，不做回读。
+`python -m maidata.inference` 加载当前 `maidata` 的两套独立音频 Encoder、Draft D、Planner P 与 Decoder M，生成五类新字段，实时转译完整音符并更新可播放的 `maidata.txt`。阶段一 E_D 服务固定 Draft/Planner，阶段二 E_M 服务 M 的直接音频输入。`python -m maidata.inference.materialize` 独立把 IR 写成可播放的 `maidata.txt` 与配套音频。两者不导入旧 `maimai_*` Python 包，不读取旧模型版本表；物化写法从现有 MiaCode 导出器迁移，运行时不调用 MiaCode，不做回读。
 
 窗口与历史遵循 [推理设计](../../0wd-v3-refactor-docs/new-inference.md)、[Decoder 设计第5～6节](../../0wd-v3-refactor-docs/new-decoder.md)以及[当前字段接口](chart-fields-physical.md)。
 
@@ -76,6 +76,7 @@ python -m maidata.inference.materialize \
 | `--trace` | 默认关闭；显式开启才记录逐token选择/回退 |
 | `--progress / --no-progress` | 默认开启；向stderr打印阶段、窗口与节流后的token进度；不启用详细trace |
 | `--progress-interval` | 2秒；Encoder分块与窗内token进度的最短输出间隔，阶段和窗口起止立即输出 |
+| `--stream-output / --no-stream-output` | 默认开启；完整音符/轨道分支与回滚立即更新同一路径的maidata.txt。关闭后仅在整曲成功时写出 |
 | `--force` | 默认关闭；显式覆盖同名产物，不删除输出目录中的其他文件 |
 
 网络容量、RoPE、音频余量、Z范围、谱面历史和目标窗口使用 checkpoint 保存的模型配方；时间词表固定为1..384 tick加CONT，共385类。目标 stride 必须等于目标长度，保证目标中心连续、无重复。换容量须使用相应训练权重，不能用 CLI 强行宽松加载。
@@ -107,11 +108,19 @@ CLI默认在stderr显示权重加载、音频输入、几何资源、Draft encod
 
 Python接口`prepare_conditions(..., progress=None)`与`generate(..., progress=None)`默认静默；可传入接收事件字典的callback。事件包括`stage_start/stage_done/stage_error`、`encoder_progress`、`window_start/window_progress/window_done`。CLI reporter只读取已有的Python计数和单调时钟，不为进度读取GPU标量或调用`torch.cuda.synchronize()`。输出的时间用于观察壁钟进度，不是逐阶段精确CUDA基准。
 
+## 实时谱面输出
+
+CLI默认在自回归生成期间直接更新`output/maidata.txt`。Tap/Touch完成后立即显示，Hold/TouchHold等待完整时值，Slide等待完整轨道与时值；后续分支完成后更新同一个Slide。裸MOMENT、未完成音符或分支不进入预览。搜索恢复前缀时立即撤销被回滚的可见内容，已提交窗口保持。每次通过同目录临时文件原子替换，Windows读者短暂占用文件时有限重试；音频在生成前只复制一次。
+
+预览的E位于最后可显示起音后一tick，BPM控制只包含该范围；first与最终输出一致。成功时按完整音频终点收尾并写出`generation.json`的`complete=true`。推理期间文件可能包含当前窗口的暂定音符，不能仅凭文件存在判断整曲完成。失败保留最后一份语法完整的预览，写出`generation-error.json`的`complete=false`并报错，不写成功报告。`--no-stream-output`恢复整曲成功后才写谱面的方式；与`--no-progress`、`--trace`独立。
+
+Python接口`generate(..., stream=None)`与`decode_window(..., stream=None)`可接收事件字典callback，默认不发布。事件依次为`window_start`（window/start_tick）、`token`（window/token/token_count/complete）、`rollback`（window/token_count）；`generate`提交窗口后另发布`window_end`（window/groups）。token是当前新字段对象，complete表示语法处于done或track_done；rollback的token_count是保留前缀长度。终端和内部CONT不作为真实字段发布。`on_groups`仍只在成功提交窗口后调用，不受流式开关影响。`StreamingPreview`消费这些事件并持有SimaiWriter的提交；不能再将同一writer的add_groups同时绑定on_groups，以免重复提交。事件不写stdout，不使用旧行协议或外部物化进程。
+
 ## 新字段跨窗历史
 
 1. 以真实起音选择 `[a-chart_history_beats,a)` 的完整组，包含所属 NOTE、连续/并行 ROUTE 与完整 duration。不设历史token预算，不把长动作拆成窗口内的短动作。
 2. 真实起音组单独持有绝对tick和原始相邻起音delta；跨窗口首组的delta根据全曲上一真实起音重算。历史裁剪不改写首组delta，不把历史左边界当成上一事件。
-3. 前窗外部边界和终端 `TimeTarget` 不进入真实谱面或历史。窗首直接生成NOTE会成为真实起音组，下次prefill恢复普通MOMENT。最终IR也从整曲真实起音重建delta，不能只删除控制token后拼接。
+3. 前窗外部边界和终端 `TimeTarget` 不进入真实谱面或历史。窗首直接生成NOTE会成为真实起音组，下次prefill恢复普通MOMENT。导出从真实起音的绝对位置确定间隔，不能只删除控制token后拼接。
 4. 新窗边界delta始终从全曲最后真实起音计算；例如最后真实起音20拍，32拍窗的前4拍历史为空，边界仍保留20→32的时间。连续空窗不更新最后真实起音。推理不启用历史dropout。
 5. 切窗丢弃旧谱面K/V，使用当前Z/plan重新prefill全部历史。历史最后token的后继类型固定为边界MOMENT；窗口内才增量复用K/V。
 6. Physical状态独立持续存在；历史prefill不重复提交动作。跨窗hold/slide、释放和交接关系按真实时间保留，即使其起音已不在4拍历史内。切窗前必须完成当前音符及路线字段，duration不因越过窗尾终止或截短。
@@ -127,9 +136,10 @@ Python接口`prepare_conditions(..., progress=None)`与`generate(..., progress=N
 | `time.discrete` | 与训练/迁移共用的时间编码、支持和临时query坐标 |
 | `physical.inference` | 推理专用raw规则查询、局部字段支撑及前缀缓存 |
 | `generation` | 全曲窗口、真实历史、prefill与增量K/V、同步规则快照回退 |
-| `render / simai / materialize` | 已提交字段及已有IR的纯Python转译、持续拍号与四拍排版、音频配套 |
+| `streaming` | 当前窗口完整前缀预览、回滚撤销与窗口提交 |
+| `render / simai / materialize` | 字段及已有IR的纯Python转译、持续拍号与四拍排版、原子文本写入及音频配套 |
 
-默认推理逐窗将已提交的真实起音组直接转为simai文本，跳过IR构造和最终token包重建。搜索中的候选不写入文本，只有窗口成功结束后才发布该窗的完整音符，回退、CONT、空窗和跨窗动作不会产生重复音符。最后补齐尾部和排版后写出 `maidata.txt`、`track.<原扩展名>` 与 `generation.json`（权重来源、实际配方、窗口/预测plan12、终端、bypass与是否完成）；不再默认生成 `model.ir.json` 或 `model.tokens.json`。失败保留 `generation-error.json`，不导出未完成谱面。
+默认推理将已接受的完整音符直接转为simai预览，跳过IR构造和最终token包重建；搜索回滚同步撤销预览。窗口成功结束后将完整真实起音组提交，回退、CONT、空窗和跨窗动作不会产生重复音符。最后补齐尾部和排版，产物为 `maidata.txt`、`track.<原扩展名>` 与 `generation.json`（权重来源、实际配方、窗口/预测plan12、终端、bypass、stream_output与是否完成）；不生成 `model.ir.json` 或 `model.tokens.json`。失败保留最后预览与 `generation-error.json`，不报告完整生成。
 
 独立物化入口仍消费已有Chart IR，保留NOTE/flags、连续链、并行分支、WiFi、短hold、written-BPM时值和BPM/meter/HS控制的写法。超过4拍的空白间隔保持原有压缩和四拍换行，不移动真实事件。`{n}`持续生效，排版后删除重复声明，包括跨行的重复拍号：连续24tick输出 `{16}1,1,`，72tick接24tick输出 `{16}1,,,1,`。出现负拍起音时仍平移导出拍原点并同步调整 `&first` 和BPM控制，音符的音频绝对时间不变。
 
