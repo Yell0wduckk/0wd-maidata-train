@@ -157,6 +157,25 @@ def window_tokens(sequence, start_tick, timing):
     return sequence.tokens, tuple(beats)
 
 
+def continuation_limits(start, end, request, *, audio_end_tick, following_tick=None):
+    """Independent output bounds on the global 96-tick beat grid."""
+    limits = [(end, 'requested_end'), (audio_end_tick, 'audio_end')]
+    if following_tick is not None:
+        limits.append((following_tick, 'next_note'))
+    for key, default, unit, reason in (
+            ('max_beats', 4, 96, 'beat_limit'),
+            ('max_four_beat_blocks', 1, 384, 'four_beat_limit')):
+        value = request.get(key, default)
+        if type(value) is not int or value < 0:
+            raise ValueError(f'{key} must be a nonnegative integer; 0 disables')
+        if value:
+            limits.append((start // unit * unit + value * unit, reason))
+    # Prefer named bounds over a duplicate caller-provided end.
+    tick = min(t for t, _ in limits)
+    reason = next(r for t, r in reversed(limits) if t == tick)
+    return tick, reason
+
+
 class Interactive:
     def __init__(self, args, *, emit):
         import torch
@@ -265,7 +284,7 @@ class Interactive:
         from maidata.chart.types import Moment
         from maidata.decoder.session import DecodeSession
         from maidata.decoder.windows import history_prefix, real_onsets
-        from .generation import decode_window
+        from .generation import decode_window, repetition_history
         from .options import GenerationOptions
         from .render import render_group, render_span
         from .sampling import Sampler
@@ -276,26 +295,34 @@ class Interactive:
         if mode not in ('continue', 'range') or start < 0 or end <= start:
             raise ValueError('invalid suggest mode or tick range')
         budget = max(1, int(request.get('max_tokens', 32))) if mode == 'continue' else None
-        # A continuation stays near the caret: it may cross into at most this many windows.
-        windows_left = max(1, int(request.get('max_windows', 2))) if mode == 'continue' else None
+        audio_end = math.ceil(self.timing.second_to_beat(self.duration) * 96)
+        limit_reason = 'requested_end'
+        if mode == 'continue':
+            following = next((g.tick for g in self.groups if g.tick >= start), None)
+            end, limit_reason = continuation_limits(start, int(request['end_tick']), request,
+                audio_end_tick=audio_end, following_tick=following)
         defaults = GenerationOptions()
         options = GenerationOptions(temperature=float(request.get('temperature', defaults.temperature)),
             top_k=int(request.get('top_k', defaults.top_k)), top_p=float(request.get('top_p', defaults.top_p)),
-            seed=int(request.get('seed', defaults.seed)))
+            seed=int(request.get('seed', defaults.seed)),
+            repetition_window=request.get('repetition_window', defaults.repetition_window),
+            repetition_penalty=float(request.get('repetition_penalty', defaults.repetition_penalty)))
         sampler = Sampler(temperature=options.temperature, seed=options.seed, top_k=options.top_k,
-                          top_p=options.top_p, physical_hard_mask=options.physical_hard_mask)
+                          top_p=options.top_p, physical_hard_mask=options.physical_hard_mask,
+                          repetition_window=options.repetition_window, repetition_penalty=options.repetition_penalty)
         groups = [g for g in self.groups if g.tick < start]
+        repeat_prefix = repetition_history(groups, options.repetition_window)
         generated, produced, reused, computed, bypass = [], 0, 0, 0, 0
+        stop_reason = limit_reason
         floor = start
         while floor < end:
             index = floor // self.window_ticks
             if index >= len(self.conditions.starts):
                 break
             window_start, window_end = index * self.window_ticks, (index + 1) * self.window_ticks
-            stop_tick = min(end, window_end)
             if cancelled.is_set():
                 raise Cancelled()
-            state, sequence = self.rules(groups, index, floor, stop_tick)
+            state, sequence = self.rules(groups, index, floor, window_end)
             history, positions, boundary, _ = history_prefix(groups, self.timing, start_tick=window_start,
                 history_beats=self.config['chart_history_beats'], dropped=False)
             current, beats = window_tokens(sequence, window_start, self.timing)
@@ -316,9 +343,10 @@ class Interactive:
                 session.cache = context.cache
                 sampler.floor_tick, sampler.physical_hard_mask = floor, options.physical_hard_mask
                 new, report = decode_window(self.decoder, context.memory, session, sequence.tokens[0], sampler,
-                    self.distributions, self.timing, start_tick=window_start, end_tick=stop_tick,
+                    self.distributions, self.timing, start_tick=window_start, end_tick=window_end,
                     cap_tick=window_end + self.config['audio_after_beats'] * 96, device=self.device,
-                    options=options, window=index + 1, first_token=tokens[-1], stop=stop)
+                    options=options, window=index + 1, first_token=tokens[-1], stop=stop,
+                    repetition_prefix=repeat_prefix, onset_end_tick=end if end <= window_end else None)
             reused, computed = reused + kept, computed + fresh
             bypass += len(report['physical_bypass'])
             if new:
@@ -338,21 +366,22 @@ class Interactive:
                 groups.extend(onsets)
                 generated.extend(onsets)
                 produced += len(new)
+                repeat_prefix = (repeat_prefix + tuple(new))[-options.repetition_window:]
             if report.get('stopped') or budget is not None and produced >= budget:
+                if report.get('stop_reason') != 'onset_limit':
+                    stop_reason = 'token_limit'
                 break
-            if windows_left is not None:
-                windows_left -= 1
-                if windows_left == 0:
-                    break
-            floor = stop_tick
+            floor = window_end
         if mode == 'range':
             span = (start, end)
         elif generated:
             last = generated[-1].tick
             following = sorted(int(b) for b in request.get('boundaries', ()) if int(b) > last)
-            span = (start, following[0] if following else min(end, (last // 96 + 1) * 96))
+            span = (start, min(end, following[0] if following else (last // 96 + 1) * 96))
         else:
-            span = None
+            # A silent prefix is still a valid continuation: accepting its
+            # commas advances the caret so short limits cannot trap an empty chart.
+            span = (start, end) if end > start else None
         controls = [dict(kind='bpm', bpm=bpm, position_beats=dict(num=b.numerator, den=b.denominator))
                     for b, bpm in self.timing.points]
         text = render_span(generated, *span, controls) if span else ''
@@ -367,7 +396,9 @@ class Interactive:
                          **({'content': [token_to_dict(t) for t in g.content]} if request.get('content') else {}))
                     for g in generated],
             tokens=produced, reused_rows=reused, computed_rows=computed,
-            skipped_notes=self.skipped, physical_bypass=bypass, seed=options.seed)
+            skipped_notes=self.skipped, physical_bypass=bypass, seed=options.seed,
+            limit_tick=end, stop_reason=stop_reason,
+            repetition_window=options.repetition_window, repetition_penalty=options.repetition_penalty)
 
 
 class Server:

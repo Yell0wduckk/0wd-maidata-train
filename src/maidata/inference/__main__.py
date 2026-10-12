@@ -45,6 +45,10 @@ def parser():
     p.add_argument('--temperature', type=float, default=defaults.temperature)
     p.add_argument('--top-k', type=int, default=defaults.top_k, help='Legal candidate limit; 0 disables')
     p.add_argument('--top-p', type=float, default=defaults.top_p, help='Legal nucleus mass in (0, 1]; 1 disables')
+    p.add_argument('--repetition-window', type=int, default=defaults.repetition_window,
+                   help='Recent real structure tokens used for pad/route repetition penalty')
+    p.add_argument('--repetition-penalty', type=float, default=defaults.repetition_penalty,
+                   help='Subtract from repeated pad/route logits; 0 disables')
     p.add_argument('--seed', type=int, default=defaults.seed, help='Fixed seed; -1 draws a random seed for this run')
     p.add_argument('--encoder-window-batch', type=int, default=8)
     p.add_argument('--max-tokens-per-window', type=int, default=defaults.max_tokens_per_window)
@@ -139,6 +143,7 @@ def main(argv=None):
     with stage(progress, 'geometry'):
         geometry = Geometry.from_resources(args.geometry, args.slide_data)
     options = GenerationOptions(temperature=args.temperature, top_k=args.top_k, top_p=args.top_p, seed=args.seed,
+        repetition_window=args.repetition_window, repetition_penalty=args.repetition_penalty,
         max_tokens_per_window=args.max_tokens_per_window, max_tokens_per_moment=args.max_tokens_per_moment,
         max_backtracks_per_window=args.max_backtracks_per_window,
         rollback_tokens=args.rollback_tokens, physical_hard_mask=args.physical_hard_mask, trace=args.trace)

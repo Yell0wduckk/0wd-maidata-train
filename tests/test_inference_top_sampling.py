@@ -6,6 +6,7 @@ from unittest.mock import patch
 from maidata.inference.sampling import Sampler
 from maidata.inference.__main__ import parser
 from maidata.inference.options import GenerationOptions
+from maidata.chart import Moment, Note, Route, HoldDuration
 
 
 def test_default_preserves_legacy_rng_and_order():
@@ -74,6 +75,47 @@ def test_invalid_filters(kwargs):
 def test_cli_exposes_filters():
     args = parser().parse_args(['--joint-checkpoint', 'x', '--audio', 'x', '--bpm', '120',
         '--mel-stats', 'x', '--geometry', 'x', '--slide-data', 'x', '--difficulty', '5',
-        '--level', '14.5', '--output', 'x', '--top-k', '8', '--top-p', '.9', '--seed', '-1'])
+        '--level', '14.5', '--output', 'x', '--top-k', '8', '--top-p', '.9', '--seed', '-1',
+        '--repetition-window', '9', '--repetition-penalty', '2.5'])
     assert (args.top_k, args.top_p) == (8, .9)
     assert args.seed == -1
+    assert (args.repetition_window, args.repetition_penalty) == (9, 2.5)
+
+
+@pytest.mark.parametrize('field,identities,history', [
+    ('pad', ('A1', 'A2', 'B1'), (Note.make('tap', 'A1'), Note.make('touch', 'A1'))),
+    ('route', (0, 1, 2), (Route(0, 1), Route(0, 0))),
+])
+def test_repetition_subtracts_once_before_top_filters(field, identities, history):
+    sampler = Sampler(temperature=0, repetition_window=32, repetition_penalty=1., top_k=1)
+    scores = torch.tensor([.8, .4, -.5])
+    assert list(sampler.order(scores, identities=identities, history=history, field=field)) == [1]
+    assert list(sampler.order(scores, [True, False, False], identities=identities, history=history, field=field)) == [0]
+    # Same history is ignored by type, flags, time and track-break heads.
+    assert list(sampler.order(scores, history=history)) == [0]
+    assert scores.tolist() == pytest.approx([.8, .4, -.5])
+
+
+def test_repetition_window_counts_all_structure_tokens_and_expires():
+    sampler = Sampler(temperature=0, repetition_window=2)
+    scores = torch.tensor([.8, .4])
+    history = (Note.make('tap', 'A1'), Moment(10.), HoldDuration(12))
+    assert list(sampler.order(scores, identities=('A1','A2'), history=history, field='pad'))[0] == 0
+    assert list(sampler.order(scores, identities=('A1','A2'), history=history[-2:] + (Note.make('tap','A1'),), field='pad'))[0] == 1
+
+
+def test_disabled_repetition_preserves_rng_with_prefix_and_filters():
+    scores = torch.tensor([-.1, -.2, -.3, -.4])
+    history = (Note.make('tap','A1'), Route(0,0))
+    sampler = Sampler(temperature=.7, seed=123, top_k=3, top_p=.9, repetition_penalty=0)
+    baseline = Sampler(temperature=.7, seed=123, top_k=3, top_p=.9)
+    assert list(sampler.order(scores, identities=('A1','A2','A3','A4'), history=history, field='pad')) == list(baseline.order(scores))
+    assert torch.equal(sampler.generator.get_state(), baseline.generator.get_state())
+
+
+@pytest.mark.parametrize('kwargs', [dict(repetition_window=0), dict(repetition_window=1.5),
+    dict(repetition_window=True), dict(repetition_penalty=-1), dict(repetition_penalty=float('nan')),
+    dict(repetition_penalty=float('inf'))])
+def test_invalid_repetition_parameters(kwargs):
+    with pytest.raises(ValueError):
+        Sampler(**kwargs)

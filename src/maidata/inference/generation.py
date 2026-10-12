@@ -11,13 +11,24 @@ from maidata.decoder.windows import history_prefix, real_onsets
 from maidata.draft.windows import select_windows
 from maidata.model import decoder_time_distributions
 from maidata.physical.inference import InferencePhysicalState
-from .sampling import Sampler
+from .sampling import Sampler, OnsetLimit
 from .options import GenerationOptions
 from .progress import emit, stage
 
 
 class GenerationError(RuntimeError):
     pass
+
+
+def repetition_history(groups, limit):
+    """Tail of real structural events; injected window/CONT controls are excluded."""
+    tail = []
+    for group in reversed(groups):
+        row = ((Moment(group.delta_ms),) if group.delta_ms > 0 else ()) + group.content
+        tail[:0] = row
+        if len(tail) >= limit:
+            break
+    return tuple(tail[-limit:])
 
 
 def prefill(decoder, memory, groups, timing, start_tick, history_beats, *, device):
@@ -38,7 +49,7 @@ def prefill(decoder, memory, groups, timing, start_tick, history_beats, *, devic
 
 def decode_window(decoder, memory, session, boundary, sampler, distributions, timing, *,
                   start_tick, end_tick, cap_tick, device, options, progress=None, window=1, stream=None,
-                  first_token=None, stop=None):
+                  first_token=None, stop=None, repetition_prefix=(), onset_end_tick=None):
     # Every frame binds the complete rule state to the exact causal model prefix.
     # Keeping a bounded search frontier does NOT truncate the history fed to M.
     # first_token resumes after an already-fed teacher prefix (its last real
@@ -71,7 +82,9 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
             count += 1
         return (snapshot, len(accepted), len(bypass), sampler.choices(decoder, routed, oracle, timing,
             distributions, end_tick=end_tick, cap_tick=cap_tick,
-            moment_remaining=options.max_tokens_per_moment-count),token)
+            moment_remaining=options.max_tokens_per_moment-count,
+            history=tuple(repetition_prefix) + tuple(accepted[-options.repetition_window:]),
+            onset_end_tick=onset_end_tick),token)
 
     emit(stream, 'window_start', window=window, start_tick=start_tick)
     frames.append(frame(boundary if first_token is None else first_token))
@@ -104,6 +117,12 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
                     continue
                 raise GenerationError(f'window {start_tick/96:g}: exhausted backtracking budget ({backtracks})')
             continue
+        if isinstance(token, OnsetLimit):
+            # Do not commit the sampled out-of-range time, its CONT rows, or a
+            # fabricated terminal into the rule state / reusable prefix cache.
+            return tuple(accepted), dict(terminal_tick=None, stopped=True, stop_reason='onset_limit',
+                backtracks=backtracks, physical_bypass=bypass, physical_fallback=physical_fallback,
+                **({'trace': trace} if options.trace else {}))
         if isinstance(token, TimeTarget):
             session.rules.close_window(token)
             session.cache = cache
@@ -165,12 +184,13 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
         raise ValueError('full-song generation requires contiguous non-overlapping target windows: stride == target_beats')
     decoder.eval()
     sampler = Sampler(temperature=options.temperature, seed=options.seed, physical_hard_mask=options.physical_hard_mask,
-                      top_k=options.top_k, top_p=options.top_p)
+                      top_k=options.top_k, top_p=options.top_p, repetition_window=options.repetition_window,
+                      repetition_penalty=options.repetition_penalty)
     distributions = decoder_time_distributions(config)
     session = DecodeSession(InferencePhysicalState(timing, geometry, audio_end_seconds=duration))
     with stage(progress, 'decoder_audio'):
         audio_kv = decoder.prepare_audio(conditions.audio)
-    groups, windows = [], []
+    groups, windows, repeat_prefix = [], [], ()
     for i, start in enumerate(conditions.starts):
         start_tick, end_tick = int(start*96), int((start+config['target_beats'])*96)
         emit(progress, 'window_start', window=i+1, windows=len(conditions.starts),
@@ -191,13 +211,14 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
         try:
             tokens, report = decode_window(decoder, memory, session, boundary, sampler, distributions, timing,
                 start_tick=start_tick, end_tick=end_tick, cap_tick=cap_tick, device=device, options=options,
-                progress=progress, window=i+1, stream=stream)
+                progress=progress, window=i+1, stream=stream, repetition_prefix=repeat_prefix)
         finally:
             # The next window starts with the requested hard-mask policy again.
             sampler.physical_hard_mask = options.physical_hard_mask
         # Parse only real content with a local anchor; the previous boundary delta
         # is input-only. Rebase the first new group against the last REAL onset.
         new = list(real_onsets((Moment(0), *tokens), timing, sequence_start_tick=start_tick))
+        repeat_prefix = (repeat_prefix + tokens)[-options.repetition_window:]
         if new:
             previous = groups[-1].tick if groups else min(0, new[0].tick)
             new[0] = replace(new[0], delta_ms=timing.delta_ms(previous, new[0].tick))

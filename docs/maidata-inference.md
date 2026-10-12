@@ -96,6 +96,8 @@ Python 在线与缓存入口共用 `encode_joint_audio(...) -> (local_conditions
 |---|---|
 | `--device / --precision` | cuda / bf16；CPU 可显式选择 cpu / fp32 |
 | `--temperature` | 默认0，为确定性 argmax；正值为温度采样 |
+| `--repetition-window` | 默认32；最近 n 个真实结构 token，仅对其中出现过的 pad / route 降权 |
+| `--repetition-penalty` | 默认1；重复候选 logit 减去此值，0 关闭，同一值重复多次也只扣一次 |
 | `--z-cross-attention / --no-z-cross-attention` | 默认沿用checkpoint；可显式关闭Z。不能给未训练Z投影的checkpoint启用Z |
 | `--plan-source` | 默认predicted；gt读取`--gt-plan`逐窗JSON，none完全屏蔽plan key |
 | `--gt-plan` | `{"windows":[{"start_beat":0,"plan12":[12个数值],"valid":true}]}`，覆盖含完整尾窗的全部目标窗 |
@@ -181,9 +183,15 @@ Python接口`generate(..., stream=None)`与`decode_window(..., stream=None)`可�
 
 ## MiaCode 配对 IR 与交互会话
 
+重复惩罚在合法性 mask 后、温度和 top-k / top-p 前应用；只匹配 NOTE 的实际 pad 标识或 ROUTE 的 route_id，不影响类型、flags、track break 或时间。历史包含已有真实前缀和本次接受的 MOMENT / NOTE / ROUTE / duration，不包含注入的窗口边界、内部 CONT 或失败候选。跨窗延续历史，回滚恢复对应前缀；关闭惩罚保持原采样和 RNG 行为。`GenerationOptions` 与报告中的 `options` 使用 `repetition_window/repetition_penalty`。
+
 `--emit-ir` 为可选参数，独立 CLI 默认关闭；MiaCode 启用后每至多 250 ms 原子发布 `chart.snapshot.json`，字段为 `revision/chart/ir/complete`，成功结束强制同步并写出 `model.ir.json`。原 `maidata.txt` 输出保持兼容。IR 直接从完成的生成字段构造，已提交窗口复用已解码 IR，当前窗口仅包含完整前缀；回滚同时撤销文本和 IR，复用已加载 Geometry，不额外执行物化或原谱解析。
 
 `python -m maidata.inference.interactive` 使用相同联合 checkpoint 和预计算目录，NDJSON `chart` 请求携带完整 `maimai.chart_ir.v1` 与 revision，后端确认 `chart_ready` 后可发送对应 revision 的 `suggest`。空谱也是有效初始请求。`suggest` 支持 continue/range、温度、top-k、top-p、seed；seed=-1 时每次请求独立抽取一次实际种子，result.seed 返回实际值。result 包含文本、区间及 `ir_fragment`，由编辑器在接受结果时合入本地缓存。取消或过期建议不修改正式谱面。
+
+`suggest` 共用 `repetition_window=32/repetition_penalty=1`。continue 另支持 `max_tokens=32`、`max_beats=4`、`max_four_beat_blocks=1`，后两个为非负整数，0 关闭。起点为 b 拍时，拍数截止为 `floor(b)+max_beats`，四拍截止为 `4*floor(b/4)+4*max_four_beat_blocks`；第9拍开始、四拍段数1截止到12，段数2截止到16。最早的时间限制、下一真实音符、请求终点及音频末尾限制新起音；token 数到达后补完当前音符 / 分支，允许少量超出，已开始的 Hold / Slide 不因输出截止截短。range 不使用续写长度配置。
+
+计算仍按全曲的完整16拍目标窗口（以 checkpoint 配方为准），输出截止单独传入，不改变音频、Z、Plan、Physical窗口和时长 cap；跨窗不以光标位置建立新窗口。移除隐含的两窗口上限。result 的 `limit_tick` 为有效时间上界，`stop_reason` 为 `token_limit/beat_limit/four_beat_limit/next_note/audio_end/requested_end`，同时记录惩罚参数。即使本段没有音符，仍可返回可接受的空拍文本，使空谱续写推进到下一段。接受时分割空白逗号区间，文本和 IR 保持一致，区间外音符不移动。
 
 窗口内使用真实前缀的最长公共部分复用 K/V；前缀修改使受影响后缀失效，跨窗口分别 prefill，Physical 由对应真实前缀恢复。`reused_rows/computed_rows` 统计前缀复用/补算行数，不含新生成字段的全部计算量。详细 trace 仍默认关闭。
 

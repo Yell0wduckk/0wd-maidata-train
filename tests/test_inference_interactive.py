@@ -19,7 +19,7 @@ from maidata.model import build_decoder, decoder_time_distributions
 from maidata.time import TimingMap
 from maidata.inference.__main__ import ir_metadata
 from maidata.inference.interactive import (Interactive, Server, WindowContext, chart_groups,
-    expanded_rows, extend_cache, rebase)
+    expanded_rows, extend_cache, rebase, continuation_limits)
 from maidata.inference.render import render_span
 
 
@@ -166,6 +166,135 @@ def span_beats(text):
         elif depth == 0 and token == ',':
             total += Fraction(4, subdivision)
     return total
+
+
+@pytest.mark.parametrize('beat,beats,blocks,expected,reason', [
+    (9,4,1,12,'four_beat_limit'), (9,4,2,13,'beat_limit'),
+    (12,0,1,16,'four_beat_limit'), (15.5,4,2,19,'beat_limit'),
+    (16,4,1,20,'four_beat_limit'), (9,0,0,100,'requested_end'),
+])
+def test_relative_continuation_limit_math(beat, beats, blocks, expected, reason):
+    assert continuation_limits(int(beat*96),100*96,dict(max_beats=beats,max_four_beat_blocks=blocks),
+        audio_end_tick=200*96) == (expected*96,reason)
+
+
+@pytest.mark.parametrize('key,value', [('max_beats',-1),('max_beats',1.5),
+    ('max_four_beat_blocks',True),('max_four_beat_blocks',-1)])
+def test_invalid_continuation_time_limits(key,value):
+    with pytest.raises(ValueError,match=key):
+        continuation_limits(0,1000,{key:value},audio_end_tick=2000)
+
+
+def deterministic_notes(session, kind=0):
+    """Real decoder/Physical/time queries, with stable heads for boundary assertions."""
+    with torch.no_grad():
+        session.decoder.type_head.weight.zero_()
+        session.decoder.type_head.bias.fill_(-100)
+        session.decoder.type_head.bias[0]=100
+        session.decoder.type_head.bias[1]=0
+        heads=session.decoder.heads
+        heads.kind.weight.zero_(); heads.kind.bias.fill_(-100); heads.kind.bias[kind]=100
+        for head in (heads.button,heads.touch,*heads.flags):
+            head.weight.zero_(); head.bias.zero_()
+        for name,head in heads.times.items():
+            head.weight.zero_(); head.bias.fill_(-100); head.bias[95]=100
+
+
+@pytest.mark.parametrize('start,beats,blocks,limit,windows', [
+    (9,4,1,12,[0]), (15.5,4,2,19,[0,16]), (16,4,1,20,[16]),
+])
+def test_output_limits_keep_complete_16_beat_windows(window_config,geometry,start,beats,blocks,limit,windows):
+    timing=TimingMap([(0,120),(16,150)])
+    session=stub(window_config,geometry,timing,timing.beat_to_second(80))
+    deterministic_notes(session)
+    calls=[]
+    from maidata.inference.generation import decode_window
+    def capture(*args,**kw):
+        calls.append(kw)
+        return decode_window(*args,**kw)
+    with patch('maidata.inference.generation.decode_window',side_effect=capture):
+        result=session.suggest(dict(id=1,revision=1,mode='continue',start_tick=int(start*96),end_tick=80*96,
+            max_tokens=512,max_beats=beats,max_four_beat_blocks=blocks),threading.Event())
+    assert result['limit_tick']==limit*96 and result['end_tick']<=limit*96
+    assert result['stop_reason'] in ('beat_limit','four_beat_limit')
+    assert result['onsets'] and all(start*96<=o['tick']<limit*96 for o in result['onsets'])
+    assert [kw['start_tick']//96 for kw in calls]==windows
+    assert all(kw['end_tick']-kw['start_tick']==16*96 for kw in calls)
+    assert all(kw['cap_tick']==kw['end_tick']+4*96 for kw in calls)
+    assert span_beats(result['text'])==Fraction(result['end_tick']-int(start*96),96)
+
+
+def test_token_budget_completes_hold_and_does_not_shorten_duration(window_config,geometry):
+    timing=TimingMap([(0,120)])
+    session=stub(window_config,geometry,timing,timing.beat_to_second(40))
+    deterministic_notes(session,kind=1)
+    with torch.no_grad():
+        head=session.decoder.heads.times['HOLD_DURATION']; head.bias.fill_(-100); head.bias[383]=100
+    result=session.suggest(dict(id=1,revision=1,mode='continue',start_tick=9*96,end_tick=40*96,
+        max_tokens=1,content=True),threading.Event())
+    assert result['stop_reason']=='token_limit' and result['tokens']>1
+    assert len(result['onsets'])==1 and result['onsets'][0]['tick']<result['limit_tick']
+    content=[token_from_dict(t) for t in result['onsets'][0]['content']]
+    assert isinstance(content[-1],HoldDuration) and content[-1].ticks==384
+
+
+def test_following_note_and_audio_stop_earlier(window_config,geometry):
+    timing=TimingMap([(0,120)])
+    session=stub(window_config,geometry,timing,timing.beat_to_second(11))
+    deterministic_notes(session)
+    session.groups=(Onset(10*96,5000.,(Note.make('tap','A8'),)),)
+    request=dict(id=1,revision=1,mode='continue',start_tick=9*96,end_tick=10*96,max_tokens=512)
+    result=session.suggest(request,threading.Event())
+    assert result['limit_tick']==10*96 and result['stop_reason']=='next_note'
+    assert all(o['tick']<10*96 for o in result['onsets'])
+    session.groups=()
+    result=session.suggest(dict(request,end_tick=100*96),threading.Event())
+    assert result['limit_tick']==11*96 and result['stop_reason']=='audio_end'
+
+
+def test_no_implicit_two_window_cap_and_prefix_penalty(window_config,geometry):
+    timing=TimingMap([(0,120)])
+    session=stub(window_config,geometry,timing,timing.beat_to_second(64))
+    deterministic_notes(session)
+    session.groups=(Onset(8*96,4000.,(Note.make('tap','A1'),)),)
+    result=session.suggest(dict(id=1,revision=1,mode='continue',start_tick=9*96,end_tick=50*96,
+        max_tokens=512,max_beats=0,max_four_beat_blocks=0,content=True),threading.Event())
+    assert max(o['tick'] for o in result['onsets'])>=32*96
+    assert result['onsets'][0]['content'][0]['pad']=='A2'
+    assert session.groups[0].content[0].pad=='A1'  # Suggestions never commit their own history.
+    session.groups=(Onset(8*96,4000.,(Note.make('tap','A2'),)),)
+    edited=session.suggest(dict(id=2,revision=1,mode='continue',start_tick=9*96,end_tick=50*96,
+        max_tokens=1,content=True),threading.Event())
+    assert edited['onsets'][0]['content'][0]['pad']=='A1'
+
+
+def test_limit_does_not_cache_out_of_range_time_or_cont_rows(window_config,geometry):
+    timing=TimingMap([(0,120)])
+    session=stub(window_config,geometry,timing,timing.beat_to_second(40))
+    deterministic_notes(session)
+    request=dict(id=1,revision=1,mode='continue',start_tick=9*96,end_tick=40*96,max_tokens=512,content=True)
+    result=session.suggest(request,threading.Event())
+    cached=session.contexts[0]
+    assert all(beat<12 for _,beat,_ in cached.rows)
+    session.groups=rebase(tuple(Onset(o['tick'],0.,tuple(token_from_dict(t) for t in o['content']))
+                               for o in result['onsets']),timing)
+    again=session.suggest(dict(request,id=2,start_tick=result['end_tick']),threading.Event())
+    assert again['reused_rows']>0
+    assert all(o['tick']>=result['end_tick'] for o in again['onsets'])
+
+
+def test_silent_empty_chart_can_advance_to_next_limited_span(window_config,geometry):
+    timing=TimingMap([(0,120)])
+    session=stub(window_config,geometry,timing,timing.beat_to_second(40))
+    deterministic_notes(session)
+    with torch.no_grad():
+        head=session.decoder.heads.times['MOMENT'];head.bias.fill_(-100);head.bias[384]=100
+    request=dict(id=1,revision=1,mode='continue',start_tick=0,end_tick=40*96)
+    first=session.suggest(request,threading.Event())
+    assert first['onsets']==[] and first['ir_fragment']['moments']==[]
+    assert first['end_tick']==4*96 and span_beats(first['text'])==4
+    second=session.suggest(dict(request,id=2,start_tick=first['end_tick']),threading.Event())
+    assert second['end_tick']==8*96 and span_beats(second['text'])==4
 
 
 def test_render_span_covers_the_exact_range_with_inner_controls():

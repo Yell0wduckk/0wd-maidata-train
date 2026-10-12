@@ -93,7 +93,7 @@ def test_new_fields_history_empty_windows_and_cross_window_actions(config, geome
     duration = timing.beat_to_second(63)
     prepared = conditions(c,timing,duration)
     decoder = build_decoder(c).eval()
-    seen, active = [], []
+    seen, active, repeat_prefixes = [], [], []
     # Onsets 2, 15, 16 and 20; then consecutive empty windows. Long hold and
     # complete slide fields survive the boundary; no copied continuation NOTE.
     rows = {
@@ -104,10 +104,11 @@ def test_new_fields_history_empty_windows_and_cross_window_actions(config, geome
     }
     cursors = {start:0 for start in prepared.starts}
     def scripted(self, model, routed, oracle, clock, distributions, *, end_tick, cap_tick,
-                 moment_remaining=None):
+                 moment_remaining=None, history=(), onset_end_tick=None):
         start = end_tick//96-16
         if cursors[start]==0:
             active.append((start,tuple(oracle.physical.actions)))
+            repeat_prefixes.append((start, history))
         sequence = rows.get(start,[])
         j = cursors[start]
         cursors[start] += 1
@@ -129,6 +130,8 @@ def test_new_fields_history_empty_windows_and_cross_window_actions(config, geome
         result, windows = generate(decoder,prepared,timing,geometry,c,ir_metadata(timing,duration),duration,
             device='cpu',options=GenerationOptions(temperature=0,physical_hard_mask=False),
             on_groups=committed.extend)
+    assert dict(repeat_prefixes)[16] == tuple(rows[0])
+    assert dict(repeat_prefixes)[32] == tuple(rows[0] + rows[16])
     groups = real_onsets(result.tokens,timing,sequence_start_tick=result.start_tick)
     assert tuple(committed) == tuple(groups)
     from maidata.inference.render import SimaiWriter, render_document, position
@@ -203,9 +206,11 @@ def test_rollback_restores_pending_fields_actions_and_model_cache(config,geometr
     session = DecodeSession(PhysicalState(timing,geometry,audio_end_seconds=5))
     session.rules.inject_boundary(Moment(0),start_tick=0,window_end=288)
     states = []
+    histories = []
     class Search:
         physical_hard_mask = True
         def choices(self,decoder,routed,oracle,clock,specs,**kwargs):
+            histories.append(kwargs['history'])
             state = oracle.physical.grammar.state
             states.append((state.phase,len(oracle.physical.actions),routed.previous))
             if state.phase=='boundary':
@@ -224,6 +229,7 @@ def test_rollback_restores_pending_fields_actions_and_model_cache(config,geometr
     assert len(session.rules.actions)==1 and session.rules.grammar.state.phase=='closed'
     assert states[1][0]=='hold' and states[1][1]==0
     assert states[2][0]=='done' and states[2][1]==1
+    assert histories==[(), (Note.make('hold','A1'),), (Note.make('tap','A1'),)]
 
 
 def test_sampler_mask_temperature_and_reproducible_retry():
@@ -234,6 +240,29 @@ def test_sampler_mask_temperature_and_reproducible_retry():
     assert list(Sampler(temperature=1e-40).order(logits))==[3,2,1,0]
     with pytest.raises(ValueError,match='nonfinite'):
         list(Sampler().order(torch.tensor([float('nan')])))
+
+
+def test_soft_token_limit_finishes_the_pending_second_slide_branch(config,geometry):
+    timing=TimingMap([(0,120)])
+    model=build_decoder(config).eval()
+    prepared=conditions(config,timing,20.)
+    memory=model.prepare_memory(model.prepare_audio(prepared.audio),torch.tensor([0]),prepared.z,
+                                prepared.plans[:1],prepared.plan_valid[:1])
+    session=DecodeSession(PhysicalState(timing,geometry,audio_end_seconds=20.))
+    session.rules.inject_boundary(Moment(0),start_tick=0,window_end=16*96)
+    sequence=(Note.make('slide','A1'),Route(0,0),SlideDuration(96),Route(2,0),SlideDuration(96))
+    class BranchSampler(Sampler):
+        def choices(self,decoder,routed,oracle,clock,specs,**kwargs):
+            token=sequence[len(kwargs['history'])]
+            out=decoder.complete(routed,torch.full_like(routed.valid,GENERATED_TYPES.index(token.type),dtype=torch.long))
+            yield token,out.cache
+    stop=lambda accepted,rules: len(accepted)>=4 and rules.grammar.state.phase in ('done','track_done')
+    with torch.inference_mode():
+        tokens,report=decode_window(model,memory,session,Moment(0),BranchSampler(physical_hard_mask=False),
+            decoder_time_distributions(config),timing,start_tick=0,end_tick=16*96,cap_tick=20*96,device='cpu',
+            options=GenerationOptions(physical_hard_mask=False),stop=stop)
+    assert report['stopped'] and tokens==sequence and len(tokens)==5
+    session.rules.grammar.finish()
 
 
 def test_continuation_appends_kv_without_committing_physical(config,geometry):
