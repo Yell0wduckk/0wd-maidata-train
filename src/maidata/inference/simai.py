@@ -66,6 +66,10 @@ def four_beat_lines(chart, *, start_tick=0):
 
     def emit(body, division):
         nonlocal active
+        # A span ending on a bar already emitted its newline. Do not append a
+        # declaration for a nonexistent next interval (the next span owns it).
+        if not body:
+            return
         # Input subdivisions and output subdivisions differ when an interval
         # straddles a bar. Restore only when the next interval actually needs it.
         for line in body.splitlines(keepends=True):

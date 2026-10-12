@@ -11,7 +11,7 @@ from maidata.chart import EncodedChart, Moment, Note, Route, SlideDuration, deco
 from maidata.decoder.windows import real_onsets
 from maidata.inference.__main__ import ir_metadata
 from maidata.inference.materialize import render_origin
-from maidata.inference.render import SimaiWriter, render_document, position
+from maidata.inference.render import SimaiWriter, render_document, render_span, position
 from maidata.inference.simai import four_beat_lines, persistent_subdivisions
 from maidata.time import TimingMap
 
@@ -40,6 +40,37 @@ def test_persistent_delta_examples(ticks, expected, geometry):
 def test_brace_dedup_keeps_duration_text_and_line_start_subdivisions():
     assert persistent_subdivisions('{16}1[16:1],\n{16}(180)1,{8}2,{8}3,') == \
            '{16}1[16:1],\n{16}(180)1,{8}2,3,'
+
+
+@pytest.mark.parametrize('start,end,expected', [
+    (0, 384, '{4},,,,\n'),
+    (384, 768, '{4},,,,\n'),
+    (336, 432, '{8},\n{8},'),
+    (1488, 1920, '{8},\n{8},{4},,,{96}' + ',' * 12 + '\n'),
+])
+def test_fragment_bar_end_is_a_newline_without_a_dangling_declaration(start, end, expected):
+    text = render_span((), start, end)
+    assert text == expected
+    assert four_beat_lines(text, start_tick=start) == text
+
+
+def test_consecutive_continuations_compose_into_four_beat_lines():
+    from maidata.decoder.windows import Onset
+    spans = [(0, 96), (96, 336), (336, 432), (432, 768), (768, 864)]
+    text = ''.join(render_span((Onset(a, 0., (Note.make('tap', 'A1'),)),), a, b)
+                   for a, b in spans)
+    # A model span may start halfway through a line; its internal and trailing
+    # newlines remain anchored to the whole chart, not to each request.
+    tick = 0
+    import re
+    for token in re.findall(r'\{\d+\}|[,\n]', text):
+        if token.startswith('{'):
+            step = 384 // int(token[1:-1])
+        elif token == ',':
+            tick += step
+        else:
+            assert tick in (384, 768)
+    assert text.count('\n') == 2 and tick == 864
 
 
 @pytest.mark.parametrize('source,expected', [

@@ -193,6 +193,8 @@ Python接口`generate(..., stream=None)`与`decode_window(..., stream=None)`可�
 
 计算仍按全曲的完整16拍目标窗口（以 checkpoint 配方为准），输出截止单独传入，不改变音频、Z、Plan、Physical窗口和时长 cap；跨窗不以光标位置建立新窗口。移除隐含的两窗口上限。result 的 `limit_tick` 为有效时间上界，`stop_reason` 为 `token_limit/beat_limit/four_beat_limit/next_note/audio_end/requested_end`，同时记录惩罚参数。即使本段没有音符，仍可返回可接受的空拍文本，使空谱续写推进到下一段。接受时分割空白逗号区间，文本和 IR 保持一致，区间外音符不移动。
 
+交互片段沿用全曲四拍换行；终点恰好落在四拍边界时保留结尾换行，不添加没有音符 / 间隔的下一行细分声明。后续片段声明自己的实际细分，连续接受不会将四拍边界接回上一行。
+
 窗口内使用真实前缀的最长公共部分复用 K/V；前缀修改使受影响后缀失效，跨窗口分别 prefill，Physical 由对应真实前缀恢复。`reused_rows/computed_rows` 统计前缀复用/补算行数，不含新生成字段的全部计算量。详细 trace 仍默认关闭。
 
 ## 验证范围与限制
