@@ -85,7 +85,19 @@ class JointMetrics:
         weighted = dict(decoder=decoder['loss'] * config['joint_train_decoder_weight'],
             reconstruction=auxiliary['reconstruction'] * config['joint_train_reconstruction_weight'],
             planner=auxiliary['planner'] * config['joint_train_planner_weight'])
-        return dict(loss=sum(weighted.values()), weighted=weighted, auxiliary=auxiliary, decoder=decoder)
+        terms = auxiliary['terms']
+        mean = lambda key: terms.get(key, {}).get('mean', 0.)
+        r_weight = config['joint_train_reconstruction_weight']
+        parts = dict(fields=auxiliary['classification']['mean'] * config['reconstruction_classification_weight'] * r_weight,
+            moment=mean('moment96') * config['reconstruction_moment_weight'] * r_weight,
+            count=(mean('empty') * config['reconstruction_empty_weight']
+                   + mean('positive_count') * config['reconstruction_positive_count_weight']) * r_weight)
+        losses = dict(main_decoder=weighted['decoder'],
+            drafter=weighted['reconstruction'] + weighted['planner'],
+            drafter_fields=parts['fields'], drafter_moment=parts['moment'], drafter_count=parts['count'],
+            planner=weighted['planner'])
+        return dict(loss=sum(weighted.values()), losses=losses,
+                    weighted=weighted, auxiliary=auxiliary, decoder=decoder)
 
 
 def update(model, batches, opt, sched, config, geometry, *, audit=False, mode='joint', recorder=None, fixed_z=None):

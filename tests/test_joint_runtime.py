@@ -147,6 +147,37 @@ def test_real_five_module_nonzero_dropout_complete_epoch_resume_is_exact(config,
     assert runner.run(relocated, resume=path) == {'completed_epochs': 6, 'step': 6}
 
 
+def test_empty_validation_plan_skips_validation_and_best_checkpoint(config, tmp_path, monkeypatch):
+    c = joint_config(config, tmp_path / 'no-validation')
+    items = [joint_item(0, c, monkeypatch, training=False)]
+    runtime_dependencies(monkeypatch, c, items)
+    original_plan = runner.JointPlan
+
+    def plan(root, config, *, training):
+        result = original_plan(root, config, training=training)
+        if not training:
+            result.groups = {}
+        return result
+
+    monkeypatch.setattr(runner, 'JointPlan', plan)
+    monkeypatch.setattr(runner, 'validate', lambda *args, **kwargs: pytest.fail('validation disabled'))
+    runner.run(c)
+    output = Path(c['joint_train_output'])
+    metrics = [json.loads(line) for line in (output / 'metrics.jsonl').read_text().splitlines()]
+    assert [row['epoch'] for row in metrics] == list(range(1, 7))
+    assert all('validation' not in row for row in metrics)
+    for row in metrics:
+        losses = row['train']['losses']
+        assert losses['drafter'] == pytest.approx(sum(losses[key] for key in (
+            'drafter_fields', 'drafter_moment', 'drafter_count', 'planner')))
+        assert row['train']['loss'] == pytest.approx(losses['main_decoder'] + losses['drafter'])
+    saved = torch.load(output / 'checkpoints/last.ckpt', weights_only=False)
+    assert saved['completed_epochs'] == saved['step'] == 6
+    assert saved['best_validation_loss'] is None
+    assert sorted(p.name for p in (output / 'checkpoints').iterdir()) == [
+        'epoch-005.ckpt', 'epoch-006.ckpt', 'last.ckpt']
+
+
 def test_fifth_and_final_epoch_validate_once_and_failed_first_epoch_saves_nothing(config, tmp_path, monkeypatch):
     c = joint_config(config, tmp_path / 'coincident')
     c.update(joint_train_stop_after_epochs=5)

@@ -148,8 +148,9 @@ def run(config, *, resume=None, cuda_check=False, cost_check=False, check_step=N
             windows += sum(len(batch.windows) for batch in batches)
             auxiliary_windows += sum(len(batch.window_ids) for batch in batches)
             audio_groups.update(key for batch in batches for key in batch.audio_variants)
+            report = current.report(config)
             print(json.dumps(dict(epoch=epoch, update=updates, updates=steps[epoch - 1], step=step,
-                loss=current.report(config)['loss'], lr=opt.param_groups[0]['lr'],
+                loss=report['loss'], losses=report['losses'], lr=opt.param_groups[0]['lr'],
                 data_wait_seconds=data_seconds, update_seconds=update_seconds,
                 chunks=audit['chunks'], batch_costs=audit['batch_costs']), allow_nan=False), flush=True)
         final = epoch == config['joint_train_stop_after_epochs']
@@ -157,7 +158,7 @@ def run(config, *, resume=None, cuda_check=False, cost_check=False, check_step=N
                       seconds=time.perf_counter() - epoch_start, audio_groups=len(audio_groups),
                       decoder_occurrences=windows, auxiliary_base_windows=auxiliary_windows)
         improved = False
-        if epoch % 5 == 0 or final:
+        if plans[1].groups and (epoch % 5 == 0 or final):
             loaders[1].batch_sampler.epoch = epoch
             result['validation'] = validate(model, loaders[1], config, geometry,
                                              final=final, restored_rng=restored[1])

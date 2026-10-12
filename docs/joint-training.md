@@ -46,6 +46,10 @@ python -m maidata.joint_training --config configs/joint-z4-gt-linux.json --cost-
 
 每完整轮保存last；每5轮及绝对末轮验证、保存编号checkpoint，重合时只执行一次。best仅随轮末验证改善更新。完整诊断仅绝对末轮；轮内及异常退出不保存，从上个完整轮恢复。
 
+用户明确取消验证集时，将两套 validation 计划设为同语义空计划；联合循环跳过所有验证，不写 validation 指标或 best checkpoint。完整轮 last 和每5轮／末轮编号保存照常执行。测试集只记录独立清单，不传入训练或验证 loader。
+
+每次更新及完整轮指标的 `losses` 单列 `main_decoder` 和 `drafter`；后者包含重建的 `drafter_fields`（有效字段等权分类）、`drafter_moment`（MOMENT96）、`drafter_count`（空／非空与正计数）以及单列的 `planner`。各项已包含原内层及外层权重，可相加还原总 loss；仅改变报告，不改变归约、目标或反传。
+
 单个联合checkpoint整曲推理：
 
 ```bash
