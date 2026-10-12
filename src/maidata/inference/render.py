@@ -209,6 +209,30 @@ class SimaiWriter:
         return persistent_subdivisions(four_beat_lines(compact_spacing(raw)))
 
 
+def render_span(groups, start_tick, end_tick, controls=()):
+    """Spell onset groups as a fragment covering exactly [start_tick, end_tick).
+
+    For splicing into an existing chart: controls inside the span are rewritten
+    at their positions, the fragment begins with an explicit {n}, carries no E,
+    and keeps the chart's own four-beat line breaks.
+    """
+    start, end = Fraction(start_tick, 96), Fraction(end_tick, 96)
+    if end <= start or start < 0:
+        raise ValueError('span must be a nonempty nonnegative range')
+    inside = [c for c in controls if start <= position(c['position_beats']) < end]
+    writer = SimaiWriter(inside)
+    writer.pending = (start, '')
+    for group in groups:
+        beat = Fraction(group.tick, 96)
+        if not start <= beat < end:
+            raise ValueError('generated onset lies outside its span')
+        writer.add(beat, render_group(group))
+    for control in writer.controls[writer.control_index:]:
+        writer._add(*control)
+    writer._add(end, '')
+    return persistent_subdivisions(four_beat_lines(compact_spacing(''.join(writer.parts)), start_tick=start_tick))
+
+
 def render_document(document):
     if document.get('schema') != 'maimai.chart_ir.v1':
         raise ValueError('unsupported chart IR schema')

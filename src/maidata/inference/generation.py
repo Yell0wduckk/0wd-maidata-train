@@ -37,9 +37,13 @@ def prefill(decoder, memory, groups, timing, start_tick, history_beats, *, devic
 
 
 def decode_window(decoder, memory, session, boundary, sampler, distributions, timing, *,
-                  start_tick, end_tick, cap_tick, device, options, progress=None, window=1, stream=None):
+                  start_tick, end_tick, cap_tick, device, options, progress=None, window=1, stream=None,
+                  first_token=None, stop=None):
     # Every frame binds the complete rule state to the exact causal model prefix.
     # Keeping a bounded search frontier does NOT truncate the history fed to M.
+    # first_token resumes after an already-fed teacher prefix (its last real
+    # token; session.cache covers every earlier expanded row). stop(accepted,
+    # rules) may end the window early after a committed token.
     accepted, frames, trace, bypass = [], [], [], []
     backtracks = 0
     physical_fallback = None
@@ -70,7 +74,7 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
             moment_remaining=options.max_tokens_per_moment-count),token)
 
     emit(stream, 'window_start', window=window, start_tick=start_tick)
-    frames.append(frame(boundary))
+    frames.append(frame(boundary if first_token is None else first_token))
     while frames:
         snapshot, count, bypass_count, choices, input_token = frames[-1]
         session.restore(snapshot)
@@ -128,6 +132,10 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
              cursor_beat=session.rules.grammar.state.cursor / 96)
         if options.trace:
             trace.append(dict(event='accept', token=token_to_dict(token), tick=session.rules.grammar.state.cursor))
+        if stop is not None and stop(accepted, session.rules):
+            return tuple(accepted), dict(terminal_tick=None, stopped=True, backtracks=backtracks,
+                physical_bypass=bypass, physical_fallback=physical_fallback,
+                **({'trace': trace} if options.trace else {}))
         frames.append(frame(token))
         if len(frames) > options.rollback_tokens + 1:
             del frames[0]
@@ -156,7 +164,8 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
     if config.get('target_stride_beats', config['target_beats']) != config['target_beats']:
         raise ValueError('full-song generation requires contiguous non-overlapping target windows: stride == target_beats')
     decoder.eval()
-    sampler = Sampler(temperature=options.temperature, seed=options.seed, physical_hard_mask=options.physical_hard_mask)
+    sampler = Sampler(temperature=options.temperature, seed=options.seed, physical_hard_mask=options.physical_hard_mask,
+                      top_k=options.top_k, top_p=options.top_p)
     distributions = decoder_time_distributions(config)
     session = DecodeSession(InferencePhysicalState(timing, geometry, audio_end_seconds=duration))
     with stage(progress, 'decoder_audio'):

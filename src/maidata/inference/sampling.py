@@ -10,10 +10,19 @@ from maidata.time.discrete import compile_support_tree, TimeQuery, CONTINUE
 
 
 class Sampler:
-    def __init__(self, *, temperature=1., seed=20261010, physical_hard_mask=True):
+    def __init__(self, *, temperature=1., seed=20261010, physical_hard_mask=True, top_k=0, top_p=1.,
+                 floor_tick=None):
+        # floor_tick: editor-anchored generation never adds content to an onset
+        # (or empty gap) before this absolute tick. None leaves sampling unchanged.
+        self.floor_tick = floor_tick
         if not 0 <= temperature < float('inf'):
             raise ValueError('temperature must be finite and nonnegative')
         self.temperature = temperature
+        if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 0:
+            raise ValueError('top_k must be a nonnegative integer')
+        if not 0 < top_p <= 1:
+            raise ValueError('top_p must be in (0, 1]')
+        self.top_k, self.top_p = top_k, top_p
         self.generator = torch.Generator(device='cpu').manual_seed(seed)
         self.physical_hard_mask = physical_hard_mask
 
@@ -24,6 +33,27 @@ class Sampler:
             raise ValueError('nonfinite model sampling scores')
         if allowed is not None:
             values.masked_fill_(~torch.as_tensor(allowed, dtype=torch.bool, device='cpu'), -torch.inf)
+        # Select the support once, before the no-replacement search. Do not
+        # silently widen it when a retained candidate cannot be completed.
+        # The default branch is untouched, including the old RNG sequence.
+        if (self.top_k or self.top_p < 1) and torch.isfinite(values).any():
+            indices = values.argsort(descending=True, stable=True)
+            indices = indices[torch.isfinite(values[indices])]
+            if self.top_k:
+                indices = indices[:self.top_k]
+            if self.top_p < 1:
+                if self.temperature == 0:
+                    # Zero-temperature distribution is concentrated on the
+                    # deterministic argmax. Never widen this filtered support.
+                    indices = indices[:1]
+                else:
+                    logits = values[indices]
+                    probabilities = ((logits-logits.max()) / self.temperature).softmax(0)
+                    # Include the candidate that crosses the cumulative threshold.
+                    indices = indices[(probabilities.cumsum(0)-probabilities) < self.top_p]
+            keep = torch.zeros_like(values, dtype=torch.bool)
+            keep[indices] = True
+            values.masked_fill_(~keep, -torch.inf)
         while torch.isfinite(values).any():
             index = (int(values.argmax()) if self.temperature == 0 else
                      int(torch.multinomial(((values-values.max()) / self.temperature).softmax(0), 1, generator=self.generator)))
@@ -78,6 +108,11 @@ class Sampler:
             def visit(depth, query, current):
                 qh=current.hidden[0,-1]
                 valid = tree.hard[depth] if self.physical_hard_mask else tree.basic[depth]
+                if kind == 'MOMENT' and self.floor_tick is not None:
+                    # Short value c completes at cursor+elapsed+c+1; CONT stays open.
+                    base = cursor + query.elapsed_ticks + 1
+                    valid = tuple(ok and (c == CONTINUE or base + c >= self.floor_tick)
+                                  for c, ok in enumerate(valid))
                 for choice in self.order(heads.time_logits(qh,kind),valid):
                     value = query.advance(choice,window_end_tick=end_tick)
                     if value.closed_by_continue:
@@ -111,6 +146,9 @@ class Sampler:
             required = {'hold': 'HOLD_DURATION', 'route': 'ROUTE',
                         'chain': 'SLIDE_DURATION'}.get(phase, 'MOMENT')
             allowed = [ok and name == required for name, ok in zip(GENERATED_TYPES, allowed)]
+        if self.floor_tick is not None and oracle.physical.grammar.state.cursor < self.floor_tick:
+            # The current onset lies before the anchor: only a new MOMENT may follow.
+            allowed = [ok and name == 'MOMENT' for name, ok in zip(GENERATED_TYPES, allowed)]
         for index in self.order(routed.logits[0, -1], allowed):
             target_type = torch.full_like(routed.valid, index, dtype=torch.long)
             result = decoder.complete(routed, target_type)

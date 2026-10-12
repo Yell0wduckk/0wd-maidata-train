@@ -1,5 +1,6 @@
 """Live playable snapshots follow complete fields and transactional rollback."""
 from fractions import Fraction
+from pathlib import Path
 import os
 from unittest.mock import patch
 
@@ -20,6 +21,7 @@ from maidata.inference.materialize import atomic_text
 from maidata.inference.render import SimaiWriter
 from maidata.inference.sampling import Sampler
 from maidata.inference.streaming import StreamingPreview
+import json
 from maidata.model import build_decoder, decoder_time_distributions
 from maidata.physical import PhysicalState
 from maidata.time import TimingMap
@@ -276,3 +278,62 @@ def test_streaming_leaves_sampling_reports_rng_and_final_text_unchanged(config,g
     writer = SimaiWriter(ir_metadata(timing,1.2)['controls'],live.writer.end)
     writer.add_groups(real_onsets(reference.tokens,timing,sequence_start_tick=0))
     assert live.writer.finish() == writer.finish()
+def test_paired_ir_tracks_complete_prefix_rollback_and_final(tmp_path, geometry):
+    timing = TimingMap([(0, 120)])
+    audio = tmp_path/'audio.wav'
+    audio.write_bytes(b'audio fixture')
+    metadata = ir_metadata(timing, 20.)
+    writer = SimaiWriter(metadata['controls'], Fraction(40))
+    live = StreamingPreview(writer, timing, audio, tmp_path/'output', ir_geometry=geometry,
+        ir_metadata=metadata, difficulty=5, level=13.4)
+    clock = [0.]
+    with patch('maidata.inference.streaming.time.monotonic', side_effect=lambda: clock[0]):
+        feed = Feed(live)
+        clock[0] += .3
+        feed.accept(Note.make('tap', 'A1'))
+        first = json.loads(live.snapshot_path.read_text('utf-8'))
+        assert first['chart'] in live.last_text and len(first['ir']['moments']) == 1
+        clock[0] += .3
+        feed.accept(Note.make('hold', 'A2'))
+        assert json.loads(live.snapshot_path.read_text('utf-8')) == first
+        feed.accept(HoldDuration(96))
+        hold = json.loads(live.snapshot_path.read_text('utf-8'))
+        assert len(hold['ir']['moments'][0]['groups'][0]['notes']) == 2
+        assert hold['revision'] > first['revision'] and hold['complete'] is False
+        clock[0] += .3
+        feed.rollback(1)
+        rollback = json.loads(live.snapshot_path.read_text('utf-8'))
+        assert rollback['chart'] == first['chart']
+        assert len(rollback['ir']['moments'][0]['groups'][0]['notes']) == 1
+        # A second write inside 250 ms is coalesced; final publication is forced.
+        feed.accept(Note.make('tap', 'A3'))
+        assert json.loads(live.snapshot_path.read_text('utf-8')) == rollback
+        feed.commit()
+        live.write(writer.finish(), complete=True, force=True)
+        final = json.loads(live.snapshot_path.read_text('utf-8'))
+        assert final['complete'] and len(final['ir']['moments'][0]['groups'][0]['notes']) == 2
+        assert json.loads((tmp_path/'output/model.ir.json').read_text('utf-8')) == final['ir']
+
+
+def test_emit_ir_without_live_output_publishes_only_final(tmp_path, geometry):
+    timing = TimingMap([(0, 120)])
+    audio = tmp_path/'audio.wav'
+    audio.write_bytes(b'audio fixture')
+    metadata = ir_metadata(timing, 20.)
+    writer = SimaiWriter(metadata['controls'], Fraction(40))
+    live = StreamingPreview(writer, timing, audio, tmp_path/'output', ir_geometry=geometry,
+        ir_metadata=metadata, publish_live=False, difficulty=5, level=13.4)
+    feed = Feed(live)
+    feed.accept(Note.make('tap', 'A1'))
+    feed.accept(Note.make('hold', 'A2'))
+    feed.accept(HoldDuration(96))
+    feed.rollback(1)
+    feed.commit()
+    assert not live.snapshot_path.exists()
+    assert not Path(live.paths['maidata']).exists()
+    live.write(writer.finish(), complete=True, force=True)
+    final = json.loads(live.snapshot_path.read_text('utf-8'))
+    assert final['revision'] == 1 and final['complete']
+    assert len(final['ir']['moments'][0]['groups'][0]['notes']) == 1
+    assert final['chart'] in Path(live.paths['maidata']).read_text('utf-8')
+    assert json.loads((tmp_path/'output/model.ir.json').read_text('utf-8')) == final['ir']

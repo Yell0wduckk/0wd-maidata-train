@@ -1,0 +1,47 @@
+import pytest
+import torch
+
+from maidata.inference.sampling import Sampler
+from maidata.inference.__main__ import parser
+
+
+def test_default_preserves_legacy_rng_and_order():
+    scores = torch.tensor([0., 1., -torch.inf, 2.])
+    generator = torch.Generator().manual_seed(123)
+    remaining = scores.clone()
+    expected = []
+    while torch.isfinite(remaining).any():
+        index = int(torch.multinomial(((remaining-remaining.max()) / .8).softmax(0), 1, generator=generator))
+        expected.append(index)
+        remaining[index] = -torch.inf
+    assert list(Sampler(temperature=.8, seed=123).order(scores)) == expected
+
+
+def test_mask_precedes_filters_and_candidates_never_expand():
+    sampler = Sampler(temperature=1, top_k=2, top_p=1)
+    result = list(sampler.order(torch.tensor([100., 3., 2., 1.]), [False, True, True, True]))
+    assert set(result) == {1, 2}
+    assert len(result) == 2
+
+
+def test_nucleus_includes_threshold_crossing_and_no_duplicates():
+    scores = torch.tensor([.6, .3, .1]).log()
+    assert set(Sampler(temperature=1, top_p=.8).order(scores)) == {0, 1}
+    assert list(Sampler(temperature=1, top_p=.1).order(scores)) == [0]
+    assert list(Sampler(top_k=20, temperature=0).order(scores)) == [0, 1, 2]
+    assert list(Sampler(top_k=1, temperature=0, top_p=.2).order(scores)) == [0]
+    assert list(Sampler(top_k=1).order(scores, [False]*3)) == []
+    assert list(Sampler(temperature=0, top_p=.8).order(scores)) == [0]
+
+
+@pytest.mark.parametrize('kwargs', [{'top_k': -1}, {'top_k': 1.5}, {'top_p': 0}, {'top_p': 1.1}, {'top_p': float('nan')}])
+def test_invalid_filters(kwargs):
+    with pytest.raises(ValueError):
+        Sampler(**kwargs)
+
+
+def test_cli_exposes_filters():
+    args = parser().parse_args(['--joint-checkpoint', 'x', '--audio', 'x', '--bpm', '120',
+        '--mel-stats', 'x', '--geometry', 'x', '--slide-data', 'x', '--difficulty', '5',
+        '--level', '14.5', '--output', 'x', '--top-k', '8', '--top-p', '.9'])
+    assert (args.top_k, args.top_p) == (8, .9)

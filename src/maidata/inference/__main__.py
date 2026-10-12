@@ -43,6 +43,8 @@ def parser():
     p.add_argument('--device', default='cuda')
     p.add_argument('--precision', choices=('fp32', 'bf16'), default='bf16')
     p.add_argument('--temperature', type=float, default=defaults.temperature)
+    p.add_argument('--top-k', type=int, default=defaults.top_k, help='Legal candidate limit; 0 disables')
+    p.add_argument('--top-p', type=float, default=defaults.top_p, help='Legal nucleus mass in (0, 1]; 1 disables')
     p.add_argument('--seed', type=int, default=defaults.seed)
     p.add_argument('--encoder-window-batch', type=int, default=8)
     p.add_argument('--max-tokens-per-window', type=int, default=defaults.max_tokens_per_window)
@@ -57,6 +59,7 @@ def parser():
     p.add_argument('--stream-output', action=argparse.BooleanOptionalAction, default=True,
                    help='Update maidata.txt after complete notes and rollbacks while generating')
     p.add_argument('--force', action='store_true')
+    p.add_argument('--emit-ir', action='store_true', help='Atomically publish paired chart/IR snapshots and final model.ir.json')
     return p
 
 
@@ -95,7 +98,7 @@ def main(argv=None):
         from .streaming import StreamingPreview
 
     output = Path(args.output)
-    names = ('maidata.txt', 'generation.json', 'model.tokens.json', 'model.ir.json', 'generation-error.json')
+    names = ('maidata.txt', 'generation.json', 'model.tokens.json', 'model.ir.json', 'generation-error.json', 'chart.snapshot.json')
     track = output/('track'+Path(args.audio).suffix.lower())
     if not args.force and (any((output/n).exists() for n in names)
                            or track.exists() and track.resolve() != Path(args.audio).resolve()):
@@ -135,7 +138,7 @@ def main(argv=None):
                                        samples_per_beat=models.config['samples_per_beat'])
     with stage(progress, 'geometry'):
         geometry = Geometry.from_resources(args.geometry, args.slide_data)
-    options = GenerationOptions(temperature=args.temperature, seed=args.seed,
+    options = GenerationOptions(temperature=args.temperature, top_k=args.top_k, top_p=args.top_p, seed=args.seed,
         max_tokens_per_window=args.max_tokens_per_window, max_tokens_per_moment=args.max_tokens_per_moment,
         max_backtracks_per_window=args.max_backtracks_per_window,
         rollback_tokens=args.rollback_tokens, physical_hard_mask=args.physical_hard_mask, trace=args.trace)
@@ -150,10 +153,13 @@ def main(argv=None):
             path = output/name
             if path.is_file():
                 path.unlink()
+    preview = None
     try:
         preview = StreamingPreview(writer, timing, args.audio, output,
+            publish_live=args.stream_output,
+            ir_geometry=geometry if args.emit_ir else None, ir_metadata=ir_metadata(timing, duration) if args.emit_ir else None,
             difficulty=args.difficulty, level=args.level, title=args.title, artist=args.artist,
-            designer=args.designer, cabinet=args.cabinet) if args.stream_output else None
+            designer=args.designer, cabinet=args.cabinet) if args.stream_output or args.emit_ir else None
         with torch.inference_mode(), torch.autocast(device.type, dtype=torch.bfloat16, enabled=args.precision == 'bf16'):
             if cache is not None:
                 if encoded is None:
@@ -179,12 +185,12 @@ def main(argv=None):
             audio=str(Path(args.audio).resolve()), timing=timing_data, duration_seconds=duration,
             difficulty=args.difficulty, level=args.level, device=str(device), precision=args.precision,
             options=asdict(options), config=models.config, windows=windows, moments=writer.moments,
-            physical_bypass_count=bypass, complete=True, stream_output=args.stream_output)
+            physical_bypass_count=bypass, complete=True, stream_output=args.stream_output, emit_ir=args.emit_ir)
         if cache is not None:
             report['cache'] = cache.report
         with stage(progress, 'write_outputs'):
             if preview:
-                preview.write(chart)
+                preview.write(chart, complete=True, force=True)
                 report.update(preview.paths)
             else:
                 report.update(write_playable(chart, timing.first_seconds, timing.points[0][1], args.audio, output,
@@ -197,6 +203,11 @@ def main(argv=None):
     except Exception as exc:
         failure = dict(error=str(exc), options=asdict(options), checkpoints=models.provenance,
                        complete=False, stream_output=args.stream_output)
+        if preview is not None:
+            try:
+                preview.write(writer.preview(preview.active_groups), force=True)
+            except Exception as snapshot_error:
+                failure['snapshot_error'] = str(snapshot_error)
         if cache is not None:
             failure['cache'] = cache.report
         write_json(output/'generation-error.json', failure)

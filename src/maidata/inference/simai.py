@@ -50,17 +50,18 @@ def compact_spacing(chart):
     return result
 
 
-def four_beat_lines(chart):
+def four_beat_lines(chart, *, start_tick=0):
     """Split top-level timing intervals at exact four-beat boundaries.
 
     Commas and braces inside duration/slide expressions are never interpreted.
     This changes whitespace/subdivision spelling only, never musical time.
+    start_tick (1/96 beat) places a spliced fragment on the chart's own bars.
     """
     # Meter directives consume the rest of their line in simai. Their newline
     # is syntax; ordinary layout newlines may be removed before reflowing.
     text = ''.join(part.replace('\r', '') if part.startswith('||') else ''.join(part.splitlines())
                    for part in re.split(r'(\|\|[^\r\n]*(?:\r?\n|$))', chart))
-    out, pending, tick, subdivision, depth, i = [], [], 0, 4, 0, 0
+    out, pending, tick, subdivision, depth, i = [], [], start_tick % 384, 4, 0, 0
     while i < len(text):
         c = text[i]
         if c == '[': depth += 1

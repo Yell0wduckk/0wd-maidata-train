@@ -179,7 +179,15 @@ Python接口`generate(..., stream=None)`与`decode_window(..., stream=None)`可�
 
 独立物化写出 `maidata.txt`、`track.<原扩展名>`、`render.ir.json` 和 `materialization.json`（v2，renderer为python-simai），不生成 `reparsed.ir.json`，不报告未经执行的roundtrip。音频原样复制，不裁切、不变速。运行时完全没有MiaCode render/dump步骤；独立解析器的语义对照仅在开发测试中执行。
 
-## 验证范围
+## MiaCode 配对 IR 与交互会话
+
+`--emit-ir` 为可选参数，独立 CLI 默认关闭；MiaCode 启用后每至多 250 ms 原子发布 `chart.snapshot.json`，字段为 `revision/chart/ir/complete`，成功结束强制同步并写出 `model.ir.json`。原 `maidata.txt` 输出保持兼容。IR 直接从完成的生成字段构造，已提交窗口复用已解码 IR，当前窗口仅包含完整前缀；回滚同时撤销文本和 IR，复用已加载 Geometry，不额外执行物化或原谱解析。
+
+`python -m maidata.inference.interactive` 使用相同联合 checkpoint 和预计算目录，NDJSON `chart` 请求携带完整 `maimai.chart_ir.v1` 与 revision，后端确认 `chart_ready` 后可发送对应 revision 的 `suggest`。空谱也是有效初始请求。`suggest` 支持 continue/range、温度、top-k、top-p、seed；result 包含文本、区间及 `ir_fragment`，由编辑器在接受结果时合入本地缓存。取消或过期建议不修改正式谱面。
+
+窗口内使用真实前缀的最长公共部分复用 K/V；前缀修改使受影响后缀失效，跨窗口分别 prefill，Physical 由对应真实前缀恢复。`reused_rows/computed_rows` 统计前缀复用/补算行数，不含新生成字段的全部计算量。详细 trace 仍默认关闭。
+
+## 验证范围与限制
 
 小型真实模型的CPU执行覆盖v3严格权重加载、全曲条件复用、Encoder分块等价、预测plan12、增量/prefill一致、字段条件采样、CONT不写KV/Physical、窗尾控制、回退、生成上限、跨窗完整动作及连续空窗。测试使用原生MiaCode独立解析Python输出，对照全部71条路线及8个起点、flags、链/分支、时值和变BPM时间轴；CONT从不进入maidata。CPU测试不代表真实权重CUDA整曲生成或谱面质量验收。
 

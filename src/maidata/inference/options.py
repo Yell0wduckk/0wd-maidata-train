@@ -12,3 +12,5 @@ class GenerationOptions:
     rollback_tokens: int = 16
     physical_hard_mask: bool = True
     trace: bool = False
+    top_k: int = 0
+    top_p: float = 1.
