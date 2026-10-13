@@ -318,12 +318,13 @@ class Interactive:
             top_k=int(request.get('top_k', defaults.top_k)), top_p=float(request.get('top_p', defaults.top_p)),
             seed=int(request.get('seed', defaults.seed)),
             repetition_window=request.get('repetition_window', defaults.repetition_window),
-            repetition_penalty=float(request.get('repetition_penalty', defaults.repetition_penalty)))
+            repetition_penalty=float(request.get('repetition_penalty', defaults.repetition_penalty)),
+            **{key: request[key] for key in defaults.repetition_settings if key in request})
         sampler = Sampler(temperature=options.temperature, seed=options.seed, top_k=options.top_k,
                           top_p=options.top_p, physical_hard_mask=options.physical_hard_mask,
-                          repetition_window=options.repetition_window, repetition_penalty=options.repetition_penalty)
+                          **options.repetition_settings)
         groups = [g for g in self.groups if g.tick < start]
-        repeat_prefix = repetition_history(groups, options.repetition_window)
+        repeat_prefix = repetition_history(groups, options.repetition_history_limit)
         generated, produced, reused, computed, bypass, repairs = [], 0, 0, 0, 0, []
         stop_reason = limit_reason
         floor = start
@@ -379,7 +380,7 @@ class Interactive:
                 groups.extend(onsets)
                 generated.extend(onsets)
                 produced += len(new)
-                repeat_prefix = (repeat_prefix + tuple(new))[-options.repetition_window:]
+                repeat_prefix = (repeat_prefix + tuple(new))[-options.repetition_history_limit:]
             if report.get('stopped') or budget is not None and produced >= budget:
                 if report.get('stop_reason') != 'onset_limit':
                     stop_reason = 'token_limit'
@@ -411,7 +412,7 @@ class Interactive:
             tokens=produced, reused_rows=reused, computed_rows=computed,
             skipped_notes=self.skipped, physical_bypass=bypass, seed=options.seed,
             limit_tick=end, stop_reason=stop_reason, plan_source=plan_source, tail_repairs=repairs,
-            repetition_window=options.repetition_window, repetition_penalty=options.repetition_penalty)
+            **options.repetition_settings)
 
 
 class Server:

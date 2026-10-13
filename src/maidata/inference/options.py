@@ -23,6 +23,39 @@ class GenerationOptions:
     repetition_window: int = 32
     repetition_penalty: float = 1.
 
+    pad_repetition_window: int | None = None
+    pad_repetition_penalty: float | None = None
+    route_repetition_window: int | None = None
+    route_repetition_penalty: float | None = None
+
+    @property
+    def repetition_settings(self):
+        return {f'{field}_repetition_{suffix}': getattr(self, f'{field}_repetition_{suffix}')
+                for field in ('pad', 'route') for suffix in ('window', 'penalty')}
+
+    @property
+    def repetition_history_limit(self):
+        return max(self.pad_repetition_window, self.route_repetition_window)
+
     def __post_init__(self):
         # Freeze the actual seed for the whole run and its provenance report.
         object.__setattr__(self, 'seed', resolve_seed(self.seed))
+        for name, value in resolve_repetition(self.repetition_window, self.repetition_penalty,
+                                              **self.repetition_settings).items():
+            object.__setattr__(self, name, value)
+
+
+def resolve_repetition(repetition_window=32, repetition_penalty=1., **settings):
+    """Explicit field settings override legacy shared values, including zero."""
+    resolved = dict(repetition_window=repetition_window, repetition_penalty=repetition_penalty)
+    for field in ('pad', 'route'):
+        for suffix, fallback in (('window', repetition_window), ('penalty', repetition_penalty)):
+            key = f'{field}_repetition_{suffix}'
+            resolved[key] = fallback if settings.get(key) is None else settings[key]
+    for key, value in resolved.items():
+        if key.endswith('window'):
+            if type(value) is not int or value < 1:
+                raise ValueError(f'{key} must be a positive integer')
+        elif not 0 <= value < float('inf'):
+            raise ValueError(f'{key} must be finite and nonnegative')
+    return {key: value for key, value in resolved.items() if key.startswith(('pad_', 'route_'))}

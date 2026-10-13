@@ -119,3 +119,63 @@ def test_disabled_repetition_preserves_rng_with_prefix_and_filters():
 def test_invalid_repetition_parameters(kwargs):
     with pytest.raises(ValueError):
         Sampler(**kwargs)
+
+
+@pytest.mark.parametrize('field', ['pad', 'route'])
+def test_independent_repetition_window_and_strength(field):
+    # The candidate appears three structure tokens back. Each field has its own
+    # window and strength; unrelated fields never pick up the other penalty.
+    history = (Note.make('tap', 'A1'), Route(0, 0), Moment(10.), HoldDuration(12))
+    scores = torch.tensor([.8, .4])
+    identities = ('A1', 'A2') if field == 'pad' else (0, 1)
+    short = Sampler(temperature=0, pad_repetition_window=2, pad_repetition_penalty=7.,
+                    route_repetition_window=4, route_repetition_penalty=.1)
+    assert list(short.order(scores, identities=identities, history=history, field=field))[0] == 0
+    strong = Sampler(temperature=0, pad_repetition_window=4, pad_repetition_penalty=1.,
+                     route_repetition_window=4, route_repetition_penalty=1.)
+    assert list(strong.order(scores, identities=identities, history=history, field=field))[0] == 1
+    disabled = Sampler(temperature=0, **{f'{field}_repetition_window': 4,
+                                        f'{field}_repetition_penalty': 0})
+    assert list(disabled.order(scores, identities=identities, history=history, field=field))[0] == 0
+
+
+def test_independent_defaults_legacy_fallback_and_history_limit():
+    options = GenerationOptions(repetition_window=55, repetition_penalty=2.,
+                                pad_repetition_window=3, route_repetition_penalty=0)
+    assert options.repetition_settings == dict(pad_repetition_window=3, pad_repetition_penalty=2.,
+                                              route_repetition_window=55, route_repetition_penalty=0)
+    assert options.repetition_history_limit == 55
+    assert GenerationOptions().repetition_settings == dict(pad_repetition_window=32, pad_repetition_penalty=1.,
+                                                          route_repetition_window=32, route_repetition_penalty=1.)
+
+
+@pytest.mark.parametrize('field', ['pad', 'route'])
+@pytest.mark.parametrize('suffix,value', [('window',0),('window',1.5),('window',True),
+                                         ('penalty',-1),('penalty',float('nan')),('penalty',float('inf'))])
+def test_independent_invalid_parameters(field, suffix, value):
+    for cls in (Sampler, GenerationOptions):
+        with pytest.raises(ValueError, match=field+'_repetition_'+suffix):
+            cls(**{f'{field}_repetition_{suffix}': value})
+
+
+def test_explicit_split_matches_legacy_rng_and_masks():
+    scores = torch.tensor([.8,.4,.1])
+    history = (Note.make('tap','A1'), Route(0,0), Note.make('tap','A1'))
+    legacy = Sampler(temperature=.8, seed=123, top_k=2, top_p=.9,
+                     repetition_window=9, repetition_penalty=2.)
+    split = Sampler(temperature=.8, seed=123, top_k=2, top_p=.9,
+                    pad_repetition_window=9, pad_repetition_penalty=2.,
+                    route_repetition_window=9, route_repetition_penalty=2.)
+    for field, ids in [('pad',('A1','A2','A3')),('route',(0,1,2)),(None,None)]:
+        args = dict(identities=ids, history=history, field=field)
+        assert list(legacy.order(scores,[True,True,False],**args)) == list(split.order(scores,[True,True,False],**args))
+        assert torch.equal(legacy.generator.get_state(),split.generator.get_state())
+
+
+def test_cli_independent_repetition_flags():
+    args = parser().parse_args(['--joint-checkpoint','x','--audio','x','--bpm','120',
+        '--mel-stats','x','--geometry','x','--slide-data','x','--difficulty','5','--level','13','--output','x',
+        '--pad-repetition-window','3','--pad-repetition-penalty','0',
+        '--route-repetition-window','77','--route-repetition-penalty','2.5'])
+    assert (args.pad_repetition_window,args.pad_repetition_penalty)==(3,0)
+    assert (args.route_repetition_window,args.route_repetition_penalty)==(77,2.5)

@@ -210,3 +210,19 @@ Python接口`generate(..., stream=None)`与`decode_window(..., stream=None)`可�
 小型真实模型的CPU执行覆盖v3严格权重加载、全曲条件复用、Encoder分块等价、预测plan12、增量/prefill一致、字段条件采样、CONT不写KV/Physical、窗尾控制、回退、生成上限、跨窗完整动作及连续空窗。测试使用原生MiaCode独立解析Python输出，对照全部71条路线及8个起点、flags、链/分支、时值和变BPM时间轴；CONT从不进入maidata。CPU测试不代表真实权重CUDA整曲生成或谱面质量验收。
 
 这些测试使用小模型/合成输入，不代表已对真实训练checkpoint完成CUDA整曲生成、速度或谱面质量验收。实际谱面质量以用户评谱为准。
+
+
+## 独立位置与形状重复惩罚
+
+`--pad-repetition-window` / `--pad-repetition-penalty` 配置 note 位置惩罚；
+`--route-repetition-window` / `--route-repetition-penalty` 配置 slide 形状惩罚。
+两组分别默认32个真实结构 token、logit减1；力度0仅关闭对应组。
+先应用合法性 mask，再按各自窗口扣减一次，随后执行温度和top-k/top-p，
+不改变候选合法性或无放回机制。窗口均按全部真实结构 token 计数，
+包含已有前缀和已接受内容，跨计算窗口保留历史；回滚、拒绝和人工修改沿用真实前缀规则。
+
+原有 `--repetition-window` / `--repetition-penalty` 及 Python API 同名参数保留为共享默认值；
+显式指定的pad/route参数优先（包括0）。历史保留两组窗口的最大值，各自只查询自己的尾部。
+交互请求使用 `pad_repetition_window`、`pad_repetition_penalty`、
+`route_repetition_window`、`route_repetition_penalty`，旧请求字段按相同优先级兼容。
+生成报告和交互结果记录实际解析的四个值。两组力度均0时不改变原采样或RNG行为。

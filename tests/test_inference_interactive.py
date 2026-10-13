@@ -392,3 +392,30 @@ def test_server_newer_suggest_cancels_running_and_pending():
     worker.join(5)
     assert ('cancelled', 1) in events and ('cancelled', 2) in events and ('result', 3) in events
     assert ('result', 2) not in events
+
+
+@pytest.mark.parametrize('pad_window,route_window', [(3,77),(77,3)])
+def test_split_repetition_keeps_long_prefix_across_windows(window_config, geometry, pad_window, route_window):
+    from maidata.inference.generation import decode_window
+    timing = TimingMap([(0,120)])
+    session = stub(window_config,geometry,timing,timing.beat_to_second(40))
+    deterministic_notes(session)
+    session.groups = rebase(tuple(Onset(i*24,0.,(Note.make('tap',f'A{i%8+1}'),)) for i in range(50)),timing)
+    settings = dict(pad_repetition_window=pad_window,pad_repetition_penalty=0.,
+                    route_repetition_window=route_window,route_repetition_penalty=2.5)
+    calls = []
+    def capture(*args,**kw):
+        assert args[4].repetition == settings
+        calls.append(kw)
+        return decode_window(*args,**kw)
+    request = dict(id=1,revision=1,mode='continue',start_tick=1488,end_tick=20*96,
+                   max_tokens=512,max_beats=0,max_four_beat_blocks=0,content=True,**settings)
+    with patch('maidata.inference.generation.decode_window',side_effect=capture):
+        result = session.suggest(request,threading.Event())
+    assert len(calls)==2
+    assert all(len(c['repetition_prefix'])==77 for c in calls)
+    assert all(result[key]==value for key,value in settings.items())
+    # A rejected suggestion does not become the next request's repetition prefix.
+    with patch('maidata.inference.generation.decode_window',side_effect=capture):
+        session.suggest(dict(request,id=2),threading.Event())
+    assert calls[0]['repetition_prefix']==calls[2]['repetition_prefix']

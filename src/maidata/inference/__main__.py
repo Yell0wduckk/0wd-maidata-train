@@ -49,6 +49,11 @@ def parser():
                    help='Recent real structure tokens used for pad/route repetition penalty')
     p.add_argument('--repetition-penalty', type=float, default=defaults.repetition_penalty,
                    help='Subtract from repeated pad/route logits; 0 disables')
+    for field in ('pad', 'route'):
+        p.add_argument(f'--{field}-repetition-window', type=int, default=None,
+                       help=f'Recent structure token window for {field}; defaults to --repetition-window')
+        p.add_argument(f'--{field}-repetition-penalty', type=float, default=None,
+                       help=f'Logit subtraction for repeated {field}; 0 disables, overrides shared penalty')
     p.add_argument('--seed', type=int, default=defaults.seed, help='Fixed seed; -1 draws a random seed for this run')
     p.add_argument('--encoder-window-batch', type=int, default=8)
     p.add_argument('--max-tokens-per-window', type=int, default=defaults.max_tokens_per_window)
@@ -144,6 +149,8 @@ def main(argv=None):
         geometry = Geometry.from_resources(args.geometry, args.slide_data)
     options = GenerationOptions(temperature=args.temperature, top_k=args.top_k, top_p=args.top_p, seed=args.seed,
         repetition_window=args.repetition_window, repetition_penalty=args.repetition_penalty,
+        pad_repetition_window=args.pad_repetition_window, pad_repetition_penalty=args.pad_repetition_penalty,
+        route_repetition_window=args.route_repetition_window, route_repetition_penalty=args.route_repetition_penalty,
         max_tokens_per_window=args.max_tokens_per_window, max_tokens_per_moment=args.max_tokens_per_moment,
         max_backtracks_per_window=args.max_backtracks_per_window,
         rollback_tokens=args.rollback_tokens, physical_hard_mask=args.physical_hard_mask, trace=args.trace)

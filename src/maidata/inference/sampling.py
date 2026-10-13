@@ -8,7 +8,7 @@ from maidata.chart.types import (GENERATED_TYPES, KINDS, FLAGS, APPLICABLE,
     BUTTON_PADS, TOUCH_PADS, Moment, Note, Route, HoldDuration, SlideDuration)
 from maidata.chart.windows import TimeTarget
 from maidata.time.discrete import compile_support_tree, TimeQuery, CONTINUE
-from .options import resolve_seed
+from .options import resolve_seed, resolve_repetition
 from .tail_collision import TailRepair
 
 
@@ -20,7 +20,9 @@ class OnsetLimit:
 
 class Sampler:
     def __init__(self, *, temperature=1., seed=20261010, physical_hard_mask=True, top_k=0, top_p=1.,
-                 floor_tick=None, repetition_window=32, repetition_penalty=1.):
+                 floor_tick=None, repetition_window=32, repetition_penalty=1.,
+                 pad_repetition_window=None, pad_repetition_penalty=None,
+                 route_repetition_window=None, route_repetition_penalty=None):
         # floor_tick: editor-anchored generation never adds content to an onset
         # (or empty gap) before this absolute tick. None leaves sampling unchanged.
         self.floor_tick = floor_tick
@@ -32,11 +34,10 @@ class Sampler:
         if not 0 < top_p <= 1:
             raise ValueError('top_p must be in (0, 1]')
         self.top_k, self.top_p = top_k, top_p
-        if type(repetition_window) is not int or repetition_window < 1:
-            raise ValueError('repetition_window must be a positive integer')
-        if not 0 <= repetition_penalty < float('inf'):
-            raise ValueError('repetition_penalty must be finite and nonnegative')
         self.repetition_window, self.repetition_penalty = repetition_window, repetition_penalty
+        self.repetition = resolve_repetition(repetition_window, repetition_penalty,
+            pad_repetition_window=pad_repetition_window, pad_repetition_penalty=pad_repetition_penalty,
+            route_repetition_window=route_repetition_window, route_repetition_penalty=route_repetition_penalty)
         self.seed = resolve_seed(seed)
         self.generator = torch.Generator(device='cpu').manual_seed(self.seed)
         self.physical_hard_mask = physical_hard_mask
@@ -48,13 +49,14 @@ class Sampler:
             raise ValueError('nonfinite model sampling scores')
         if allowed is not None:
             values.masked_fill_(~torch.as_tensor(allowed, dtype=torch.bool, device='cpu'), -torch.inf)
-        if self.repetition_penalty and identities is not None:
-            recent = history[-self.repetition_window:]
+        penalty = self.repetition.get(f'{field}_repetition_penalty', 0.)
+        if penalty and identities is not None:
+            recent = history[-self.repetition[f'{field}_repetition_window']:]
             seen = ({t.pad for t in recent if isinstance(t, Note)} if field == 'pad' else
                     {t.route_id for t in recent if isinstance(t, Route)} if field == 'route' else set())
             if seen:
                 repeated = torch.tensor([v in seen for v in identities], dtype=torch.bool)
-                values[repeated] -= self.repetition_penalty
+                values[repeated] -= penalty
         # Select the support once, before the no-replacement search. Do not
         # silently widen it when a retained candidate cannot be completed.
         # The default branch is untouched, including the old RNG sequence.

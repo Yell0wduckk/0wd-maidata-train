@@ -91,7 +91,7 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
         return SearchFrame(snapshot, len(accepted), len(bypass), len(repairs), sampler.choices(decoder, routed, oracle, timing,
             distributions, end_tick=end_tick, cap_tick=cap_tick,
             moment_remaining=options.max_tokens_per_moment-count,
-            history=tuple(repetition_prefix) + tuple(accepted[-options.repetition_window:]),
+            history=tuple(repetition_prefix) + tuple(accepted[-options.repetition_history_limit:]),
             onset_end_tick=onset_end_tick, **extra), token, routed, repair_event)
 
     emit(stream, 'window_start', window=window, start_tick=start_tick)
@@ -225,8 +225,7 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
         raise ValueError('full-song generation requires contiguous non-overlapping target windows: stride == target_beats')
     decoder.eval()
     sampler = Sampler(temperature=options.temperature, seed=options.seed, physical_hard_mask=options.physical_hard_mask,
-                      top_k=options.top_k, top_p=options.top_p, repetition_window=options.repetition_window,
-                      repetition_penalty=options.repetition_penalty)
+                      top_k=options.top_k, top_p=options.top_p, **options.repetition_settings)
     distributions = decoder_time_distributions(config)
     session = DecodeSession(GenerationPhysicalState(timing, geometry, audio_end_seconds=duration))
     with stage(progress, 'decoder_audio'):
@@ -259,7 +258,7 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
         # Parse only real content with a local anchor; the previous boundary delta
         # is input-only. Rebase the first new group against the last REAL onset.
         new = list(real_onsets((Moment(0), *tokens), timing, sequence_start_tick=start_tick))
-        repeat_prefix = (repeat_prefix + tokens)[-options.repetition_window:]
+        repeat_prefix = (repeat_prefix + tokens)[-options.repetition_history_limit:]
         if new:
             previous = groups[-1].tick if groups else min(0, new[0].tick)
             new[0] = replace(new[0], delta_ms=timing.delta_ms(previous, new[0].tick))
