@@ -195,6 +195,8 @@ Python接口`generate(..., stream=None)`与`decode_window(..., stream=None)`可�
 
 交互片段沿用全曲四拍换行；终点恰好落在四拍边界时保留结尾换行，不添加没有音符 / 间隔的下一行细分声明。后续片段声明自己的实际细分，连续接受不会将四拍边界接回上一行。
 
+交互请求的 `plan_source` 支持 `predicted`（默认）和 `none`，分别使用预测 Plan 或完全屏蔽其条件。每次请求固定该值，续写与范围生成共用；切换时重建受影响窗口的条件记忆并清空其自注意力 K/V，保持音频投影、Z 和已预测的 Draft / Plan 缓存不变，不重跑 E/D/P。整曲入口继续使用 `--plan-source none`，预编码 / Draft / Plan 预解码仍照常输出。
+
 窗口内使用真实前缀的最长公共部分复用 K/V；前缀修改使受影响后缀失效，跨窗口分别 prefill，Physical 由对应真实前缀恢复。`reused_rows/computed_rows` 统计前缀复用/补算行数，不含新生成字段的全部计算量。详细 trace 仍默认关闭。
 
 ## 验证范围与限制

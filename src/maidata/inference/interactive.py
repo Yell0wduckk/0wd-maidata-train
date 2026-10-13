@@ -7,7 +7,7 @@ requests on stdin with JSON-line events on stdout:
 - ``{"op": "chart", "revision": r, "ir": <maimai.chart_ir.v1>}`` replaces the
   editor chart that later requests condition on.
 - ``{"op": "suggest", "id": i, "revision": r, "mode": "continue"|"range",
-  "start_tick": a, "end_tick": b, ...}`` generates onsets in ``[a, b)`` after the
+  "start_tick": a, "end_tick": b, "plan_source": "predicted"|"none", ...}`` generates onsets in ``[a, b)`` after the
   chart's content before ``a``. A newer suggest cancels the running one.
 - ``{"op": "cancel", "id": i}`` and ``{"op": "close"}``.
 
@@ -49,6 +49,7 @@ class WindowContext:
     rows: tuple = ()     # expanded (input, beat, slide_beat) rows
     entries: int = 0     # cached rows; entry j was completed with family(rows[j+1])
     cache: object = None
+    plan_source: str = 'predicted'
 
 
 def cache_length(cache):
@@ -227,10 +228,12 @@ class Interactive:
         self.groups, self.skipped = chart_groups(ir, self.timing, self.duration)
         self.revision = revision
 
-    def context(self, index):
+    def context(self, index, plan_source='predicted'):
         import torch
         from maidata.draft.windows import select_windows
-        if index in self.contexts:
+        if plan_source not in ('predicted', 'none'):
+            raise ValueError('interactive plan_source must be predicted or none')
+        if index in self.contexts and self.contexts[index].plan_source == plan_source:
             self.contexts.move_to_end(index)
             return self.contexts[index]
         c, conditions = self.config, self.conditions
@@ -242,9 +245,15 @@ class Interactive:
                 after_beats=c['decoder_z_after_beats'], z_stride_beats=c['draft_z_stride_beats']
                 ).memory if c['decoder_z_cross_attention'] else conditions.z
             audio_index = index if conditions.audio_scope == 'window' else 0
+            plans, valid = conditions.plans[index:index+1], conditions.plan_valid[index:index+1]
+            if plan_source == 'none':
+                plans, valid = torch.zeros_like(plans), torch.zeros_like(valid)
             memory = self.decoder.prepare_memory(self.audio_kv, torch.tensor([audio_index], device=self.device),
-                selected, conditions.plans[index:index+1], conditions.plan_valid[index:index+1])
-        context = self.contexts[index] = WindowContext(memory)
+                selected, plans, valid)
+        # Self K/V depends on Plan as well as chart rows. Never reuse it after
+        # changing the conditioning, and retain the predicted Draft cache intact.
+        context = self.contexts[index] = WindowContext(memory, plan_source=plan_source)
+        self.contexts.move_to_end(index)
         while len(self.contexts) > self.max_contexts:
             self.contexts.popitem(last=False)
         return context
@@ -290,6 +299,9 @@ class Interactive:
         from .sampling import Sampler
         if request.get('revision') != self.revision:
             raise ValueError('suggest refers to a chart revision this session has not received')
+        plan_source = request.get('plan_source', 'predicted')
+        if plan_source not in ('predicted', 'none'):
+            raise ValueError('interactive plan_source must be predicted or none')
         mode = request.get('mode', 'continue')
         start, end = int(request['start_tick']), int(request['end_tick'])
         if mode not in ('continue', 'range') or start < 0 or end <= start:
@@ -328,7 +340,7 @@ class Interactive:
             current, beats = window_tokens(sequence, window_start, self.timing)
             tokens, coordinates = history + current, positions + beats
             rows = expanded_rows(tokens, coordinates, self.timing, len(history))
-            context = self.context(index)
+            context = self.context(index, plan_source)
             session = DecodeSession(state)
             origin = state.grammar.state.cursor
 
@@ -397,7 +409,7 @@ class Interactive:
                     for g in generated],
             tokens=produced, reused_rows=reused, computed_rows=computed,
             skipped_notes=self.skipped, physical_bypass=bypass, seed=options.seed,
-            limit_tick=end, stop_reason=stop_reason,
+            limit_tick=end, stop_reason=stop_reason, plan_source=plan_source,
             repetition_window=options.repetition_window, repetition_penalty=options.repetition_penalty)
 
 

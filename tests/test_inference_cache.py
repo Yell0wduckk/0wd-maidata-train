@@ -213,6 +213,29 @@ def test_z_off_gt_none_skip_dp_on_cold_and_hot(joint_config, tmp_path, geometry,
     assert (tmp_path/'online/maidata.txt').read_bytes() == (tmp_path/'hot/maidata.txt').read_bytes()
 
 
+def test_plan_disabled_generation_keeps_predicted_draft_cache(joint_config, tmp_path, geometry, capsys):
+    checkpoint, _ = inputs(joint_config, tmp_path)
+    preencode(audio_args(checkpoint, tmp_path))
+    audio = json.loads(capsys.readouterr().out)['audio_cache']['path']
+    predraft(['--joint-checkpoint', str(checkpoint), '--audio-cache', audio,
+        '--cache-dir', str(tmp_path/'cache'), '--difficulty', '5', '--level', '14.5',
+        '--device', 'cpu', '--precision', 'fp32', '--no-progress'])
+    capsys.readouterr()
+    paths = list((tmp_path/'cache/draft').glob('*.pt'))
+    before = {path: path.read_bytes() for path in paths}
+    assert len(before) == 1
+    with ExitStack() as stack:
+        spies(stack, forbid=('encoder', 'draft', 'planner'))
+        stack.enter_context(patch('maidata.physical.Geometry.from_resources', return_value=geometry))
+        main([*arguments(checkpoint, tmp_path), '--grid', str(tmp_path/'grid.npz'),
+            '--cache-dir', str(tmp_path/'cache'), '--plan-source', 'none', '--output', str(tmp_path/'no-plan')])
+    report = json.loads((tmp_path/'no-plan/generation.json').read_text('utf-8'))
+    assert report['checkpoints']['inference_plan_source'] == 'none'
+    assert report['cache']['draft']['hit']
+    assert all(not row['plan_valid'] for row in report['windows'])
+    assert {path: path.read_bytes() for path in paths} == before
+
+
 @pytest.mark.parametrize('mode', ['identity', 'shape', 'truncated', 'incomplete'])
 def test_corrupt_cache_is_reported_and_not_overwritten(joint_config, tmp_path, capsys, mode):
     checkpoint, _ = inputs(joint_config, tmp_path)

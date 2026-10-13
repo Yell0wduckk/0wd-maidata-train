@@ -140,6 +140,50 @@ def test_range_replaces_only_the_selected_interval(window_config, geometry):
     assert span_beats(result['text']) == Fraction(1632 - 96, 96)
 
 
+def test_plan_toggle_masks_condition_and_invalidates_self_kv_only(window_config, geometry):
+    timing = TimingMap([(0, 120)])
+    session = stub(window_config, geometry, timing, timing.beat_to_second(40))
+    plans, valid = session.conditions.plans.clone(), session.conditions.plan_valid.clone()
+    rows = chart_rows(timing, [Moment(timing.delta_ms(96, 288)), Note.make('tap', 'A2')])
+    predicted = session.context(0)
+    assert predicted.memory.condition[0].valid[:, predicted.memory.plan_index:].all()
+    with session.autocast():
+        extend_cache(session.decoder, predicted, rows, device='cpu')
+    disabled = session.context(0, 'none')
+    assert disabled is not predicted and disabled.cache is None and disabled.rows == ()
+    assert not disabled.memory.condition[0].valid[:, disabled.memory.plan_index:].any()
+    for p, n in zip(predicted.memory.condition, disabled.memory.condition):
+        torch.testing.assert_close(p.key[:, :, :predicted.memory.plan_index], n.key[:, :, :disabled.memory.plan_index])
+    with session.autocast():
+        assert extend_cache(session.decoder, disabled, rows, device='cpu') == (0, len(rows)-1)
+        assert session.context(0, 'none') is disabled
+        assert extend_cache(session.decoder, disabled, rows, device='cpu') == (len(rows)-1, 0)
+    enabled = session.context(0, 'predicted')
+    assert enabled is not disabled and enabled.cache is None
+    assert enabled.memory.condition[0].valid[:, enabled.memory.plan_index:].all()
+    for p, n in zip(predicted.memory.audio, disabled.memory.audio):
+        torch.testing.assert_close(p.key, n.key)
+        torch.testing.assert_close(p.value, n.value)
+    torch.testing.assert_close(session.conditions.plans, plans)
+    assert torch.equal(session.conditions.plan_valid, valid)
+
+
+@pytest.mark.parametrize('mode', ['continue', 'range'])
+def test_suggest_plan_source_is_per_request_and_rejects_unsupported_sources(window_config, geometry, mode):
+    timing = TimingMap([(0, 120)])
+    session = stub(window_config, geometry, timing, timing.beat_to_second(40))
+    request = dict(id=1, revision=1, mode=mode, start_tick=384, end_tick=768, max_tokens=1, seed=7)
+    for source in ('none', 'predicted'):
+        result = session.suggest(dict(request, plan_source=source), threading.Event())
+        assert result['plan_source'] == source
+        assert session.contexts[0].plan_source == source
+        assert session.contexts[0].memory.condition[0].valid[:, session.contexts[0].memory.plan_index:].any() == (source == 'predicted')
+    existing = session.contexts[0]
+    with pytest.raises(ValueError, match='plan_source'):
+        session.suggest(dict(request, plan_source='gt'), threading.Event())
+    assert session.contexts[0] is existing
+
+
 @pytest.mark.parametrize('mode', ['continue', 'range'])
 def test_interactive_random_seed_is_resolved_per_request_and_reported(window_config, geometry, mode):
     timing = TimingMap([(0, 120)])
