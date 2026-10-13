@@ -10,7 +10,7 @@ def resolve_seed(seed):
 
 @dataclass(frozen=True)
 class GenerationOptions:
-    temperature: float = 0.
+    temperature: float = .4
     seed: int = 20261010
     max_tokens_per_window: int = 512
     max_tokens_per_moment: int = 20
@@ -20,6 +20,7 @@ class GenerationOptions:
     trace: bool = False
     top_k: int = 0
     top_p: float = 1.
+    max_slide_judge_areas: int = 40
     repetition_window: int = 32
     repetition_penalty: float = 1.
 
@@ -38,11 +39,17 @@ class GenerationOptions:
         return max(self.pad_repetition_window, self.route_repetition_window)
 
     def __post_init__(self):
+        validate_slide_limit(self.max_slide_judge_areas)
         # Freeze the actual seed for the whole run and its provenance report.
         object.__setattr__(self, 'seed', resolve_seed(self.seed))
         for name, value in resolve_repetition(self.repetition_window, self.repetition_penalty,
                                               **self.repetition_settings).items():
             object.__setattr__(self, name, value)
+
+
+def validate_slide_limit(value):
+    if type(value) is not int or value < 1:
+        raise ValueError('max_slide_judge_areas must be a positive integer')
 
 
 def resolve_repetition(repetition_window=32, repetition_penalty=1., **settings):

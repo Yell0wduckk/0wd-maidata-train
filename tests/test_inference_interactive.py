@@ -302,13 +302,13 @@ def test_no_implicit_two_window_cap_and_prefix_penalty(window_config,geometry):
     deterministic_notes(session)
     session.groups=(Onset(8*96,4000.,(Note.make('tap','A1'),)),)
     result=session.suggest(dict(id=1,revision=1,mode='continue',start_tick=9*96,end_tick=50*96,
-        max_tokens=512,max_beats=0,max_four_beat_blocks=0,content=True),threading.Event())
+        max_tokens=512,max_beats=0,max_four_beat_blocks=0,content=True,temperature=0),threading.Event())
     assert max(o['tick'] for o in result['onsets'])>=32*96
     assert result['onsets'][0]['content'][0]['pad']=='A2'
     assert session.groups[0].content[0].pad=='A1'  # Suggestions never commit their own history.
     session.groups=(Onset(8*96,4000.,(Note.make('tap','A2'),)),)
     edited=session.suggest(dict(id=2,revision=1,mode='continue',start_tick=9*96,end_tick=50*96,
-        max_tokens=1,content=True),threading.Event())
+        max_tokens=1,content=True,temperature=0),threading.Event())
     assert edited['onsets'][0]['content'][0]['pad']=='A1'
 
 
@@ -406,15 +406,17 @@ def test_split_repetition_keeps_long_prefix_across_windows(window_config, geomet
     calls = []
     def capture(*args,**kw):
         assert args[4].repetition == settings
+        assert args[4].max_slide_judge_areas == 17
         calls.append(kw)
         return decode_window(*args,**kw)
     request = dict(id=1,revision=1,mode='continue',start_tick=1488,end_tick=20*96,
-                   max_tokens=512,max_beats=0,max_four_beat_blocks=0,content=True,**settings)
+                   max_tokens=512,max_beats=0,max_four_beat_blocks=0,max_slide_judge_areas=17,content=True,**settings)
     with patch('maidata.inference.generation.decode_window',side_effect=capture):
         result = session.suggest(request,threading.Event())
     assert len(calls)==2
     assert all(len(c['repetition_prefix'])==77 for c in calls)
     assert all(result[key]==value for key,value in settings.items())
+    assert result['max_slide_judge_areas']==17
     # A rejected suggestion does not become the next request's repetition prefix.
     with patch('maidata.inference.generation.decode_window',side_effect=capture):
         session.suggest(dict(request,id=2),threading.Event())

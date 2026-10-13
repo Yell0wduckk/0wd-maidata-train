@@ -226,3 +226,17 @@ Python接口`generate(..., stream=None)`与`decode_window(..., stream=None)`可�
 交互请求使用 `pad_repetition_window`、`pad_repetition_penalty`、
 `route_repetition_window`、`route_repetition_penalty`，旧请求字段按相同优先级兼容。
 生成报告和交互结果记录实际解析的四个值。两组力度均0时不改变原采样或RNG行为。
+
+
+## Slide 判定区长度上限
+
+`--max-slide-judge-areas`（交互请求 `max_slide_judge_areas`）默认为40，必须为正整数。
+读取已加载几何中的判定区序列，逐条链式轨道累计；相接且相同的首尾判定区只计一次，
+一个判定区包含多个 pad 仍算一个区。不按空间距离、route token数或时间长度计算。
+累计恰好等于上限时仍可继续选完整一段；超过上限后下一字段只能为 `SLIDE_DURATION`，
+不裁剪已选段，也不改变现有duration的合法性/时间/Physical规则。
+新分支重新计数，搜索回滚按恢复的grammar前缀恢复长度；Physical fallback仍保留此上限。
+只限制推理采样，不修改原谱解析、训练规则或已有权重。报告记录本次固定上限。
+
+推理CLI、Python生成选项和常驻交互默认温度统一为0.4；位置和形状惩罚分别默认
+32个结构token、力度1，均开启，显式力度0仍可分别关闭。

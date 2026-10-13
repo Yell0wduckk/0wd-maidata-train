@@ -129,19 +129,22 @@ def test_cli_v3_runs_both_encoders_and_reports_the_audio_source(config, tmp_path
 
 
 @pytest.mark.parametrize('schema',['maidata.decoder-training.v1','maidata.decoder-training.v2'])
-def test_old_time_architecture_is_not_silently_loaded(config,tmp_path,schema):
-    paths,*_=checkpoints(config,tmp_path,schema=schema)
-    with pytest.raises(ValueError,match='v4 causal CONT'):
-        load_models(*paths,device='cpu')
+def test_training_schema_labels_do_not_block_compatible_weights(config,tmp_path,schema):
+    paths,_,encoder,decoder,_=checkpoints(config,tmp_path,schema=schema)
+    models=load_models(*paths,device='cpu')
+    # These fixtures change only provenance labels, not actual architecture.
+    for original,loaded in ((encoder,models.decoder_encoder),(decoder,models.decoder)):
+        assert all(torch.equal(value,loaded.state_dict()[key]) for key,value in original.state_dict().items())
 
 
-def test_unnormalized_cont_architecture_is_not_silently_loaded(config,tmp_path):
+def test_architecture_label_does_not_override_actual_compatible_weights(config,tmp_path):
     paths,*_=checkpoints(config,tmp_path)
     payload = torch.load(paths[1],map_location='cpu',weights_only=False)
     payload['architecture'] = 'maidata.decoder-causal-cont-tick384.v1'
     torch.save(payload,paths[1])
-    with pytest.raises(ValueError,match='v4 causal CONT'):
-        load_models(*paths,device='cpu')
+    models=load_models(*paths,device='cpu')
+    assert all(torch.equal(value,models.decoder.state_dict()[key.removeprefix('decoder.')])
+               for key,value in payload['model_state'].items() if key.startswith('decoder.'))
 
 
 @pytest.mark.parametrize('plan_source', ['gt', 'none'])
@@ -169,7 +172,7 @@ def test_z_off_cli_uses_only_stage_two_and_masks_absent_plan(config, tmp_path, g
          patch('maidata.physical.Geometry.from_resources', return_value=geometry):
         main(args)
     report = json.loads((tmp_path/'result/generation.json').read_text())
-    assert report['complete'] and report['options']['temperature'] == 0
+    assert report['complete'] and report['options']['temperature'] == .4
     assert report['checkpoints']['encoder_draft'] is None
     assert report['checkpoints']['inference_plan_source'] == plan_source
     assert report['config']['decoder_z_cross_attention'] is False

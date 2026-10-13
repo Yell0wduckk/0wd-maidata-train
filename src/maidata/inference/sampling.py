@@ -8,7 +8,7 @@ from maidata.chart.types import (GENERATED_TYPES, KINDS, FLAGS, APPLICABLE,
     BUTTON_PADS, TOUCH_PADS, Moment, Note, Route, HoldDuration, SlideDuration)
 from maidata.chart.windows import TimeTarget
 from maidata.time.discrete import compile_support_tree, TimeQuery, CONTINUE
-from .options import resolve_seed, resolve_repetition
+from .options import resolve_seed, resolve_repetition, validate_slide_limit
 from .tail_collision import TailRepair
 
 
@@ -19,13 +19,15 @@ class OnsetLimit:
 
 
 class Sampler:
-    def __init__(self, *, temperature=1., seed=20261010, physical_hard_mask=True, top_k=0, top_p=1.,
+    def __init__(self, *, temperature=.4, seed=20261010, physical_hard_mask=True, top_k=0, top_p=1.,
                  floor_tick=None, repetition_window=32, repetition_penalty=1.,
                  pad_repetition_window=None, pad_repetition_penalty=None,
-                 route_repetition_window=None, route_repetition_penalty=None):
+                 route_repetition_window=None, route_repetition_penalty=None, max_slide_judge_areas=40):
         # floor_tick: editor-anchored generation never adds content to an onset
         # (or empty gap) before this absolute tick. None leaves sampling unchanged.
         self.floor_tick = floor_tick
+        validate_slide_limit(max_slide_judge_areas)
+        self.max_slide_judge_areas = max_slide_judge_areas
         if not 0 <= temperature < float('inf'):
             raise ValueError('temperature must be finite and nonnegative')
         self.temperature = temperature
@@ -175,12 +177,29 @@ class Sampler:
                         yield emit((HoldDuration if kind=='HOLD_DURATION' else SlideDuration)(value.complete_ticks),current)
             yield from visit(0,TimeQuery(kind,cursor),output)
 
+    @staticmethod
+    def slide_judge_area_count(oracle):
+        from maidata.chart.routes import chain_paths
+        state = oracle.physical.grammar.state
+        count, previous = 0, None
+        for key in chain_paths(state.note.pad, state.routes):
+            entries = oracle.physical.geometry.paths[key].entries
+            count += len(entries) - int(bool(entries) and previous == entries[0][1])
+            if entries:
+                previous = entries[-1][1]
+        return count
+
     def choices(self, decoder, routed, oracle, timing, distributions, *, end_tick, cap_tick,
                 moment_remaining=None, history=(), onset_end_tick=None, force_moment=False, moment_floor=None):
         if hasattr(oracle,'set_duration_cap'):
             oracle.set_duration_cap(timing.second(cap_tick))
         types = oracle.query_types()
         allowed = [name in types and self.allowed(types[name]) for name in GENERATED_TYPES]
+        if (oracle.physical.grammar.state.phase == 'chain' and
+                self.slide_judge_area_count(oracle) > self.max_slide_judge_areas):
+            # Allow the chosen segment to cross the bound, then finish this
+            # branch. This remains active during a Physical-only fallback.
+            allowed = [ok and name == 'SLIDE_DURATION' for name, ok in zip(GENERATED_TYPES, allowed)]
         if force_moment:
             allowed = [ok and name == 'MOMENT' for name, ok in zip(GENERATED_TYPES, allowed)]
         if moment_remaining is not None and moment_remaining <= 0:

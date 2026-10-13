@@ -317,11 +317,13 @@ class Interactive:
         options = GenerationOptions(temperature=float(request.get('temperature', defaults.temperature)),
             top_k=int(request.get('top_k', defaults.top_k)), top_p=float(request.get('top_p', defaults.top_p)),
             seed=int(request.get('seed', defaults.seed)),
+            max_slide_judge_areas=request.get('max_slide_judge_areas', defaults.max_slide_judge_areas),
             repetition_window=request.get('repetition_window', defaults.repetition_window),
             repetition_penalty=float(request.get('repetition_penalty', defaults.repetition_penalty)),
             **{key: request[key] for key in defaults.repetition_settings if key in request})
         sampler = Sampler(temperature=options.temperature, seed=options.seed, top_k=options.top_k,
                           top_p=options.top_p, physical_hard_mask=options.physical_hard_mask,
+                          max_slide_judge_areas=options.max_slide_judge_areas,
                           **options.repetition_settings)
         groups = [g for g in self.groups if g.tick < start]
         repeat_prefix = repetition_history(groups, options.repetition_history_limit)
@@ -412,6 +414,7 @@ class Interactive:
             tokens=produced, reused_rows=reused, computed_rows=computed,
             skipped_notes=self.skipped, physical_bypass=bypass, seed=options.seed,
             limit_tick=end, stop_reason=stop_reason, plan_source=plan_source, tail_repairs=repairs,
+            max_slide_judge_areas=options.max_slide_judge_areas,
             **options.repetition_settings)
 
 

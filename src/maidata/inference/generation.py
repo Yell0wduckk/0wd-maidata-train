@@ -225,7 +225,8 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
         raise ValueError('full-song generation requires contiguous non-overlapping target windows: stride == target_beats')
     decoder.eval()
     sampler = Sampler(temperature=options.temperature, seed=options.seed, physical_hard_mask=options.physical_hard_mask,
-                      top_k=options.top_k, top_p=options.top_p, **options.repetition_settings)
+                      top_k=options.top_k, top_p=options.top_p, max_slide_judge_areas=options.max_slide_judge_areas,
+                      **options.repetition_settings)
     distributions = decoder_time_distributions(config)
     session = DecodeSession(GenerationPhysicalState(timing, geometry, audio_end_seconds=duration))
     with stage(progress, 'decoder_audio'):
