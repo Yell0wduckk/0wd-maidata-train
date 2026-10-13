@@ -267,8 +267,8 @@ class Interactive:
 
     def rules(self, groups, index, floor, end):
         """Rule state after the chart before floor, resumed from the latest valid window start."""
-        from maidata.physical.inference import InferencePhysicalState
-        state = InferencePhysicalState(self.timing, self.geometry, audio_end_seconds=self.duration)
+        from .tail_collision import GenerationPhysicalState
+        state = GenerationPhysicalState(self.timing, self.geometry, audio_end_seconds=self.duration)
         first = 0
         for k in range(index, 0, -1):
             saved = self.rule_starts.get(k)
@@ -324,7 +324,7 @@ class Interactive:
                           repetition_window=options.repetition_window, repetition_penalty=options.repetition_penalty)
         groups = [g for g in self.groups if g.tick < start]
         repeat_prefix = repetition_history(groups, options.repetition_window)
-        generated, produced, reused, computed, bypass = [], 0, 0, 0, 0
+        generated, produced, reused, computed, bypass, repairs = [], 0, 0, 0, 0, []
         stop_reason = limit_reason
         floor = start
         while floor < end:
@@ -361,6 +361,7 @@ class Interactive:
                     repetition_prefix=repeat_prefix, onset_end_tick=end if end <= window_end else None)
             reused, computed = reused + kept, computed + fresh
             bypass += len(report['physical_bypass'])
+            repairs.extend(report['tail_repairs'])
             if new:
                 cursor, more = origin, []
                 for token in new:
@@ -409,7 +410,7 @@ class Interactive:
                     for g in generated],
             tokens=produced, reused_rows=reused, computed_rows=computed,
             skipped_notes=self.skipped, physical_bypass=bypass, seed=options.seed,
-            limit_tick=end, stop_reason=stop_reason, plan_source=plan_source,
+            limit_tick=end, stop_reason=stop_reason, plan_source=plan_source, tail_repairs=repairs,
             repetition_window=options.repetition_window, repetition_penalty=options.repetition_penalty)
 
 

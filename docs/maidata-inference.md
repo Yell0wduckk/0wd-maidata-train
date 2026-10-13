@@ -125,11 +125,17 @@ M使用独立CONT输入；续接锁定时间类型，每次CONT执行主干并�
 
 默认先使用Physical hard mask；窗口回退预算耗尽后，从当前因果前缀仅放宽Physical拒绝，继续强制补齐和生成。每窗`physical_fallback`记录触发点与原因，实际接受的违规逐条记录在`physical_bypass`；下一窗重新开启请求的hard mask。语法、音频范围和基本时值支持始终生效。显式`--no-physical-hard-mask`则从开始放宽Physical。放宽后仍无合法语法补全、非有限预测或超过生成上限时报错并写`generation-error.json`，不将截断谱面标为成功。
 
+经过判定区后的撞尾（`path_guard`）例外采用 NOTE 采样后的修复，不在 type / kind / pad / flags 选择时硬屏蔽。间隔按 Slide 实际进入该判定区至 NOTE 起音的秒数计算：`150 <= gap <= 200 ms` 自动设置 `ex=1`，保留 kind、pad、其他 flags 及后续 Hold / Slide 内容；`0 < gap < 150 ms` 放弃这个 NOTE，强制回到 MOMENT 并重新选择时间，不在原起音改选 Touch。已有 EX 也不能跳过150 ms以内的回退。多个路径同时命中时任一严重撞尾即回退，初次重试时间至少到所有命中路径的150 ms边界；不是将其他音符或未来窗口整体向后移动。Slide 起点 `launch_guard`、占手、重叠和其他 Physical 规则不变。
+
+若撞尾发生于 MOMENT 后的第一个 NOTE，撤回尚未落音的 MOMENT 再重采样，避免连续 MOMENT 或遗留空起音；若同一起音已有完成音符，则保留它们并选择下一 MOMENT。前缀、规则、K/V、流式文本和 IR 同步回退。每窗生成报告及交互结果的 `tail_repairs` 记录加 EX / MOMENT 修复，搜索撤回也撤销对应修复记录；这些有意修复不计为 Physical bypass。整曲、续写和范围生成共用该流程。
+
+加 EX 不增加模型前向，只修改尚未送回模型的 NOTE。MOMENT 回退复用原前缀和 Router 前半层输出，但重新执行时间类型对应的后半层；延后起音的 NOTE 也需重新预测，长时值可能增加 CONT 步骤。不重跑 Encoder、Drafter / Planner 或整段前缀，不能将其计算量描述为完全不变。CPU 小模型测试核对了实际 begin / complete 调用次数及重算后 K/V 与接受序列的一致性。
+
 ## Physical 推理查询与复用
 
 推理在选择每个 ROUTE 候选时提前检查第一段的 `path_coverage`：第一段路径、NOTE 出现时刻和一拍后的启动时刻不随 duration 或后续拼接变化，必然冲突的候选立即拒绝。即使恢复了旧的延迟前缀，也不能在该第一段上继续追加。保留原来的路径豁免、覆盖方向和时间边界；拼接后段的启动时间依赖总 duration 分配，仍由完整轨道检查。此提前拦截仅用于推理，训练的 AttributionState、归责和已生产支持缓存不变。
 
-整曲生成使用独立的 `physical.inference.InferencePhysicalState`，迁移旧仓库的局部字段查询、存在性短路和前缀内缓存。训练的 `AttributionState` 继续维护首次归责与惩罚支持；正常整曲推理只读取原始规则决定，不计算训练归责、继承冲突或冲突覆盖。
+整曲与交互生成使用推理层的 `GenerationPhysicalState`，继承 `physical.inference.InferencePhysicalState` 的局部字段查询、存在性短路和前缀内缓存，只将上述 `path_guard` 留到采样后修复。原始 Physical oracle、flags无关的训练判定、训练 `AttributionState` 及既有支持缓存不变；正常推理不计算训练归责、继承冲突或冲突覆盖。
 
 - 类型阶段只需确认存在一个可用 NOTE，不枚举全部 kind×pad；kind阶段找到可用位置即停止；pad阶段只查询已选kind。候选结果在同一前缀内复用，外观flags和track break共享查询，short标记仍独立检查音频边界。
 - 查询、最终候选确认与接受复用同一前缀的规则结果。语法、动作、窗口边界或快照改变后刷新缓存，跨窗活动动作与回退语义保持；不按裁剪后的谱面历史重建Physical状态。

@@ -9,6 +9,7 @@ from maidata.chart.types import (GENERATED_TYPES, KINDS, FLAGS, APPLICABLE,
 from maidata.chart.windows import TimeTarget
 from maidata.time.discrete import compile_support_tree, TimeQuery, CONTINUE
 from .options import resolve_seed
+from .tail_collision import TailRepair
 
 
 @dataclass(frozen=True)
@@ -86,7 +87,8 @@ class Sampler:
         return not d.basic_errors and (not self.physical_hard_mask or not d.physical)
 
     def contents(self, decoder, h, kind, oracle, timing, distributions, *, end_tick, cap_tick,
-                 moment_remaining=None, output=None, return_cache=False, history=(), onset_end_tick=None):
+                 moment_remaining=None, output=None, return_cache=False, history=(), onset_end_tick=None,
+                 moment_floor=None):
         heads, device = decoder.heads, h.device
         if kind == 'NOTE':
             kinds = oracle.query_kinds()
@@ -104,7 +106,14 @@ class Sampler:
                     # joint support also excludes a short hold beyond audio_end.
                     scores = torch.stack([sum(logits[FLAGS.index(f), getattr(n, f)] for f in applicable) for n in options])
                     for f in self.order(scores, [self.allowed(oracle.query(n)) for n in options]):
-                        yield (options[f],output.cache) if return_cache else options[f]
+                        note = options[f]
+                        repair = oracle.tail_repair(note) if hasattr(oracle, 'tail_repair') else None
+                        candidate = repair or note
+                        yield (candidate,output.cache) if return_cache else candidate
+                        if isinstance(repair, TailRepair) and repair.minimum_tick is not None:
+                            # The caller must retry time, never another pad/kind
+                            # (especially Touch) at this colliding onset.
+                            return
         elif kind == 'ROUTE':
             first = oracle.physical.grammar.state.phase in ('route', 'track_done')
             candidates = [Route(i, 0 if first else None) for i in range(71)]
@@ -131,10 +140,11 @@ class Sampler:
             def visit(depth, query, current):
                 qh=current.hidden[0,-1]
                 valid = tree.hard[depth] if self.physical_hard_mask else tree.basic[depth]
-                if kind == 'MOMENT' and self.floor_tick is not None:
+                floor = self.floor_tick if moment_floor is None else max(self.floor_tick or 0, moment_floor)
+                if kind == 'MOMENT' and floor is not None:
                     # Short value c completes at cursor+elapsed+c+1; CONT stays open.
                     base = cursor + query.elapsed_ticks + 1
-                    valid = tuple(ok and (c == CONTINUE or base + c >= self.floor_tick)
+                    valid = tuple(ok and (c == CONTINUE or base + c >= floor)
                                   for c, ok in enumerate(valid))
                 for choice in self.order(heads.time_logits(qh,kind),valid):
                     value = query.advance(choice,window_end_tick=end_tick)
@@ -164,11 +174,13 @@ class Sampler:
             yield from visit(0,TimeQuery(kind,cursor),output)
 
     def choices(self, decoder, routed, oracle, timing, distributions, *, end_tick, cap_tick,
-                moment_remaining=None, history=(), onset_end_tick=None):
+                moment_remaining=None, history=(), onset_end_tick=None, force_moment=False, moment_floor=None):
         if hasattr(oracle,'set_duration_cap'):
             oracle.set_duration_cap(timing.second(cap_tick))
         types = oracle.query_types()
         allowed = [name in types and self.allowed(types[name]) for name in GENERATED_TYPES]
+        if force_moment:
+            allowed = [ok and name == 'MOMENT' for name, ok in zip(GENERATED_TYPES, allowed)]
         if moment_remaining is not None and moment_remaining <= 0:
             phase = oracle.physical.grammar.state.phase
             required = {'hold': 'HOLD_DURATION', 'route': 'ROUTE',
@@ -183,4 +195,5 @@ class Sampler:
             h = result.hidden[0,-1]
             yield from self.contents(decoder,h,GENERATED_TYPES[index],oracle,timing,distributions,
                 end_tick=end_tick,cap_tick=cap_tick,moment_remaining=moment_remaining,
-                output=result,return_cache=True,history=history,onset_end_tick=onset_end_tick)
+                output=result,return_cache=True,history=history,onset_end_tick=onset_end_tick,
+                moment_floor=moment_floor)

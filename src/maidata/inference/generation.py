@@ -1,5 +1,5 @@
 """Full-song scheduling and transactional incremental decoding of the new fields."""
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import torch
 
@@ -10,14 +10,26 @@ from maidata.decoder.session import DecodeSession
 from maidata.decoder.windows import history_prefix, real_onsets
 from maidata.draft.windows import select_windows
 from maidata.model import decoder_time_distributions
-from maidata.physical.inference import InferencePhysicalState
 from .sampling import Sampler, OnsetLimit
 from .options import GenerationOptions
 from .progress import emit, stage
+from .tail_collision import GenerationPhysicalState, TailRepair, generation_rules
 
 
 class GenerationError(RuntimeError):
     pass
+
+
+@dataclass
+class SearchFrame:
+    snapshot: object
+    count: int
+    bypass_count: int
+    repair_count: int
+    choices: object
+    input_token: object
+    routed: object
+    repair_event: dict | None = None
 
 
 def repetition_history(groups, limit):
@@ -55,45 +67,43 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
     # first_token resumes after an already-fed teacher prefix (its last real
     # token; session.cache covers every earlier expanded row). stop(accepted,
     # rules) may end the window early after a committed token.
-    accepted, frames, trace, bypass = [], [], [], []
+    accepted, frames, trace, bypass, repairs = [], [], [], [], []
     backtracks = 0
     physical_fallback = None
+    session.rules = generation_rules(session.rules)
 
-    def frame(token):
+    def frame(token, *, routed=None, moment_floor=None, repair_event=None):
         snapshot = session.snapshot()
-        from maidata.decoder.sequence import expand_inputs
-        seq=expand_inputs([token],[session.rules.grammar.state.cursor/96],timing,
-                          boundary_index=0 if token is boundary else None)
-        batch=pack_tokens([[seq['tokens'][-1]]],[[seq['beats'][-1]]],device=device,
-                          slide_positions=[[seq['slide_beats'][-1]]])
-        routed = decoder.begin(batch, memory, cache=session.cache)
+        if routed is None:
+            from maidata.decoder.sequence import expand_inputs
+            seq=expand_inputs([token],[session.rules.grammar.state.cursor/96],timing,
+                              boundary_index=0 if token is boundary else None)
+            batch=pack_tokens([[seq['tokens'][-1]]],[[seq['beats'][-1]]],device=device,
+                              slide_positions=[[seq['slide_beats'][-1]]])
+            routed = decoder.begin(batch, memory, cache=session.cache)
         oracle = session.rules
-        if not isinstance(oracle, InferencePhysicalState):
-            # Standalone callers may still supply a plain PhysicalState. Its
-            # complete-action commit remains authoritative; sampling uses the
-            # same optimized raw queries as full-song generation.
-            oracle = InferencePhysicalState(timing, session.rules.geometry,
-                audio_end_seconds=session.rules.audio_end_seconds)
-            oracle.restore(session.rules.snapshot())
         count = 0
         for previous in reversed(accepted):
             if isinstance(previous, Moment):
                 break
             count += 1
-        return (snapshot, len(accepted), len(bypass), sampler.choices(decoder, routed, oracle, timing,
+        extra = dict(force_moment=True, moment_floor=moment_floor) if moment_floor is not None else {}
+        return SearchFrame(snapshot, len(accepted), len(bypass), len(repairs), sampler.choices(decoder, routed, oracle, timing,
             distributions, end_tick=end_tick, cap_tick=cap_tick,
             moment_remaining=options.max_tokens_per_moment-count,
             history=tuple(repetition_prefix) + tuple(accepted[-options.repetition_window:]),
-            onset_end_tick=onset_end_tick),token)
+            onset_end_tick=onset_end_tick, **extra), token, routed, repair_event)
 
     emit(stream, 'window_start', window=window, start_tick=start_tick)
     frames.append(frame(boundary if first_token is None else first_token))
     while frames:
-        snapshot, count, bypass_count, choices, input_token = frames[-1]
-        session.restore(snapshot)
+        current = frames[-1]
+        count, choices = current.count, current.choices
+        session.restore(current.snapshot)
         rolled_back = len(accepted) > count
         del accepted[count:]
-        del bypass[bypass_count:]
+        del bypass[current.bypass_count:]
+        del repairs[current.repair_count:]
         if rolled_back:
             emit(stream, 'rollback', window=window, token_count=count)
         try:
@@ -113,23 +123,52 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
                     physical_fallback = dict(reason='backtracking_budget_exhausted',
                         token_index=count,tick=session.rules.grammar.state.cursor,
                         phase=session.rules.grammar.state.phase,backtracks=backtracks)
-                    frames[:] = [frame(input_token)]
+                    frames[:] = [frame(current.input_token, routed=current.routed,
+                        moment_floor=(current.repair_event or {}).get('minimum_tick'), repair_event=current.repair_event)]
                     continue
                 raise GenerationError(f'window {start_tick/96:g}: exhausted backtracking budget ({backtracks})')
             continue
+        repair_event = current.repair_event
+        if isinstance(token, TailRepair):
+            repair_event = token.record(session.rules.grammar.state.cursor)
+            if token.replacement is not None:
+                token = token.replacement
+            else:
+                source_index = len(frames)-1
+                if session.rules.grammar.state.phase == 'note':
+                    # MOMENT -> NOTE is compulsory. Replace the last unfilled
+                    # onset's MOMENT, rather than appending an illegal MOMENT.
+                    source_index = next((i for i in range(len(frames)-2, -1, -1)
+                                         if frames[i].count == count-1), -1)
+                    if source_index < 0 or not accepted or not isinstance(accepted[-1], Moment):
+                        raise GenerationError('tail collision cannot restore the unfilled MOMENT prefix')
+                source = frames[source_index]
+                session.restore(source.snapshot)
+                if len(accepted) > source.count:
+                    del accepted[source.count:]
+                    emit(stream, 'rollback', window=window, token_count=source.count)
+                del bypass[source.bypass_count:]
+                del repairs[source.repair_count:]
+                del frames[source_index:]
+                repair_event['minimum_tick'] = token.minimum_tick
+                frames.append(frame(source.input_token, routed=source.routed,
+                                    moment_floor=token.minimum_tick, repair_event=repair_event))
+                continue
         if isinstance(token, OnsetLimit):
             # Do not commit the sampled out-of-range time, its CONT rows, or a
             # fabricated terminal into the rule state / reusable prefix cache.
             return tuple(accepted), dict(terminal_tick=None, stopped=True, stop_reason='onset_limit',
-                backtracks=backtracks, physical_bypass=bypass, physical_fallback=physical_fallback,
+                backtracks=backtracks, physical_bypass=bypass, physical_fallback=physical_fallback, tail_repairs=repairs,
                 **({'trace': trace} if options.trace else {}))
         if isinstance(token, TimeTarget):
+            if repair_event is not None:
+                repairs.append(dict(repair_event, token_index=len(accepted), replacement_type='MOMENT', advance_tick=token.absolute_tick))
             session.rules.close_window(token)
             session.cache = cache
             return tuple(accepted), dict(terminal_tick=token.absolute_tick, censored=token.censored,
                 closed_by_continue=token.closed_by_continue, terminal_lower_bound_tick=token.lower_bound_tick,
                 terminal_query_tick=token.query_tick,
-                backtracks=backtracks, physical_bypass=bypass,physical_fallback=physical_fallback,
+                backtracks=backtracks, physical_bypass=bypass,physical_fallback=physical_fallback, tail_repairs=repairs,
                 **({'trace': trace} if options.trace else {}))
         decision = session.rules.query(token)
         if decision.basic_errors or (sampler.physical_hard_mask and decision.physical):
@@ -144,6 +183,8 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
             if decision.physical:
                 bypass.append(dict(token_index=len(accepted), token=token_to_dict(token), reasons=sorted(decision.physical)))
         session.cache = cache
+        if repair_event is not None:
+            repairs.append(dict(repair_event, token_index=len(accepted), replacement=token_to_dict(token)))
         accepted.append(token)
         emit(stream, 'token', window=window, token=token, token_count=len(accepted),
              complete=session.rules.grammar.state.phase in ('done', 'track_done'))
@@ -153,7 +194,7 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
             trace.append(dict(event='accept', token=token_to_dict(token), tick=session.rules.grammar.state.cursor))
         if stop is not None and stop(accepted, session.rules):
             return tuple(accepted), dict(terminal_tick=None, stopped=True, backtracks=backtracks,
-                physical_bypass=bypass, physical_fallback=physical_fallback,
+                physical_bypass=bypass, physical_fallback=physical_fallback, tail_repairs=repairs,
                 **({'trace': trace} if options.trace else {}))
         frames.append(frame(token))
         if len(frames) > options.rollback_tokens + 1:
@@ -187,7 +228,7 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
                       top_k=options.top_k, top_p=options.top_p, repetition_window=options.repetition_window,
                       repetition_penalty=options.repetition_penalty)
     distributions = decoder_time_distributions(config)
-    session = DecodeSession(InferencePhysicalState(timing, geometry, audio_end_seconds=duration))
+    session = DecodeSession(GenerationPhysicalState(timing, geometry, audio_end_seconds=duration))
     with stage(progress, 'decoder_audio'):
         audio_kv = decoder.prepare_audio(conditions.audio)
     groups, windows, repeat_prefix = [], [], ()
