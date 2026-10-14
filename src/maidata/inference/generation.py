@@ -30,6 +30,8 @@ class SearchFrame:
     input_token: object
     routed: object
     repair_event: dict | None = None
+    recovery: object = None
+    force_moment: bool = False
 
 
 def repetition_history(groups, limit):
@@ -70,9 +72,11 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
     accepted, frames, trace, bypass, repairs = [], [], [], [], []
     backtracks = 0
     physical_fallback = None
+    complete_prefix = None
     session.rules = generation_rules(session.rules)
 
-    def frame(token, *, routed=None, moment_floor=None, repair_event=None):
+    def frame(token, *, routed=None, moment_floor=None, repair_event=None, force_moment=False):
+        nonlocal complete_prefix
         snapshot = session.snapshot()
         if routed is None:
             from maidata.decoder.sequence import expand_inputs
@@ -87,12 +91,17 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
             if isinstance(previous, Moment):
                 break
             count += 1
-        extra = dict(force_moment=True, moment_floor=moment_floor) if moment_floor is not None else {}
-        return SearchFrame(snapshot, len(accepted), len(bypass), len(repairs), sampler.choices(decoder, routed, oracle, timing,
+        extra = dict(force_moment=True, moment_floor=moment_floor) if force_moment or moment_floor is not None else {}
+        result = SearchFrame(snapshot, len(accepted), len(bypass), len(repairs), sampler.choices(decoder, routed, oracle, timing,
             distributions, end_tick=end_tick, cap_tick=cap_tick,
             moment_remaining=options.max_tokens_per_moment-count,
             history=tuple(repetition_prefix) + tuple(accepted[-options.repetition_history_limit:]),
-            onset_end_tick=onset_end_tick, **extra), token, routed, repair_event)
+            onset_end_tick=onset_end_tick, **extra), token, routed, repair_event,
+            recovery=complete_prefix, force_moment=force_moment)
+        if oracle.grammar.state.phase in ('boundary', 'done', 'track_done'):
+            result.recovery = None  # No chain of old KV snapshots is retained.
+            complete_prefix = result
+        return result
 
     emit(stream, 'window_start', window=window, start_tick=start_tick)
     frames.append(frame(boundary if first_token is None else first_token))
@@ -100,6 +109,7 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
         current = frames[-1]
         count, choices = current.count, current.choices
         session.restore(current.snapshot)
+        complete_prefix = current if session.rules.grammar.state.phase in ('boundary', 'done', 'track_done') else current.recovery
         rolled_back = len(accepted) > count
         del accepted[count:]
         del bypass[current.bypass_count:]
@@ -123,8 +133,32 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
                     physical_fallback = dict(reason='backtracking_budget_exhausted',
                         token_index=count,tick=session.rules.grammar.state.cursor,
                         phase=session.rules.grammar.state.phase,backtracks=backtracks)
-                    frames[:] = [frame(current.input_token, routed=current.routed,
-                        moment_floor=(current.repair_event or {}).get('minimum_tick'), repair_event=current.repair_event)]
+                    frames.append(frame(current.input_token, routed=current.routed,
+                        moment_floor=(current.repair_event or {}).get('minimum_tick'), repair_event=current.repair_event))
+                    continue
+                if complete_prefix is not None and not current.force_moment:
+                    # Physical relaxation cannot repair an incomplete Slide/Hold
+                    # with no basic duration support (notably near audio end).
+                    # Undo that partial action and advance from the last complete
+                    # prefix through the normal model MOMENT head/support tree.
+                    # Keep this one checkpoint even if a long chain evicts its
+                    # frame from the bounded search frontier.
+                    source = complete_prefix
+                    minimum_tick = max(session.rules.grammar.state.cursor+1,
+                        (current.repair_event or {}).get('minimum_tick', 0))
+                    physical_fallback = physical_fallback or dict(reason='backtracking_budget_exhausted',
+                        token_index=count, tick=session.rules.grammar.state.cursor,
+                        phase=session.rules.grammar.state.phase, backtracks=backtracks)
+                    physical_fallback.setdefault('recoveries', []).append(dict(
+                        token_index=source.count, discarded_tokens=len(accepted)-source.count,
+                        minimum_tick=minimum_tick))
+                    session.restore(source.snapshot)
+                    del accepted[source.count:]
+                    del bypass[source.bypass_count:]
+                    del repairs[source.repair_count:]
+                    emit(stream, 'rollback', window=window, token_count=source.count)
+                    frames[:] = [frame(source.input_token, routed=source.routed,
+                        repair_event=source.repair_event, force_moment=True, moment_floor=minimum_tick)]
                     continue
                 raise GenerationError(f'window {start_tick/96:g}: exhausted backtracking budget ({backtracks})')
             continue
@@ -144,6 +178,7 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
                         raise GenerationError('tail collision cannot restore the unfilled MOMENT prefix')
                 source = frames[source_index]
                 session.restore(source.snapshot)
+                complete_prefix = source if session.rules.grammar.state.phase in ('boundary', 'done', 'track_done') else source.recovery
                 if len(accepted) > source.count:
                     del accepted[source.count:]
                     emit(stream, 'rollback', window=window, token_count=source.count)

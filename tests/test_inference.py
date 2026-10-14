@@ -390,6 +390,7 @@ def test_generation_caps_repeated_notes_at_one_onset(config, geometry):
 
 @pytest.mark.parametrize('basic_error',[False,True])
 def test_exhausted_physical_search_bypasses_only_physical_and_resets_next_window(config,geometry,basic_error):
+    config=dict(config,draft_architecture='split-v3')  # This fixture provides Plan12.
     from maidata.physical.state import Decision
     from maidata.physical.inference import InferencePhysicalState
     model = build_decoder(config).eval()
@@ -424,4 +425,48 @@ def test_exhausted_physical_search_bypasses_only_physical_and_resets_next_window
             assert starts == [True,False]*len(windows)
             assert all(w['physical_fallback']['reason']=='backtracking_budget_exhausted' for w in windows)
             assert all(w['physical_bypass'][0]['reasons']==['slide_too_fast'] for w in windows)
+
+
+
+@pytest.mark.parametrize('partial', ['hold', 'slide'])
+@pytest.mark.parametrize('hard_mask', [True, False])
+@pytest.mark.parametrize('delayed', [True, False])
+def test_budget_recovery_discards_incomplete_action_and_advances_complete_prefix(config,geometry,partial,hard_mask,delayed):
+    """Even a chain longer than the frontier can retreat to a complete onset."""
+    from maidata.chart.types import Route
+    config=dict(config,draft_architecture='split-v3')
+    model=build_decoder(config).eval()
+    timing=TimingMap([(0,120)])
+    prepared=conditions(config,timing,5)
+    memory=model.prepare_memory(model.prepare_audio(prepared.audio),torch.tensor([0]),prepared.z,
+        prepared.plans[:1],prepared.plan_valid[:1])
+    session=DecodeSession(PhysicalState(timing,geometry,audio_end_seconds=5))
+    boundary=Moment(0);session.rules.inject_boundary(boundary,start_tick=0,window_end=288)
+    events=[]
+    class Search:
+        physical_hard_mask=hard_mask
+        def choices(self,decoder,routed,oracle,clock,specs,**kwargs):
+            state=oracle.grammar.state
+            if kwargs.get('force_moment'):
+                assert state.phase=='done' and state.note.kind=='tap'
+                assert kwargs['moment_floor']==(97 if delayed else 1)
+                token,index=TimeTarget(1500.,288,False,True),GENERATED_TYPES.index('MOMENT')
+            elif state.phase=='boundary':token,index=Note.make('tap','A1'),GENERATED_TYPES.index('NOTE')
+            elif state.phase=='done' and delayed:token,index=Moment(500.),GENERATED_TYPES.index('MOMENT')
+            elif state.phase in ('done','note'):token,index=Note.make(partial,'A2'),GENERATED_TYPES.index('NOTE')
+            elif state.phase in ('route','chain') and len(state.routes)<8:
+                token,index=Route(0,0 if state.phase=='route' else None),GENERATED_TYPES.index('ROUTE')
+            else:return  # No duration exists, even after relaxing Physical.
+            output=decoder.complete(routed,torch.full_like(routed.valid,index,dtype=torch.long))
+            yield token,output.cache
+    with torch.inference_mode():
+        tokens,report=decode_window(model,memory,session,boundary,Search(),decoder_time_distributions(config),timing,
+            start_tick=0,end_tick=288,cap_tick=384,device='cpu',
+            options=GenerationOptions(max_backtracks_per_window=0,rollback_tokens=1,physical_hard_mask=hard_mask),
+            stream=events.append)
+    assert tokens==(Note.make('tap','A1'),)
+    assert session.rules.grammar.state.phase=='closed' and len(session.rules.actions)==1
+    assert report['physical_fallback']['recoveries']==[dict(token_index=1,discarded_tokens=(1 if partial=='hold' else 9)+int(delayed),minimum_tick=97 if delayed else 1)]
+    assert dict(event='rollback',window=1,token_count=1) in events
+    assert report['physical_bypass']==[]
 
