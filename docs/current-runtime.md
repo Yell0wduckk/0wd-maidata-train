@@ -1,5 +1,6 @@
 # 当前源码状态与实现边界
 
+main另提供[扩容＋全层Q/K归一化、保持Route37原配方](main320-route37-qknorm.md)的两份配置：320维/M8层、Z4＋单无位置Plan16；24705使用峰值LR4e-4、2曲/45056，37012使用6e-4、3曲/80000。两者M chunk32768、停止90/调度150，保留M侧Plan输入开关。新配方启用逐头无仿射Q/K RMSNorm，旧checkpoint缺开关时保持原数学。
 
 当前主 Decoder 变更以 [独立 CONT 序列合同](decoder-cont-token-plan.md) 为准：删除 FieldReader，CONT 写入主 KV，窗口升级 v5。
 本文件区分已实现的新 `maidata` 音频 Encoder 和独立副本保留的旧模型。Encoder 规格位于[设计正本](../../0wd-v3-refactor-docs/new-audio-encoder.md)，模块、张量协议和 aux32 生产约定位于[实施文档](../../0wd-v3-refactor-docs/encoder-execution-plan.md)。来源与复制排除项见 [import-and-layout](import-and-layout.md)。
@@ -65,7 +66,7 @@ CPU验证覆盖默认与非默认架构、并行/增量一致、目标类型隔�
 
 ## 从头联合训练入口
 
-独立320维覆盖配置 `configs/joint-main320-z4-plan16-gt.json` 使用E/D/M 320维、8头、每头40维，E/M前段FFN1280、D/M专家640；M前2层不动、后段4→6层。原扩容实验为3完整音频组/80000、峰值LR6e-4、M chunk32768，保留单窗Plan16。参数和此前CUDA容量测量见[320维容量实测](main320-capacity.md)。
+独立320维覆盖配置 `configs/joint-main320-z4-plan16-gt.json` 使用E/D/M 320维、8头、每头40维，E/M前段FFN1280、D/M专家640；M前2层不动、后段4→6层。原扩容实验为3完整音频组/80000、峰值LR6e-4、M chunk32768，保留单窗Plan16。新Route37配方另见本页顶部，参数和此前CUDA容量测量见[320维容量实测](main320-capacity.md)。
 
 训练及验证可通过 `decoder_train_plan_input` 控制 M 是否接收 plan，默认 `True`。关闭时屏蔽有效 plan attention key，不改变 Z 输入及 P 自身监督；阶段二/SFT/联合训练共用此设置，见[训练 plan 输入开关](decoder-training-plan-input.md)。
 

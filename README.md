@@ -27,6 +27,8 @@
 
 ## 导航
 
+- [Main扩容、Q/K归一化与Route37原配方](docs/main320-route37-qknorm.md)
+
 - [从头联合训练：共享 Encoder、Z4、GT plan](docs/joint-training.md)
 - [当前源码状态](docs/current-runtime.md)
 - [Maidata Encoder 入口与张量接口](docs/maidata-entry.md)
