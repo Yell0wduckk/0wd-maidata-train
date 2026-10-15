@@ -6,8 +6,11 @@
 |---|---|
 | [maidata-entry](maidata-entry.md) | `python -m maidata`、唯一 CONFIG、张量接口和 CPU 合成验证命令 |
 | [draft](draft.md) | 拆分D、末层256维Z、直接解析、拍内96类标签与分字段loss |
+| [draft-route37](draft-route37.md) | Draft的71→37镜像合并、固定接受度损失及旧CE配方兼容 |
+| [decoder-route-soft-label-future](decoder-route-soft-label-future.md) | 尚未实施的Decoder ROUTE软标签、方向衰减与分类别ε讨论 |
 | [joint-training](joint-training.md) | 从头共享E/D/R/P/M、Z4、GT plan、90/150轮及独立CUDA成本诊断 |
 | [joint-training-implementation](joint-training-implementation.md) | 联合图CPU验收、完整轮恢复、原batch CUDA正确性及分段成本证据 |
+| [main320-capacity](main320-capacity.md) | E/D/M扩宽320、M后段加深、3曲/80000组批统计与CUDA长尾容量实测 |
 | [drafter-split-implementation](drafter-split-implementation.md) | 拆分实施范围、CPU结果及checkpoint/缓存兼容性边界 |
 | [drafter-frozen-p0-training](drafter-frozen-p0-training.md) | 主M ckpt45冻结Encoder导出P0、cached/joint双入口及D/R/P 50/100轮交接 |
 | [decoder](decoder.md) | 独立Decoder、Router/MMoE、内容小头、时间概率、窗口与监督归约 |

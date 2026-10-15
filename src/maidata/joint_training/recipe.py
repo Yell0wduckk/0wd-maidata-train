@@ -39,6 +39,8 @@ def resolve(config):
 
 
 def validate(config):
+    if type(config.get('decoder_train_plan_input', True)) is not bool:
+        raise ValueError('decoder_train_plan_input must be a boolean')
     if config['joint_train_initialization'] != 'scratch':
         raise ValueError('joint training initializes every component from scratch')
     if config['joint_train_plan_source'] != 'gt':

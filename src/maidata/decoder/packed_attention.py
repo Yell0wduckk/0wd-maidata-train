@@ -69,11 +69,14 @@ def condition_multiples(valid, layout, masks):
 
 def condition_attention(module, x, beats, valid, kv, plan_index, layout):
     raw = module.query(x).reshape(len(x), module.heads, module.dim//module.heads)
+    if plan_index is None:
+        raise ValueError('condition attention requires the unpositioned Plan16 key boundary')
     query = torch.cat((rotate(module, raw, beats), raw), -1)
     z, plan = kv.key[:, :, :plan_index], kv.key[:, :, plan_index:]
     key = torch.cat((torch.cat((z, torch.zeros_like(z)), -1),
                      torch.cat((torch.zeros_like(plan), plan), -1)), 2)
     value = F.pad(kv.value, (0, module.dim//module.heads))
+    head_width = 2*module.dim//module.heads
     groups = layout['groups']
     queries = query.index_select(0, layout['gather']).split([c*w for c, w, _ in groups])
     if 'key_gather' in layout:
@@ -90,8 +93,8 @@ def condition_attention(module, x, beats, valid, kv, plan_index, layout):
     pieces = []
     for q, k, v, mask, (count, width, key_width), all_multiple in zip(queries, keys, values, masks, groups, multiples):
         key_width = kv.valid.shape[1] if key_width is None else key_width
-        q = q.reshape(count, width, module.heads, 2*module.dim//module.heads).transpose(1, 2)
-        k, v = [t.reshape(count, key_width, module.heads, 2*module.dim//module.heads).transpose(1, 2) for t in (k, v)]
+        q = q.reshape(count, width, module.heads, head_width).transpose(1, 2)
+        k, v = [t.reshape(count, key_width, module.heads, head_width).transpose(1, 2) for t in (k, v)]
         y = attend_condition(q, k, v, mask.reshape(count, key_width),
             scale=1/math.sqrt(module.dim//module.heads), dropout_p=module.dropout if module.training else 0.,
             all_multiple=all_multiple)

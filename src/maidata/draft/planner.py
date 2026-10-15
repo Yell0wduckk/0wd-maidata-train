@@ -1,4 +1,4 @@
-"""One target-only attention pool and independent 8/4 readouts."""
+"""Shared target-only attention pools and independent 8/4 readouts."""
 import torch
 from torch import nn
 
@@ -8,11 +8,14 @@ from .types import PlannerOutput
 
 class PlannerHead(nn.Module):
     def __init__(self, *, latent_dim, dim, heads, mlp_dim, dropout, norm_eps,
-                 rope_base, rope_position_scale):
+                 rope_base, rope_position_scale, span_beats=16):
         super().__init__()
         positive_ints(latent_dim=latent_dim, dim=dim, heads=heads, mlp_dim=mlp_dim)
         numerical_config(dropout, norm_eps, rope_base, rope_position_scale)
+        if type(span_beats) is not int or span_beats != 16:
+            raise ValueError('Planner span must be 16 beats')
         self.latent_dim = latent_dim
+        self.span_beats = span_beats
         self.query = nn.Parameter(torch.zeros(dim))
         self.pool = Attention(dim, latent_dim, dim, heads, dropout,
                               rotary=True, base=rope_base, scale=rope_position_scale)

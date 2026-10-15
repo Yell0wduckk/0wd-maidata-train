@@ -12,7 +12,7 @@ import torch
 
 from maidata.draft.types import BeatMemory
 from maidata.draft.windows import SongCoverage, song_coverage
-from maidata.model import ENCODER_KEYS
+from maidata.model import encoder_config
 from .conditioning import Conditions, encode_joint_audio, decode_joint_draft
 from .progress import stage
 
@@ -44,8 +44,7 @@ def execution(device, precision):
 
 
 def encoder_recipe(config):
-    return dict({key: config[key] for key in ENCODER_KEYS},
-                fpn_p0_normalization=config.get('fpn_p0_normalization', False))
+    return encoder_config(config)
 
 
 def feature_identity(*, grid=None, mel_root=None, mel_stats=None):

@@ -122,15 +122,23 @@ class Attention(nn.Module):
 
 
 class ConditionAdapter(nn.Module):
-    def __init__(self, latent_dim, dim, z_cross_attention, norm_eps):
+    def __init__(self, latent_dim, dim, z_cross_attention, norm_eps, z_normalization=False,
+                 plan_span_beats=16):
         super().__init__()
+        if type(plan_span_beats) is not int or plan_span_beats != 16:
+            raise ValueError('plan_span_beats must be 16')
         self.validate_inputs = True
         self.latent_dim = latent_dim
         self.z_cross_attention = z_cross_attention
+        self.plan_span_beats = plan_span_beats
         self.z = nn.Linear(latent_dim, dim)
         self.plan = nn.Sequential(nn.Linear(12, dim), nn.GELU(), nn.Linear(dim, dim))
         self.source = nn.Embedding(2, dim)
         self.plan_norm = nn.LayerNorm(dim, eps=norm_eps)
+        # Bound the consumer projection + source scale without adding optimizer
+        # parameters. Producer-side D normalization cannot bound this adapter.
+        self.z_norm = (nn.LayerNorm(dim, eps=norm_eps, elementwise_affine=False)
+                       if z_normalization else nn.Identity())
 
     def forward(self, z, plan, plan_valid):
         if self.validate_inputs and self.z_cross_attention:
@@ -142,7 +150,7 @@ class ConditionAdapter(nn.Module):
             require((torch.isfinite(plan) | ~plan_valid[:, None]).all(), 'valid plan values must be finite')
         b = self.plan_norm(self.plan(plan.masked_fill(~plan_valid[:, None], 0)) + self.source.weight[1])
         if self.z_cross_attention:
-            a = self.z(z.values.masked_fill(~z.valid[..., None], 0)) + self.source.weight[0]
+            a = self.z_norm(self.z(z.values.masked_fill(~z.valid[..., None], 0)) + self.source.weight[0])
             beats, valid = z.beats, z.valid
         else:
             a = b.new_zeros((*z.valid.shape, b.shape[-1]))

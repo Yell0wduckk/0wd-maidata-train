@@ -36,6 +36,7 @@ class JointCheckpoint:
         if plan_source not in ('predicted', 'gt', 'none'):
             raise ValueError('plan_source must be predicted, gt or none')
         self.config = dict(CONFIG, **payload['recipe'])
+        self.config['decoder_z_normalization'] = payload['recipe'].get('decoder_z_normalization', False)
         # Historical recipes must not inherit the new P0 normalization default.
         self.config['fpn_p0_normalization'] = payload['recipe'].get('fpn_p0_normalization', False)
         saved_z = self.config['decoder_z_cross_attention']
@@ -100,12 +101,15 @@ def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device, z_cross
         if teacher['draft_latent_dim'] != teacher['draft_dim']:
             raise ValueError('split Drafter Z must equal the final normalized draft width')
     config = dict(CONFIG, **consumer['recipe'])
+    config['decoder_z_normalization'] = consumer['recipe'].get('decoder_z_normalization', False)
     config['fpn_p0_normalization'] = consumer['recipe'].get('fpn_p0_normalization', False)
     config['decoder_train_audio_scope'] = consumer['recipe'].get('decoder_train_audio_scope', 'full_song')
     if teacher is not None:
         check_shared_grid_config(teacher, config)
         if teacher['target_beats'] != config['target_beats']:
             raise ValueError('teacher Planner and M target-window spans differ')
+        if teacher.get('planner_span_beats', 16) != config.get('planner_span_beats', 16):
+            raise ValueError('teacher Planner and M Plan spans differ')
         if actual_z and teacher['draft_latent_dim'] != config['draft_latent_dim']:
             raise ValueError('teacher Z width differs from the trained M input projection; old Z cannot be expanded')
         if actual_z and teacher['draft_z_stride_beats'] != config['draft_z_stride_beats']:

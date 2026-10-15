@@ -4,9 +4,20 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 from torch.nn import functional as F
+from .route_vocabulary import route_targets
+from .route_acceptance import acceptance_nll, validate_route_loss
 
 
 FIELD_PREFIX = 'field/'
+COUNT_TERMS = frozenset(('count', 'empty', 'positive_count'))
+
+
+def count_supervision_enabled(config):
+    # Recipes saved before the switch always supervised COUNT.
+    enabled = config.get('reconstruction_count_supervision', True)
+    if type(enabled) is not bool:
+        raise ValueError('reconstruction_count_supervision must be boolean')
+    return enabled
 
 
 @dataclass
@@ -39,23 +50,32 @@ def prepare_supervision(target, planner_target):
                 planner_count=int(planner_target.valid.sum()))
 
 
-def _categorical(logits, labels, active, smoothing, indices=None):
+def _categorical(logits, labels, active, smoothing, indices=None, *, acceptance=False):
     """An empty field stays differentiably zero without inventing a label."""
     if indices is not None:
         selected = logits.float().flatten(0, 1).index_select(0, indices)
         truth = labels.flatten().index_select(0, indices)
-        total = (F.cross_entropy(selected, truth, label_smoothing=smoothing, reduction='sum')
-                 if len(indices) else logits.float().sum() * 0)
-        return LossTerm(total, labels.new_tensor(len(indices)))
-    total = (F.cross_entropy(logits.float()[active], labels[active],
-                             label_smoothing=smoothing, reduction='sum')
-             if active.any() else logits.float().sum() * 0)
-    return LossTerm(total, active.sum())
+        count = labels.new_tensor(len(indices))
+    else:
+        selected, truth = logits.float()[active], labels[active]
+        count = active.sum()
+    if not len(truth):
+        total = logits.float().sum() * 0
+    elif acceptance:
+        total = acceptance_nll(selected, truth).sum()
+    else:
+        total = F.cross_entropy(selected, truth, label_smoothing=smoothing, reduction='sum')
+    return LossTerm(total, count)
 
 
-def reconstruction_loss(output, target, *, label_smoothing, prepared=None):
+def reconstruction_loss(output, target, *, label_smoothing, prepared=None, count_supervision=True,
+                        route_loss='ce'):
+    if type(count_supervision) is not bool:
+        raise ValueError('count_supervision must be boolean')
     if not 0 <= label_smoothing <= 1:
         raise ValueError('invalid reconstruction label smoothing')
+    vocabulary = getattr(output, 'route_vocabulary', 'route71')
+    validate_route_loss(route_loss, vocabulary)
     device = output.moment_logits.device
     with torch.autocast(device_type=device.type, enabled=False):
         query_valid = target.valid[:, None] & target.queries.valid & output.query_valid
@@ -63,11 +83,15 @@ def reconstruction_loss(output, target, *, label_smoothing, prepared=None):
         selected = lambda name: None if prepared is None else prepared['indices'][name]
         for name, logits in output.field_logits.items():
             labels = target.fields[name]
+            if name == 'route_id':
+                labels = route_targets(labels, vocabulary)
             terms[FIELD_PREFIX + name] = _categorical(
                 logits, labels, query_valid & (labels != -100), label_smoothing,
-                selected(FIELD_PREFIX + name))
+                selected(FIELD_PREFIX + name), acceptance=name == 'route_id' and route_loss == 'acceptance37')
         terms['moment96'] = _categorical(output.moment_logits, target.moment_tick,
                                         query_valid & (target.moment_tick != -100), 0., selected('moment96'))
+        if not count_supervision:
+            return terms
         beat_valid = target.valid[:, None] & output.count_valid
         if getattr(output, 'count_values', None) is not None:
             # Linear raw count, no rounding/clipping/sigmoid in the training graph.

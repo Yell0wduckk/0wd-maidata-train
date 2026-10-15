@@ -8,7 +8,7 @@ from torch.nn.utils.rnn import pad_sequence
 from maidata.decoder_training.cache_schema import P0_SCHEMA
 from maidata.draft.types import BeatMemory
 from maidata.draft.windows import SongCoverage
-from maidata.model import ENCODER_KEYS
+from maidata.model import ENCODER_KEYS, encoder_config
 
 
 ENCODER_SCHEMA = 'maidata.frozen-p0-encoder.v1'
@@ -21,7 +21,9 @@ class FrozenP0:
         m = self.manifest
         if m.get('schema') != P0_SCHEMA or m.get('complete') is not True or 'encoder' not in m:
             raise ValueError('cached Drafter requires a complete P0 export with its frozen Encoder snapshot')
-        self.encoder_config = m['encoder_config']
+        if set(m['encoder_config']) - {'fpn_p0_normalization'} != set(ENCODER_KEYS) - {'fpn_p0_normalization'}:
+            raise ValueError('P0 Encoder configuration keys differ')
+        self.encoder_config = encoder_config(m['encoder_config'])
         if set(self.encoder_config) != set(ENCODER_KEYS) or m['p0_rate'] != self.encoder_config['fpn_rates'][0]:
             raise ValueError('P0 Encoder configuration or output rate differs')
         # These are producer identities recorded at export, never recomputed by training.
@@ -32,7 +34,7 @@ class FrozenP0:
     def load_encoder(self, encoder):
         payload = torch.load(self.root / self.manifest['encoder']['path'], map_location='cpu', weights_only=True)
         if (payload.get('schema') != ENCODER_SCHEMA or payload['producer_sha256'] != self.identity['producer_sha256']
-                or payload['encoder_config'] != self.encoder_config):
+                or encoder_config(payload['encoder_config']) != self.encoder_config):
             raise ValueError('P0 Encoder snapshot does not match its producer')
         encoder.load_state_dict(payload['model_state'], strict=True)
         encoder.requires_grad_(False).eval()

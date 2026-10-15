@@ -67,6 +67,16 @@ class ReconstructionOutput:
     count_valid: Tensor
     count_values: Tensor | None = None
 
+    @property
+    def route_vocabulary(self):
+        # The two supported readout widths have explicit, immutable meanings.
+        width = self.field_logits['route_id'].shape[-1]
+        if width == 37:
+            return 'axis15-37'
+        if width == 71:
+            return 'route71'
+        raise ValueError('unsupported Draft route readout width')
+
 
 @dataclass
 class ReconstructionTargets:

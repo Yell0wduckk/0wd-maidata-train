@@ -9,7 +9,7 @@ import time
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from maidata.model import ENCODER_KEYS, build_model
+from maidata.model import ENCODER_KEYS, build_model, encoder_config
 from maidata.decoder_training.p0_cache import collate, save_bank
 from maidata.decoder_training.cache_schema import P0_SCHEMA
 from maidata.draft.windows import song_coverage, assemble_full_p0
@@ -28,7 +28,7 @@ def load_stage_two_encoder(path):
     if (payload.get('schema') != 'maidata.decoder-training.v4'
             or payload.get('architecture') != 'maidata.decoder-causal-cont-tick384.v2'):
         raise ValueError('P0 export requires the stage-II v4 normalized-plan CONT v2 checkpoint')
-    config = {key: payload['recipe'][key] for key in ENCODER_KEYS}
+    config = encoder_config(payload['recipe'])
     encoder = build_model(config)
     encoder.load_state_dict({key.removeprefix('encoder.'): value for key, value in payload['model_state'].items()
                              if key.startswith('encoder.')}, strict=True)

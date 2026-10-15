@@ -5,7 +5,7 @@ from contextlib import nullcontext
 import torch
 
 from maidata.preparation.cache import song_inputs, window_inputs
-from maidata.model import ENCODER_KEYS
+from maidata.model import encoder_config
 from maidata.audio.layout import prepare_encoder_layout
 from maidata.draft.conditions import ChartCondition, make_draft_inputs
 from maidata.draft.types import BeatMemory
@@ -176,7 +176,7 @@ def prepare_conditions(encoder, draft, planner, config, grid, timing, duration, 
     if decoder_encoder is not None:
         check_shared_grid_config(c, config)
     local_decoder = decoder_encoder is not None and config.get('decoder_train_audio_scope', 'full_song') == 'window'
-    separate_decoder = decoder_encoder is not None and any(c[k] != config[k] for k in ENCODER_KEYS)
+    separate_decoder = decoder_encoder is not None and encoder_config(c) != encoder_config(config)
     shared_decoder = None if separate_decoder else decoder_encoder
     coverage = song_coverage(timing, duration, first_beat=0, target_beats=c['target_beats'])
     starts, mapping = audio_windows([coverage], device='cpu')

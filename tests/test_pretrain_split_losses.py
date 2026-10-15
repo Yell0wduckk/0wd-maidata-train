@@ -6,7 +6,10 @@ import torch
 from torch.nn import functional as F
 
 from maidata.draft.losses import reconstruction_loss, LossTerm
-from maidata.entry import CONFIG
+from maidata.entry import CONFIG as DEFAULT_CONFIG
+
+# These legacy CE reduction tests intentionally retain quantity supervision.
+CONFIG = dict(DEFAULT_CONFIG, reconstruction_count_supervision=True)
 from maidata.training.pretrain import weighted_loss
 from maidata.training.runner import Metrics, Diagnostics
 

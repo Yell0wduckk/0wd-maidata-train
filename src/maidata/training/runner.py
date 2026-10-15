@@ -10,6 +10,7 @@ import torch
 
 from maidata.draft.losses import FIELD_PREFIX
 from maidata.draft.schema import FIELD_SIZES
+from maidata.draft.route_vocabulary import route_class_count, route_groups, route_targets
 
 from . import checkpoint
 from .batching import group_token_cost
@@ -98,6 +99,7 @@ def update(model, batches, optimizer, scheduler, config, *, audit=False):
 class Diagnostics:
     """Exact final-only confusion counts, with no quality acceptance threshold."""
     def __init__(self):
+        self.route_vocabulary = None
         self.confusion = {name: torch.zeros(size, size, dtype=torch.long)
                           for name, size in FIELD_SIZES.items()}
         self.moment = torch.zeros(96, 96, dtype=torch.long)
@@ -115,9 +117,18 @@ class Diagnostics:
         table += torch.bincount(truth * size + prediction, minlength=size * size).reshape(size, size)
 
     def add(self, output, target):
+        vocabulary = getattr(output, 'route_vocabulary', 'route71')
+        if self.route_vocabulary is None:
+            self.route_vocabulary = vocabulary
+            size = route_class_count(self.route_vocabulary)
+            self.confusion['route_id'] = torch.zeros(size, size, dtype=torch.long)
+        elif self.route_vocabulary != vocabulary:
+            raise ValueError('cannot mix Draft route vocabularies in one diagnostic')
         active = target.valid[:, None] & target.queries.valid & output.query_valid
         for name, logits in output.field_logits.items():
             labels = target.fields[name]
+            if name == 'route_id':
+                labels = route_targets(labels, self.route_vocabulary)
             self.add_confusion(self.confusion[name], logits, labels, active & (labels != -100))
         self.add_confusion(self.moment, output.moment_logits, target.moment_tick,
                            active & (target.moment_tick != -100))
@@ -157,7 +168,9 @@ class Diagnostics:
             fields[name] = dict(**self.accuracy(table), confusion=table.tolist(),
                 class_support=support.tolist(), class_recall=recall,
                 rare_class_rule='least-supported observed classes', rare_class_recall=rare)
-        result = dict(fields=fields,
+        vocabulary = self.route_vocabulary or 'route71'
+        fields['route_id']['route71_groups'] = [list(group) for group in route_groups(vocabulary)]
+        result = dict(fields=fields, route_vocabulary=vocabulary,
             moment96_conditional=dict(**self.accuracy(self.moment),
                 true_distribution=self.moment.sum(1).tolist(), predicted_distribution=self.moment.sum(0).tolist()),
             empty=self.accuracy(self.empty),

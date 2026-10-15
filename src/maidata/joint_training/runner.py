@@ -72,8 +72,11 @@ def select_check_step(plan, config, steps, requested):
     return max(range(len(costs)), key=costs.__getitem__)
 
 
-def run(config, *, resume=None, cuda_check=False, cost_check=False, check_step=None):
+def run(config, *, resume=None, cuda_check=False, cost_check=False, check_step=None,
+        upgrade_z_normalization=False):
     config = recipe.resolve(config)
+    if upgrade_z_normalization and not resume:
+        raise ValueError('Z normalization upgrade requires a complete joint resume checkpoint')
     recipe.validate(config)
     device = torch.device(config['joint_train_device'])
     if device.type == 'cuda' and (not torch.cuda.is_available() or
@@ -100,7 +103,7 @@ def run(config, *, resume=None, cuda_check=False, cost_check=False, check_step=N
     if resume:
         payload = torch.load(resume, map_location='cpu', weights_only=False)
         completed, step, best = checkpoint.restore(payload, model, opt, sched,
-            config=config, loaders=loaders)
+            config=config, loaders=loaders, upgrade_z_normalization=upgrade_z_normalization)
         restored = [state if started else None for state, started in
                     zip(payload['loader_rng'], payload['loader_started'])]
         del payload
@@ -127,6 +130,12 @@ def run(config, *, resume=None, cuda_check=False, cost_check=False, check_step=N
     write_json(output / ('resume.json' if resume else 'run.json'),
         dict(config=config, source=source, binding=binding, steps_by_epoch=steps,
              resume=str(resume) if resume else None, starting_completed_epochs=completed))
+    if upgrade_z_normalization:
+        write_json(output / 'z-normalization-upgrade.json', dict(
+            resume=str(resume), completed_epochs=completed, step=step,
+            change='parameter-free LayerNorm after M Z projection plus source embedding',
+            inherited='all E/D/R/P/M parameters, optimizer, scheduler, complete-epoch cursor and all RNG',
+            source=source))
     for epoch in range(completed + 1, config['joint_train_stop_after_epochs'] + 1):
         epoch_start = time.perf_counter()
         loaders[0].batch_sampler.epoch = epoch

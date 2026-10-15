@@ -18,6 +18,7 @@ class AudioEncoder(nn.Module):
         stage_depths, stage_attention_radii, temporal_kernel_size, stem_channels,
         frequency_dim, frequency_queries, fpn_rates, target_beats,
         audio_before_beats, audio_after_beats, dropout, rope_base, rope_position_scale,
+        fpn_p0_normalization,
     ):
         super().__init__()
         dimensions = (mel_bins, samples_per_beat, d_model, heads, ffn_dim,
@@ -65,7 +66,8 @@ class AudioEncoder(nn.Module):
             ]) for depth, radius in zip(stage_depths, stage_attention_radii)
         ])
         self.transitions = nn.ModuleList([StridedTransition(d_model, dropout) for _ in range(2)])
-        self.pyramid = LocalPyramid(d_model, fpn_rates, context, audio_before_beats)
+        self.pyramid = LocalPyramid(d_model, fpn_rates, context, audio_before_beats,
+                                    p0_normalization=fpn_p0_normalization)
 
     def prepare_song(self, inputs: SongInputs) -> SongMemory:
         """Create one G0 graph and one K/V pair per non-final block, per song."""

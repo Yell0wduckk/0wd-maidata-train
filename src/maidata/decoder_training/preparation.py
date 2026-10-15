@@ -1,5 +1,5 @@
 """Worker-side tensor preparation; no learned modules or GPU-side geometry."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import torch
 
 from maidata.decoder.batching import audio_query_layout, audio_key_spans
@@ -22,6 +22,12 @@ class Chunk:
 
 
 def prepare_batch(batch, config):
+    # Apply before constructing packed key indices: a zero-valued but valid plan
+    # would still contribute its learned source embedding to M's attention.
+    if not config.get('decoder_train_plan_input', True):
+        batch.conditions = replace(batch.conditions,
+            plan=torch.zeros_like(batch.conditions.plan),
+            plan_valid=torch.zeros_like(batch.conditions.plan_valid))
     batch.chunks = []
     batch.budget_cost = batch_cost(batch.audio_lengths, [w['length'] for w in batch.windows], config)
     conditions = batch.conditions

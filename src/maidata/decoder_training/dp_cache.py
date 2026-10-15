@@ -138,10 +138,10 @@ def export(config, p0_root, output):
     model, producer, teacher = load_export_producer(config,binding)
     if external_encoder:
         from maidata.training.frozen_p0 import FrozenP0
-        from maidata.model import ENCODER_KEYS
+        from maidata.model import encoder_config
         frozen = FrozenP0(p0_root)
         if (producer.get('audio_producer') != frozen.identity or
-                json.loads(json.dumps({k: teacher[k] for k in ENCODER_KEYS})) != frozen.encoder_config):
+                json.loads(json.dumps(encoder_config(teacher))) != frozen.encoder_config):
             raise ValueError('Drafter checkpoint was not trained on the selected frozen P0')
     elif producer != p0['producer'] or binding != p0['normalization'] or p0['p0_rate'] != teacher['fpn_rates'][0]:
         raise ValueError('P0 producer or normalization differs')

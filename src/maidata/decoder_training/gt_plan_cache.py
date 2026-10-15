@@ -13,10 +13,14 @@ CATEGORIES = ('single', 'chord', 'slide', 'touch')
 
 
 class GTPlanCache:
-    def __init__(self, root):
+    def __init__(self, root, config=None):
         self.root = Path(root)
         path = self.root/'manifest.json'
         self.manifest = json.loads(path.read_text(encoding='utf-8'))
+        if self.manifest.get('schema') not in (None, SCHEMA):
+            raise ValueError('unsupported GT Plan16 cache schema')
+        if config is not None and config.get('planner_span_beats', 16) != 16:
+            raise ValueError('GT plan cache requires the original single Plan16')
         self.groups = self.manifest['groups']
         self.binding = str(path)
 
@@ -84,6 +88,8 @@ def export_variant(task):
 
 
 def export(config, output, workers=12):
+    if config.get('planner_span_beats', 16) != 16:
+        raise ValueError('GT plan export requires the original single Plan16')
     output = Path(output)
     if output.exists() and any(output.iterdir()):
         raise FileExistsError('GT plan output must be new or empty')
