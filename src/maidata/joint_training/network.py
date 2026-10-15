@@ -63,6 +63,7 @@ class JointTrainer(nn.Module):
         selected = select_windows(z, batch.decoder_groups, batch.decoder_starts, batch.decoder_valid,
             target_beats=config['target_beats'], before_beats=config['decoder_z_before_beats'],
             after_beats=config['decoder_z_after_beats'], z_stride_beats=config['draft_z_stride_beats'],
+            anchor_mode=config.get('draft_z_anchor_mode', 'block-center'),
             layout=batch.layouts['decoder']).memory
         conditions = replace(batch.conditions,
             audio=Memory(local.values, local.beats, local.valid),
@@ -77,4 +78,5 @@ class JointTrainer(nn.Module):
         z = conditions.decoder_z
         return self.decoder.prepare_memory(audio_kv, conditions.audio_mapping[unique],
             Memory(z.values[unique], z.beats[unique], z.valid[unique]), conditions.plan[unique],
-            conditions.plan_valid[unique], audio_layout=audio_layout)
+            conditions.plan_valid[unique], audio_layout=audio_layout,
+            plan_beats=None if conditions.plan_beats is None else conditions.plan_beats[unique])

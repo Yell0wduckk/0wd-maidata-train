@@ -27,6 +27,8 @@
 
 ## 导航
 
+- [整数拍 Draft、重叠 Plan16 与 CUDA 测量](docs/integer-draft-plan16.md)
+
 - [从头联合训练：共享 Encoder、Z4、GT plan](docs/joint-training.md)
 - [当前源码状态](docs/current-runtime.md)
 - [Maidata Encoder 入口与张量接口](docs/maidata-entry.md)

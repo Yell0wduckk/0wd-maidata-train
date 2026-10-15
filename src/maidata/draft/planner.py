@@ -9,9 +9,20 @@ from .attention import Attention, positive_ints, numerical_config
 from .types import PlannerOutput
 
 
+def select_planner_windows(z, groups, starts, valid, config, layout=None):
+    from .windows import select_windows, gather_centers
+    from .types import WindowLatents
+    if config.get('planner_layout', 'legacy') == 'centered-overlap':
+        centers = starts[:, None] + torch.arange(-8, 25, device=starts.device)
+        return WindowLatents(gather_centers(z, groups, centers, valid, layout=layout),
+                             starts, config['target_beats'], valid)
+    return select_windows(z, groups, starts, valid, target_beats=config['target_beats'],
+        before_beats=0, after_beats=0, z_stride_beats=config['draft_z_stride_beats'], layout=layout)
+
+
 class PlannerHead(nn.Module):
     def __init__(self, *, latent_dim, dim, heads, mlp_dim, dropout, norm_eps,
-                 rope_base, rope_position_scale, span_beats=16):
+                 rope_base, rope_position_scale, span_beats=16, layout='legacy', stride_beats=4):
         super().__init__()
         positive_ints(latent_dim=latent_dim, dim=dim, heads=heads, mlp_dim=mlp_dim)
         numerical_config(dropout, norm_eps, rope_base, rope_position_scale)
@@ -19,6 +30,11 @@ class PlannerHead(nn.Module):
             raise ValueError('Planner span must be 4 or 16 beats')
         self.latent_dim = latent_dim
         self.span_beats = span_beats
+        if layout not in ('legacy', 'centered-overlap'):
+            raise ValueError('unsupported Planner layout')
+        if layout == 'centered-overlap' and (span_beats != 16 or stride_beats != 4):
+            raise ValueError('centered-overlap Planner requires span16/stride4')
+        self.layout, self.stride_beats = layout, stride_beats
         self.query = nn.Parameter(torch.zeros(dim))
         self.pool = Attention(dim, latent_dim, dim, heads, dropout,
                               rotary=True, base=rope_base, scale=rope_position_scale)
@@ -28,6 +44,8 @@ class PlannerHead(nn.Module):
         self.category = nn.Linear(mlp_dim, 4)
 
     def forward(self, windows):
+        if self.layout == 'centered-overlap':
+            return self._centered(windows)
         if self.span_beats == 4:
             return self._four_beat(windows)
         memory = windows.memory
@@ -73,3 +91,31 @@ class PlannerHead(nn.Module):
         category = self.category(h).masked_fill(~active[..., None], 0)
         plan = torch.cat((continuous.float().sigmoid(), category.float().softmax(-1)), -1)
         return PlannerOutput(continuous, category, plan.masked_fill(~active[..., None], 0), active)
+
+    def _centered(self, windows):
+        memory, starts = windows.memory, windows.target_start
+        if windows.target_beats != 16:
+            raise ValueError('centered-overlap Planner requires sixteen-beat parent windows')
+        centers = starts[:, None] + torch.arange(5, device=starts.device)*4
+        # Anchors must exist; available neighboring keys do not create a query
+        # beyond full-curve coverage. Both read endpoints are included.
+        anchor_exists = ((memory.beats[:, None] == centers[..., None])
+                         & memory.valid[:, None]).any(-1)
+        allowed = (memory.valid[:, None] & windows.window_valid[:, None, None]
+                   & (memory.beats[:, None] >= centers[..., None]-8)
+                   & (memory.beats[:, None] <= centers[..., None]+8))
+        active = anchor_exists & windows.window_valid[:, None]
+        query = self.query[None, None].expand(len(starts), 5, -1)
+        kv = self.pool.project_memory(memory.values, memory.beats, memory.valid)
+        q = self.pool.split(self.pool.query(query.masked_fill(~active[..., None], 0)))
+        q = apply_rope(q, centers.masked_fill(~active, 0), self.pool.base, self.pool.scale)
+        pooled = F.scaled_dot_product_attention(q, *kv, attn_mask=allowed[:, None] & active[:, None, :, None],
+            dropout_p=self.pool.dropout if self.training else 0.)
+        pooled = pooled.transpose(1, 2).reshape(len(starts), 5, self.pool.width)
+        pooled = self.pool.output(pooled).masked_fill(~active[..., None], 0)
+        h = self.mlp(pooled)
+        continuous = self.continuous(h).masked_fill(~active[..., None], 0)
+        category = self.category(h).masked_fill(~active[..., None], 0)
+        plan = torch.cat((continuous.float().sigmoid(), category.float().softmax(-1)), -1)
+        return PlannerOutput(continuous, category, plan.masked_fill(~active[..., None], 0), active,
+                             plan_beats=centers)

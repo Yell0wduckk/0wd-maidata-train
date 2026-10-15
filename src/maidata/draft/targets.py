@@ -1,5 +1,5 @@
 """Independent owning-beat queries from exact source onsets; duration is not supervised."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from maidata.chart.types import Note, Route, SlideDuration, APPLICABLE
 from .schema import KINDS, FIELD_SIZES, QUERY_ROLES
@@ -18,6 +18,7 @@ class FieldQuery:
     route_prefix: tuple = ()
     current_route_id: int = -1
     last_real_tick: int | None = None
+    owner_z_beat: float | None = None
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ class TargetRow:
 class WindowTarget:
     rows: tuple[TargetRow, ...]
     moment_counts: tuple[int, ...]
+    owner_z_beats: tuple[float, ...] | None = None
 
     @property
     def query_cost(self):
@@ -94,6 +96,34 @@ def reconstruction_target(chart, *, start_tick, target_beats, audio_after_beats=
     return WindowTarget(tuple(rows), tuple(counts))
 
 
+def overlap_reconstruction_target(chart, *, start_tick, target_beats, coverage_end_beat,
+                                  first_beat=0, span_beats=4, validate_input=True):
+    """Assign each integer owner once, retaining each distinct owner/real-query pair.
+
+    A parent owns [start,start+target_beats); the final parent additionally owns
+    the coverage endpoint. Labels come from the whole chart, including across
+    parent boundaries, while each owner's responsibility is [owner-2,owner+2).
+    """
+    if span_beats != 4 or start_tick % 96:
+        raise ValueError('overlapping integer reconstruction requires four complete beats')
+    start = start_tick//96
+    last_parent = start+target_beats == coverage_end_beat
+    stop = start+target_beats+int(last_parent)
+    owners = tuple(float(t) for t in range(start, stop))
+    lower, upper = start-2, stop+1
+    source = reconstruction_target(chart, start_tick=lower*96, target_beats=upper-lower,
+                                   validate_input=validate_input)
+    rows = {owner: [] for owner in owners}
+    for row in source.rows:
+        beat = int(row.query.beat//1)
+        if not first_beat <= beat < coverage_end_beat:
+            continue
+        for owner in range(max(start, beat-1), min(stop, beat+3)):
+            rows[float(owner)].append(replace(row, query=replace(row.query, owner_z_beat=float(owner))))
+    counts = source.moment_counts[2:2+target_beats]
+    return WindowTarget(tuple(row for owner in owners for row in rows[owner]), tuple(counts), owners)
+
+
 def required_query_rows(target_lengths):
     """Inspect real query cost; an empty window legitimately has zero queries."""
     lengths = tuple(target_lengths)
@@ -124,6 +154,9 @@ def collate_reconstruction(targets, *, target_beats, device, query_rows=None, va
         torch.zeros((*shape, max_chain), dtype=torch.bool, device=device),
         boolean(), real(), boolean(), integer(), integer(),
         torch.full(shape, -1, dtype=torch.long, device=device))
+    overlapping = any(t is not None and t.owner_z_beats is not None for t in targets)
+    if overlapping:
+        q.owner_z_beats = real()
     for w, target in enumerate(targets):
         if target is None:
             continue
@@ -140,6 +173,10 @@ def collate_reconstruction(targets, *, target_beats, device, query_rows=None, va
             q.tracks[w, i], q.segments[w, i] = query.track, query.segment
             q.note_kinds[w, i], q.current_route_ids[w, i] = query.note_kind, query.current_route_id
             q.valid[w, i] = True
+            if overlapping:
+                if query.owner_z_beat is None:
+                    raise ValueError('overlap reconstruction rows require an explicit Z owner')
+                q.owner_z_beats[w, i] = query.owner_z_beat
             # Signed previous-onset position relative to this beat's start.
             q.history_gaps[w, i] = 0 if query.last_real_tick is None else (query.last_real_tick-query.origin_tick)/96
             q.last_real_valid[w, i] = query.last_real_tick is not None
@@ -150,10 +187,18 @@ def collate_reconstruction(targets, *, target_beats, device, query_rows=None, va
     return ReconstructionTargets(fields, moment, counts, valid, q)
 
 
-def planner_target(planner, start_tick, end_tick, *, span_beats=16):
+def planner_target(planner, start_tick, end_tick, *, span_beats=16, layout='legacy',
+                   last_parent=False, stride_beats=4):
     """Keep the original scalar target or recompute each exact four-beat target."""
     if type(span_beats) is not int or span_beats not in (4, 16):
         raise ValueError('Planner span must be 4 or 16 beats')
+    if layout == 'centered-overlap':
+        if span_beats != 16 or stride_beats != 4 or end_tick-start_tick != 16*96:
+            raise ValueError('centered-overlap Planner requires span16, stride4 and a sixteen-beat parent')
+        return [planner.window(center-8*96, center+8*96) if index < 4 or last_parent else None
+                for index, center in enumerate(range(start_tick, end_tick+1, stride_beats*96))]
+    if layout != 'legacy':
+        raise ValueError('unsupported Planner layout')
     if span_beats == 16:
         return planner.window(start_tick, end_tick)
     if end_tick <= start_tick or (end_tick - start_tick) % (4 * 96):

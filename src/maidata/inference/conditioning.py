@@ -9,6 +9,7 @@ from maidata.model import ENCODER_KEYS, encoder_config
 from maidata.audio.layout import prepare_encoder_layout
 from maidata.draft.conditions import ChartCondition, make_draft_inputs
 from maidata.draft.types import BeatMemory
+from maidata.draft.planner import select_planner_windows
 from maidata.draft.windows import song_coverage, audio_windows, assemble_full_p0, select_windows
 from .input_contract import check_shared_grid_config
 from .inputs import beat_zero_grid
@@ -52,11 +53,23 @@ class Conditions:
     starts: tuple
     coverage: object
     audio_scope: str = 'full_song'
+    plan_beats: torch.Tensor | None = None
+
+
+def plan_centers_for_starts(starts, config, device):
+    if config.get('planner_layout', 'legacy') == 'centered-overlap':
+        return torch.as_tensor(starts, dtype=torch.float32, device=device)[:, None]+torch.arange(5, device=device)*4
+    return None
 
 
 def empty_plan_geometry(starts, coverage, config, device):
     """Keep Plan4 coordinates even when M does not consume any Z values."""
     count, width = len(starts), config['draft_latent_dim']
+    if config.get('planner_layout', 'legacy') == 'centered-overlap':
+        beats = torch.as_tensor(starts, dtype=torch.float32, device=device)[:, None]+torch.arange(-3, 20, device=device)
+        z = BeatMemory(torch.zeros((count, 23, width), device=device), beats,
+                       torch.zeros((count, 23), dtype=torch.bool, device=device))
+        return z, torch.zeros((count, 5, 12), device=device), torch.zeros((count, 5), dtype=torch.bool, device=device)
     if config.get('planner_span_beats', 16) == 4:
         beats = torch.as_tensor(starts, dtype=torch.float32, device=device)[:, None]
         beats = beats + torch.tensor((-2, 2, 6, 10, 14, 18), device=device)
@@ -71,6 +84,13 @@ def empty_plan_geometry(starts, coverage, config, device):
 def decoder_z_window(conditions, index, config, device):
     """Select real Z when enabled; otherwise supply only each Plan4 slot's beat."""
     start = conditions.starts[index]
+    if config.get('planner_layout', 'legacy') == 'centered-overlap':
+        if not config['decoder_z_cross_attention']:
+            return empty_plan_geometry((start,), conditions.coverage, config, device)[0]
+        from maidata.draft.windows import gather_centers
+        centers = torch.arange(-3, 20, dtype=torch.float32, device=device)[None]+start
+        return gather_centers(conditions.z, torch.tensor([0], device=device), centers,
+                              torch.tensor([True], device=device))
     if config['decoder_z_cross_attention']:
         return select_windows(conditions.z, torch.tensor([0], device=device),
             torch.tensor([start], dtype=torch.float32, device=device), torch.tensor([True], device=device),
@@ -82,6 +102,8 @@ def decoder_z_window(conditions, index, config, device):
 
 
 def _planner_windows(z, groups, starts, valid, config):
+    if config.get('planner_layout', 'legacy') == 'centered-overlap':
+        return select_planner_windows(z, groups, starts, valid, config)
     span = config.get('planner_span_beats', 16)
     margin = 4 if span == 4 else 0
     windows = select_windows(z, groups, starts, valid, target_beats=config['target_beats'],
@@ -100,7 +122,11 @@ def with_plan_source(conditions, source, document=None):
     if source == 'gt':
         if document is None:
             raise ValueError('GT plan requires a window plan JSON')
-        plan4 = plans.ndim == 3
+        centered = conditions.plan_beats is not None
+        plan4 = plans.ndim == 3 and not centered
+        if centered and (document.get('planner_layout') != 'centered-overlap'
+                or document.get('plan_stride_beats') != 4):
+            raise ValueError('GT centered Plan JSON layout/stride differs')
         if document.get('plan_span_beats', 16) != (4 if plan4 else 16):
             raise ValueError('GT plan JSON plan_span_beats differs from model conditions')
         rows = document['windows']
@@ -110,7 +136,22 @@ def with_plan_source(conditions, source, document=None):
         for i, start in enumerate(conditions.starts):
             row = by_start[float(start)]
             value = torch.as_tensor(row['plan12'], dtype=plans.dtype, device=plans.device)
-            if plan4:
+            if centered:
+                mask = row.get('valid')
+                centers = torch.as_tensor(row.get('center_beats', []), dtype=torch.float32, device=plans.device)
+                desired = conditions.plan_beats[i]
+                if (not isinstance(mask, list) or len(mask) != 5
+                        or any(type(item) is not bool for item in mask)
+                        or centers.shape != (5,) or not torch.equal(centers, desired)):
+                    raise ValueError('GT centered Plan requires five explicit centers and boolean validity values')
+                actual = torch.tensor(mask, dtype=torch.bool, device=plans.device)
+                expected = (desired >= conditions.coverage.first_beat) & (
+                    desired <= conditions.coverage.first_beat+conditions.coverage.draft_beats)
+                if value.shape != (5, 12) or not torch.isfinite(value).all() or not torch.equal(actual, expected):
+                    raise ValueError('GT centered Plan shape/mask differs from full-curve inclusive coverage')
+                value = value.masked_fill(~actual[:, None], 0)
+                valid[i] = actual
+            elif plan4:
                 mask = row.get('valid')
                 if (not isinstance(mask, list) or len(mask) != 6
                         or any(type(item) is not bool for item in mask)):
@@ -168,7 +209,8 @@ def prepare_decoder_conditions(encoder, config, grid, timing, duration, *, devic
             torch.zeros(len(starts)-1, dtype=torch.long, device=device), [coverage], p0_rate=c['fpn_rates'][0])
     z, plans, plan_valid = empty_plan_geometry(starts, coverage, c, device)
     return Conditions(audio, z, plans, plan_valid, starts, coverage,
-                      c.get('decoder_train_audio_scope', 'full_song'))
+                      c.get('decoder_train_audio_scope', 'full_song'),
+                      plan_centers_for_starts(starts, c, device))
 
 
 @torch.inference_mode()
@@ -194,7 +236,7 @@ def decode_joint_draft(draft, planner, config, local, audio, *, difficulty, leve
     c, coverage, starts = config, local.coverage, local.starts
     inputs, _ = make_draft_inputs([ChartCondition('inference', difficulty, level, str(level))],
         ['inference'], [coverage], device=device, validate_input=False,
-        z_stride_beats=c['draft_z_stride_beats'])
+        z_stride_beats=c['draft_z_stride_beats'], anchor_mode=c.get('draft_z_anchor_mode', 'block-center'))
     with stage(progress, 'draft'):
         z = draft(audio, inputs)
     target_starts = torch.tensor(starts, device=device, dtype=torch.float32)
@@ -203,7 +245,8 @@ def decode_joint_draft(draft, planner, config, local, audio, *, difficulty, leve
     windows = _planner_windows(z, groups, target_starts, valid, c)
     with stage(progress, 'planner'):
         plans = planner(windows)
-    return Conditions(local.audio, z, plans.plan_values, plans.valid, starts, coverage, 'window')
+    return Conditions(local.audio, z, plans.plan_values, plans.valid, starts, coverage, 'window',
+                      getattr(plans, 'plan_beats', None))
 
 
 @torch.inference_mode()
@@ -231,6 +274,10 @@ def prepare_conditions(encoder, draft, planner, config, grid, timing, duration, 
     c = config if teacher_config is None else teacher_config
     if c.get('planner_span_beats', 16) != config.get('planner_span_beats', 16):
         raise ValueError('teacher and Decoder planner_span_beats differ')
+    if (c.get('planner_layout', 'legacy') != config.get('planner_layout', 'legacy')
+            or c.get('planner_stride_beats', 4) != config.get('planner_stride_beats', 4)
+            or c.get('draft_z_anchor_mode', 'block-center') != config.get('draft_z_anchor_mode', 'block-center')):
+        raise ValueError('teacher and Decoder Plan layout or Draft anchors differ')
     if decoder_encoder is not None:
         check_shared_grid_config(c, config)
     local_decoder = decoder_encoder is not None and config.get('decoder_train_audio_scope', 'full_song') == 'window'
@@ -289,7 +336,7 @@ def prepare_conditions(encoder, draft, planner, config, grid, timing, duration, 
         decoder_audio = independent.audio
     inputs, _ = make_draft_inputs([ChartCondition('inference', difficulty, level, str(level))],
         ['inference'], [coverage], device=device, validate_input=False,
-        z_stride_beats=c['draft_z_stride_beats'])
+        z_stride_beats=c['draft_z_stride_beats'], anchor_mode=c.get('draft_z_anchor_mode', 'block-center'))
     with stage(progress, 'draft'):
         z = draft(audio, inputs)
     all_starts = coverage.starts(include_tail=True)
@@ -299,4 +346,4 @@ def prepare_conditions(encoder, draft, planner, config, grid, timing, duration, 
     with stage(progress, 'planner'):
         plans = planner(windows)
     return Conditions(decoder_audio, z, plans.plan_values, plans.valid, all_starts, coverage,
-                      'window' if local_decoder else 'full_song')
+                      'window' if local_decoder else 'full_song', getattr(plans, 'plan_beats', None))

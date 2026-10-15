@@ -186,7 +186,11 @@ def test_padding_does_not_condition_queries_or_revive_biases():
     assert all(v[1].count_nonzero() == 0 for v in y.field_logits.values())
     poison = {}
     for name in b.queries.__dataclass_fields__:
-        value = getattr(b.queries, name).clone()
+        original = getattr(b.queries, name)
+        if original is None:
+            poison[name] = None
+            continue
+        value = original.clone()
         if name != 'valid':
             value[1] = float('nan') if value.is_floating_point() else 999 if value.dtype != torch.bool else True
         poison[name] = value

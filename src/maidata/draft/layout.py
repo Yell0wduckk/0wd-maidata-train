@@ -20,15 +20,28 @@ def prepare_p0(beats, valid, starts, mapping, coverages, *, p0_rate):
 
 
 def prepare_selection(beats, valid, groups, starts, window_valid, *, target_beats, before_beats, after_beats,
-                      z_stride_beats=None):
+                      z_stride_beats=None, anchor_mode='block-center'):
     import math
     from .spacing import z_stride
     stride = z_stride(z_stride_beats, target_beats=target_beats)
     # Include each block intersecting the requested context, once. Context
     # margins need not divide the stride (e.g. four beats with stride eight).
-    before = math.ceil(before_beats/stride)
-    count = before + target_beats//stride + math.ceil(after_beats/stride)
-    desired = starts[:, None]-before*stride + torch.arange(count).float()*stride + stride/2
+    if anchor_mode == 'integer':
+        if stride != 1:
+            raise ValueError('integer D centers require stride one')
+        desired = starts[:, None] + torch.arange(-before_beats, target_beats+after_beats+1).float()
+    elif anchor_mode == 'block-center':
+        before = math.ceil(before_beats/stride)
+        count = before + target_beats//stride + math.ceil(after_beats/stride)
+        desired = starts[:, None]-before*stride + torch.arange(count).float()*stride + stride/2
+    else:
+        raise ValueError('unsupported D anchor mode')
+    return prepare_centers(beats, valid, groups, desired, window_valid)
+
+
+def prepare_centers(beats, valid, groups, desired, window_valid):
+    """Gather exact caller-owned center coordinates, retaining every requested slot."""
+    count = desired.shape[1]
     sources = {}
     for group in groups.unique().tolist():
         indices = valid[group].nonzero().flatten()

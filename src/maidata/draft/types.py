@@ -54,6 +54,7 @@ class PlannerOutput:
     config_logits: Tensor
     plan_values: Tensor
     valid: Tensor
+    plan_beats: Tensor | None = None
 
 
 @dataclass
@@ -104,6 +105,7 @@ class ReconstructionQueries:
     note_ordinals: Tensor
     segments: Tensor
     current_route_ids: Tensor
+    owner_z_beats: Tensor | None = None
 
 
 @dataclass

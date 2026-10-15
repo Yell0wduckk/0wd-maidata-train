@@ -48,6 +48,10 @@ def restore(payload, model, opt, sched, *, loaders, upgrade_z_normalization=Fals
         current, saved = recipe(_['config']), dict(payload['recipe'])
         saved.setdefault('reconstruction_route_loss', 'ce')
         saved.setdefault('planner_span_beats', 16)
+        saved.setdefault('planner_layout', 'legacy')
+        saved.setdefault('planner_stride_beats', None)
+        saved.setdefault('draft_z_anchor_mode', 'block-center')
+        saved.setdefault('reconstruction_span_beats', None)
         previous_z_norm = saved.get('decoder_z_normalization', False)
         current_z_norm = current.get('decoder_z_normalization', False)
         if upgrade_z_normalization and not (previous_z_norm is False and current_z_norm is True):

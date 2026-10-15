@@ -17,6 +17,7 @@ class Conditions:
     occurrence_mapping: torch.Tensor
     audio_mapping: torch.Tensor
     audio_indices: torch.Tensor | None = None
+    plan_beats: torch.Tensor | None = None
 
 
 def collate_conditions(items, windows, config, *, audio, audio_keys=None):
@@ -28,7 +29,7 @@ def collate_conditions(items, windows, config, *, audio, audio_keys=None):
     chart_sources = ({chart: (item, group) for item in items for chart, group in item['dp']['chart_to_group'].items()}
                      if use_z else {w['chart_id']: (item, 0) for item in items for w in item['windows']})
     groups, unique, indices = {}, {}, []
-    z_rows, window_groups, starts, plans, plan_valid, audio_mapping = [], [], [], [], [], []
+    z_rows, window_groups, starts, plans, plan_valid, plan_beats, audio_mapping = [], [], [], [], [], [], []
     for window in windows:
         identity = window['identity'][0]
         if identity not in unique:
@@ -43,24 +44,34 @@ def collate_conditions(items, windows, config, *, audio, audio_keys=None):
                 z_rows.append({k: dp['z'][k][group] for k in ('values', 'beats', 'valid')})
             planner = item['gt_plan'] if config['decoder_train_plan_source'] == 'gt' else dp['planner']
             lookup = None if config['decoder_train_plan_source'] == 'gt' else dp['window_index']
-            plan, mask = select_plan_window(planner, identity, window['chart_id'], window['start'],
-                                            config, window_index=lookup)
+            if config.get('planner_layout', 'legacy') == 'centered-overlap':
+                from .gt_plan_cache import select_plan_conditions
+                plan, mask, centers = select_plan_conditions(planner, identity, window['chart_id'], window['start'],
+                                                            config, window_index=lookup)
+            else:
+                plan, mask = select_plan_window(planner, identity, window['chart_id'], window['start'],
+                                                config, window_index=lookup)
+                centers = None
             if use_z:
                 window_groups.append(groups[key])
             starts.append(window['start'])
             plans.append(plan)
             plan_valid.append(mask)
+            plan_beats.append(centers)
             audio_mapping.append(songs[item['variant']] if local_audio is None else
                                  local_audio[(item['variant'], window['start'])])
         indices.append(unique[identity])
     if not use_z:
-        slots = 6 if config.get('planner_span_beats', 16) == 4 else 0
-        beats = torch.tensor(starts, dtype=torch.float32)[:, None] + torch.tensor((-2, 2, 6, 10, 14, 18))
+        centered = config.get('planner_layout', 'legacy') == 'centered-overlap'
+        offsets = (torch.arange(-3, 20) if centered else torch.tensor((-2, 2, 6, 10, 14, 18)))
+        slots = 23 if centered else (6 if config.get('planner_span_beats', 16) == 4 else 0)
+        beats = torch.tensor(starts, dtype=torch.float32)[:, None] + offsets
         z = Memory(torch.zeros((len(starts), slots, config['draft_latent_dim'])),
                    beats[:, :slots], torch.zeros((len(starts), slots), dtype=torch.bool))
         return Conditions(audio, z, torch.stack(plans), torch.stack(plan_valid),
             torch.tensor(indices, dtype=torch.long), torch.tensor(audio_mapping, dtype=torch.long),
-            audio.valid.flatten().nonzero().flatten())
+            audio.valid.flatten().nonzero().flatten(),
+            None if plan_beats[0] is None else torch.stack(plan_beats))
     z = BeatMemory(*(pad_sequence([r[k] for r in z_rows], batch_first=True) for k in ('values','beats','valid')))
     mapping = torch.tensor(window_groups, dtype=torch.long)
     starts = torch.tensor(starts, dtype=torch.float32)
@@ -69,4 +80,5 @@ def collate_conditions(items, windows, config, *, audio, audio_keys=None):
     selected = select_condition_windows(z, mapping, starts, valid, config).memory
     return Conditions(audio, Memory(selected.values, selected.beats, selected.valid), torch.stack(plans),
         torch.stack(plan_valid), torch.tensor(indices, dtype=torch.long), torch.tensor(audio_mapping, dtype=torch.long),
-        audio.valid.flatten().nonzero().flatten())
+        audio.valid.flatten().nonzero().flatten(),
+        None if plan_beats[0] is None else torch.stack(plan_beats))

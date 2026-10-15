@@ -246,7 +246,8 @@ class Interactive:
             if plan_source == 'none':
                 plans, valid = torch.zeros_like(plans), torch.zeros_like(valid)
             memory = self.decoder.prepare_memory(self.audio_kv, torch.tensor([audio_index], device=self.device),
-                selected, plans, valid)
+                selected, plans, valid,
+                **({} if conditions.plan_beats is None else {'plan_beats': conditions.plan_beats[index:index+1]}))
         # Self K/V depends on Plan as well as chart rows. Never reuse it after
         # changing the conditioning, and retain the predicted Draft cache intact.
         context = self.contexts[index] = WindowContext(memory, plan_source=plan_source)

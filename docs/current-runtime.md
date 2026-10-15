@@ -64,6 +64,8 @@ CPU验证覆盖默认与非默认架构、并行/增量一致、目标类型隔�
 
 ## 从头联合训练入口
 
+隔离覆盖配置`configs/joint-main320-integer-plan16-gt.json`使用整数Z1、每枚Z两侧共四拍重建、每四拍一枚中心Plan16。M读取23枚Z及5枚独立有位置Plan，P每枚池化17个整数Z节点；旧默认与checkpoint保持原语义。精确坐标、监督去重、缓存与运行范围见[整数拍合同](integer-draft-plan16.md)。
+
 独立实验覆盖配置 `configs/joint-main320-z4-gt.json` 将 E/D/M 设为320维、8头、每头40维，E/M前段FFN1280、D/M每专家640；M前2层不动、后段4→6层。外层上限3完整音频组、预算80000、最大LR6e-4、M内部chunk预算32768，以上已由用户确定；不整体替换默认CONFIG。M内部chunk预算另支持显式null，独立阶段二row_budget保持原合同。该覆盖配置现选择6枚独立、有绝对拍位置的Plan4，与6枚Z4逐槽对齐，包含前后各4拍上下文；P每个基础窗监督4段且不重复监督上下文。默认及旧checkpoint继续按Plan16解释，详见[六枚Plan4合同](plan4-joint.md)。参数、平均每轮更新次数、预算限制来源及此前最大LR5e-4/Plan16时的极端/连续CUDA证据见[320维容量实测](main320-capacity.md)。
 
 训练及验证可通过 `decoder_train_plan_input` 控制 M 是否接收 plan，默认 `True`。关闭时屏蔽有效 plan attention key，不改变 Z 输入及 P 自身监督；阶段二/SFT/联合训练共用此设置，见[训练 plan 输入开关](decoder-training-plan-input.md)。

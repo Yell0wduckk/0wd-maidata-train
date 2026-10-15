@@ -17,7 +17,8 @@ from maidata.chart_cache.cache import load_chart
 from maidata.draft.chart_data import from_record
 from maidata.draft.conditions import read_condition, make_draft_inputs
 from maidata.draft.plan_targets import MusicPlanTargets
-from maidata.draft.targets import reconstruction_target, collate_reconstruction, collate_planner, planner_target
+from maidata.draft.targets import reconstruction_target, overlap_reconstruction_target, planner_target
+from maidata.draft.supervision import prepare_auxiliary
 from maidata.draft.windows import song_coverage, audio_windows
 from maidata.preparation.cache import load_grid, song_inputs, window_inputs
 from maidata.time import TimingMap
@@ -92,11 +93,21 @@ class AudioDataset(Dataset):
         rows = plan.rows(variant, epoch)
         for w in rows:
             key = w['chart_id']
+            end = coverage.first_beat+coverage.draft_beats
+            if c.get('draft_z_anchor_mode', 'block-center') == 'integer':
+                target = overlap_reconstruction_target(charts[key], start_tick=w['start_tick'],
+                    target_beats=c['target_beats'], coverage_end_beat=end, first_beat=coverage.first_beat,
+                    span_beats=c.get('reconstruction_span_beats') or c['draft_z_stride_beats'],
+                    validate_input=False)
+            else:
+                target = reconstruction_target(charts[key], start_tick=w['start_tick'], target_beats=c['target_beats'],
+                    audio_after_beats=c['audio_after_beats'], audio_end_seconds=meta['audio_end_seconds'], validate_input=False)
             windows.append((w['window_id'], key, w['start_beat'],
-                reconstruction_target(charts[key], start_tick=w['start_tick'], target_beats=c['target_beats'],
-                    audio_after_beats=c['audio_after_beats'], audio_end_seconds=meta['audio_end_seconds'], validate_input=False),
+                target,
                 planner_target(plans[key], w['start_tick'], w['end_tick'],
-                               span_beats=c.get('planner_span_beats', 16))))
+                    span_beats=c.get('planner_span_beats', 16), layout=c.get('planner_layout', 'legacy'),
+                    stride_beats=c.get('planner_stride_beats', 4),
+                    last_parent=w['start_beat']+c['target_beats'] == end)))
         return dict(variant=variant, grid=grid, p0=p0, coverage=coverage, conditions=conditions, windows=windows)
 
 
@@ -143,21 +154,17 @@ def collate_audio(items, *, config, packed=False):
     starts, mapping = audio_windows(coverages, device='cpu')
     conditions = {k: v for i in items for k, v in i['conditions'].items()}
     draft, chart_groups = make_draft_inputs(list(conditions.values()), variants, coverages, device='cpu', validate_input=False,
-        z_stride_beats=config['draft_z_stride_beats'])
+        z_stride_beats=config['draft_z_stride_beats'], anchor_mode=config.get('draft_z_anchor_mode', 'block-center'))
     ownership = dict(zip(conditions, chart_groups.tolist()))
-    windows = [w for i in items for w in i['windows']]
+    auxiliary = prepare_auxiliary(items, config, ownership, draft)
     batch = Batch(None if cached else song_inputs(grids, validate_input=False), None if cached else window_inputs(grids, starts.numpy(), mapping.numpy(),
         target_beats=config['target_beats'], before_beats=config['audio_before_beats'],
         after_beats=config['audio_after_beats'], validate_input=False), coverages, draft,
-        torch.tensor([ownership[w[1]] for w in windows], dtype=torch.long),
-        torch.tensor([w[2] for w in windows], dtype=torch.float32),
-        torch.ones(len(windows), dtype=torch.bool),
-        collate_reconstruction([w[3] for w in windows],
-                               target_beats=config['target_beats'], device='cpu', validate_input=False),
-        collate_planner([w[4] for w in windows], device='cpu', validate_input=False), [w[0] for w in windows], variants)
+        auxiliary['groups'], auxiliary['starts'], auxiliary['valid'], auxiliary['reconstruction'],
+        auxiliary['planner'], auxiliary['window_ids'], variants)
     from maidata.audio.layout import prepare_encoder_layout
     from maidata.draft.layout import prepare_p0, prepare_selection
-    batch.layouts = {}
+    batch.layouts = auxiliary['layouts']
     if cached:
         batch.p0 = collate_banks(items)
     else:
@@ -168,10 +175,6 @@ def collate_audio(items, *, config, packed=False):
         batch.layouts['p0'] = prepare_p0(layout['grids'][0], layout['resample'][0]['valid'],
             starts, mapping, coverages, p0_rate=config['fpn_rates'][0])
     batch.draft_inputs.valid_indices = draft.draft_valid.flatten().nonzero().flatten()
-    for name, before, after in (('reconstruction', 0, 0), ('planner', 0, 0)):
-        batch.layouts[name] = prepare_selection(draft.query_beats, draft.draft_valid, batch.groups,
-            batch.starts, batch.valid, target_beats=config['target_beats'], before_beats=before, after_beats=after,
-            z_stride_beats=config['draft_z_stride_beats'])
     if packed:
         from .transport import pack_batch
         return pack_batch(batch)

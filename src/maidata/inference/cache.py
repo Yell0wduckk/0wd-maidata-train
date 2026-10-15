@@ -13,7 +13,8 @@ import torch
 from maidata.draft.types import BeatMemory
 from maidata.draft.windows import SongCoverage, song_coverage
 from maidata.model import ENCODER_KEYS
-from .conditioning import Conditions, encode_joint_audio, decode_joint_draft, empty_plan_geometry
+from .conditioning import (Conditions, encode_joint_audio, decode_joint_draft, empty_plan_geometry,
+                           plan_centers_for_starts)
 from .progress import stage
 
 AUDIO_SCHEMA = 'maidata.inference-audio.v1'
@@ -173,7 +174,8 @@ def load_audio(path, config, *, device, identity=None):
         local, centers = (BeatMemory(*(getattr(bank, k).to(device) for k in ('values', 'beats', 'valid')))
                           for bank in (local, centers))
         z, plans, plan_valid = empty_plan_geometry(starts, coverage, config, device)
-        conditions = Conditions(local, z, plans, plan_valid, starts, coverage, 'window')
+        conditions = Conditions(local, z, plans, plan_valid, starts, coverage, 'window',
+                                plan_centers_for_starts(starts, config, device))
         return EncodedAudio(conditions, centers, duration, payload['key'], payload['identity'])
     except Exception as exc:
         raise ValueError(f'invalid inference cache {path}: {exc}') from exc
@@ -218,11 +220,19 @@ class JointCache:
                 try:
                     c = self.checkpoint.config
                     z = read_memory(payload['z'], width=c['draft_latent_dim'], rows=1,
-                                    length=encoded.local.coverage.draft_beats//c['draft_z_stride_beats'])
+                        length=(encoded.local.coverage.draft_beats+1 if c.get('draft_z_anchor_mode') == 'integer'
+                                else encoded.local.coverage.draft_beats//c['draft_z_stride_beats']))
                     plans, valid = payload['plans'], payload['plan_valid']
                     plan_shape = ((len(encoded.local.starts),
                         (c['target_beats']+c['decoder_z_before_beats']+c['decoder_z_after_beats'])//4, 12)
                         if c.get('planner_span_beats', 16) == 4 else (len(encoded.local.starts), 12))
+                    plan_beats = None
+                    if c.get('planner_layout', 'legacy') == 'centered-overlap':
+                        plan_shape = (len(encoded.local.starts), 5, 12)
+                        plan_beats = payload.get('plan_beats')
+                        desired = plan_centers_for_starts(encoded.local.starts, c, 'cpu')
+                        if plan_beats is None or plan_beats.shape != desired.shape or not torch.equal(plan_beats, desired):
+                            raise ValueError('cached centered Plan coordinates differ')
                     if (payload['starts'] != list(encoded.local.starts)
                             or plans.shape != plan_shape or not plans.is_floating_point()
                             or valid.shape != plans.shape[:-1] or valid.dtype != torch.bool
@@ -231,14 +241,16 @@ class JointCache:
                 except Exception as exc:
                     raise ValueError(f'invalid inference cache {path}: {exc}') from exc
                 z = BeatMemory(*(getattr(z, k).to(self.device) for k in ('values', 'beats', 'valid')))
-                return replace(encoded.local, z=z, plans=plans.to(self.device), plan_valid=valid.to(self.device))
+                return replace(encoded.local, z=z, plans=plans.to(self.device), plan_valid=valid.to(self.device),
+                    plan_beats=None if plan_beats is None else plan_beats.to(self.device))
         models = self.checkpoint.models(device=self.device, components=('draft', 'planner'))
         conditions = decode_joint_draft(models.draft, models.planner, models.config,
             encoded.local, encoded.centers, difficulty=difficulty, level=level,
             device=self.device, progress=self.progress)
         payload = dict(schema=DRAFT_SCHEMA, complete=True, identity=identity, key=identity_key(identity),
             starts=list(conditions.starts), z=memory_payload(conditions.z),
-            plans=conditions.plans.detach().cpu(), plan_valid=conditions.plan_valid.cpu())
+            plans=conditions.plans.detach().cpu(), plan_valid=conditions.plan_valid.cpu(),
+            plan_beats=None if conditions.plan_beats is None else conditions.plan_beats.cpu())
         with stage(self.progress, 'draft_cache_write'):
             atomic_save(path, payload)
         return conditions

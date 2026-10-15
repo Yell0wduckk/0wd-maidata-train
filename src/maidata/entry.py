@@ -36,6 +36,7 @@ CONFIG = {
     "draft_expert_ffn_dim": 512,
     "draft_latent_dim": 256,  # Must equal draft_dim; no latent bottleneck.
     "draft_z_stride_beats": 1,  # One Z per block; divisors of 16 only.
+    "draft_z_anchor_mode": "block-center",
     "draft_dropout": 0.0,
     "draft_norm_eps": 1e-5,
     "draft_difficulty_vocab_size": 8,
@@ -48,6 +49,9 @@ CONFIG = {
     "planner_dropout": 0.1,
     "planner_norm_eps": 1e-5,
     "planner_span_beats": 16,  # Historical Plan16; the joint Plan4 override selects 4.
+    "planner_layout": "legacy",
+    "planner_stride_beats": None,
+    "reconstruction_span_beats": None,
     "reconstruction_ffn_dim": 512,
     "reconstruction_dropout": 0.1,
     "reconstruction_norm_eps": 1e-5,

@@ -2,7 +2,7 @@
 
 ## 范围和路径
 
-本仓库属于 maidata，Git 根为 `repos-0wd-v3/src`，包根为其内层 `src/`。它有独立 `.git` 目录，不是 worktree。源码导入、编辑和提交均在这里进行；不要重定向回原工作树。原仓库只作为复制来源及只读历史参考。
+本目录属于 maidata，是 `repos-0wd-v3/src` 的隔离 worktree，包根为本目录内层 `src/`。源码导入、编辑、测试和提交均使用当前 worktree；不要重定向回原 checkout、其他实验 worktree 或远端运行源码。当前基础包含原 checkout 的320维实现及未提交变更，带入记录见独立实验产物中的 `baseline-overlay.json`。
 
 进入任务先读 README、docs/current-runtime.md；encoder 重构再读同级设计目录中的 `../0wd-v3-refactor-docs/new-audio-encoder.md`。
 

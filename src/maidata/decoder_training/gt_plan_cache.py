@@ -8,6 +8,7 @@ from pathlib import Path
 
 SCHEMA = 'maidata.gt-plan12.v1'
 PLAN4_SCHEMA = 'maidata.gt-plan4x12.v1'
+CENTERED_SCHEMA = 'maidata.gt-plan16-centered-stride4.v1'
 CONTINUOUS = ('note_count', 'note_density', 'chord_ratio', 'slide_ratio',
               'last_position', 'touch_ratio', 'hold_ratio', 'relative_intensity')
 CATEGORIES = ('single', 'chord', 'slide', 'touch')
@@ -19,28 +20,71 @@ class GTPlanCache:
         path = self.root/'manifest.json'
         self.manifest = json.loads(path.read_text(encoding='utf-8'))
         schema = self.manifest.get('schema')
-        if schema not in (None, SCHEMA, PLAN4_SCHEMA):
+        if schema not in (None, SCHEMA, PLAN4_SCHEMA, CENTERED_SCHEMA):
             raise ValueError('unsupported GT plan cache schema')
         # Older unschematized plan16 metadata remains readable. A plan4 cache
         # always has its explicit schema and four-beat producer semantics.
         self.span_beats = 4 if schema == PLAN4_SCHEMA else 16
+        self.layout = 'centered-overlap' if schema == CENTERED_SCHEMA else 'legacy'
+        if config is not None and config.get('planner_layout', 'legacy') != self.layout:
+            raise ValueError('GT plan cache schema differs from planner_layout')
         if config is not None and config.get('planner_span_beats', 16) != self.span_beats:
             raise ValueError('GT plan cache schema differs from planner_span_beats')
         if self.span_beats == 4 and any(self.manifest.get(key) != value for key, value in (
                 ('plan_span_beats', 4), ('parent_window_beats', 16),
                 ('plans_per_window', 4), ('tick_rate', 96))):
             raise ValueError('GT Plan4 manifest interval semantics differ')
+        if self.layout == 'centered-overlap' and any(self.manifest.get(key) != value for key, value in (
+                ('plan_span_beats', 16), ('plan_stride_beats', 4), ('tick_rate', 96),
+                ('planner_layout', 'centered-overlap'))):
+            raise ValueError('centered Plan manifest interval semantics differ')
         self.groups = self.manifest['groups']
         self.binding = str(path)
 
     def read(self, variant):
         import torch
         value = torch.load(self.root/self.groups[variant]['path'], map_location='cpu', weights_only=True)
-        value = dict(value, plan_span_beats=self.span_beats,
+        value = dict(value, plan_span_beats=self.span_beats, planner_layout=self.layout,
                      window_index={key: i for i, key in enumerate(value['window_ids'])})
-        if self.span_beats == 4:
+        if self.layout == 'centered-overlap':
+            value['chart_center_index'] = centered_index(value)
+        elif self.span_beats == 4:
             value['chart_center_index'] = plan4_index(value)
         return value
+
+
+def centered_index(bank):
+    count = len(bank['chart_ids'])
+    if (bank['plan_values'].shape != (count, 12) or bank['valid'].shape != (count,)
+            or bank['center_beats'].shape != (count,)):
+        raise ValueError('centered Plan bank requires unique [N,12] values and [N] coordinates/masks')
+    lookup = {}
+    for index, (chart, center) in enumerate(zip(bank['chart_ids'], bank['center_beats'].tolist(), strict=True)):
+        key = chart, float(center)
+        if key in lookup:
+            raise ValueError('duplicate centered Plan chart/anchor')
+        lookup[key] = index
+    return lookup
+
+
+def select_plan_conditions(bank, identity, chart_id, start, config, *, window_index=None):
+    """Positioned Plan conditions keep their own independent coordinate grid."""
+    import torch
+    if config.get('planner_layout', 'legacy') != 'centered-overlap':
+        values, valid = select_plan_window(bank, identity, chart_id, start, config, window_index=window_index)
+        return values, valid, None
+    if (bank.get('planner_layout', 'legacy') != 'centered-overlap'
+            or bank.get('plan_span_beats') != 16 or bank.get('plan_stride_beats') != 4):
+        raise ValueError('cached centered Plan layout/span/stride differs')
+    if 'chart_center_index' not in bank:
+        bank['chart_center_index'] = centered_index(bank)
+    centers = torch.arange(5, dtype=torch.float32)*4+float(start)
+    values, valid = bank['plan_values'].new_zeros((5, 12)), torch.zeros(5, dtype=torch.bool)
+    for slot, center in enumerate(centers.tolist()):
+        index = bank['chart_center_index'].get((chart_id, center))
+        if index is not None:
+            values[slot], valid[slot] = bank['plan_values'][index], bank['valid'][index]
+    return values.masked_fill(~valid[:, None], 0), valid, centers
 
 
 def plan4_index(bank):
@@ -62,6 +106,10 @@ def plan4_index(bank):
 def select_plan_window(bank, identity, chart_id, start, config, *, window_index=None):
     """Gather actual neighboring four-beat plans; absent context stays invalid."""
     import torch
+    if config.get('planner_layout', 'legacy') == 'centered-overlap':
+        return select_plan_conditions(bank, identity, chart_id, start, config, window_index=window_index)[:2]
+    if bank.get('planner_layout', 'legacy') != 'legacy':
+        raise ValueError('cached planner_layout differs from legacy recipe')
     span = config.get('planner_span_beats', 16)
     if span not in (4, 16):
         raise ValueError('planner_span_beats must be 4 or 16')
@@ -109,6 +157,8 @@ def export_variant(task):
     from maidata.chart_cache.cache import load_chart
     from maidata.draft.chart_data import from_record
     from maidata.draft.plan_targets import MusicPlanTargets
+    if CONFIG.get('planner_layout', 'legacy') == 'centered-overlap':
+        return export_centered_variant(task)
     span = CONFIG.get('planner_span_beats', 16)
     if span not in (4, 16):
         raise ValueError('planner_span_beats must be 4 or 16')
@@ -170,6 +220,61 @@ def export_variant(task):
                          dtype=str(values.dtype), bytes=path.stat().st_size)
 
 
+def export_centered_variant(task):
+    """Each original chart is read once; overlapping anchors are emitted once."""
+    import hashlib
+    import torch
+    from maidata.chart_cache.cache import load_chart
+    from maidata.draft.chart_data import from_record
+    from maidata.draft.plan_targets import MusicPlanTargets
+    variant, rows, charts = task
+    by_chart = defaultdict(list)
+    for row in rows:
+        if row['end_tick']-row['start_tick'] != 1536:
+            raise ValueError('centered Plan export requires complete sixteen-beat base windows')
+        by_chart[row['chart_id']].append(row)
+    keys, centers, targets = [], [], []
+    for chart_id, windows in by_chart.items():
+        record = load_chart(Path(CONFIG['decoder_train_chart_cache'])/charts[chart_id], validate_input=False)
+        source = dict(record['source'])
+        source['source_path'] = str(Path(CONFIG['decoder_train_source_root'])/source['song_id']/'maidata.txt')
+        planner = MusicPlanTargets(from_record(dict(record, source=source), validate_input=False), validate_input=False)
+        anchors = {tick for row in windows for tick in range(row['start_tick'], row['end_tick'], 384)}
+        anchors.add(max(row['end_tick'] for row in windows))
+        for tick in sorted(anchors):
+            keys.append(chart_id); centers.append(tick/96)
+            targets.append(planner.window(tick-768, tick+768))
+    continuous = torch.tensor([target.continuous for target in targets], dtype=torch.float32)
+    category = torch.tensor([target.category for target in targets], dtype=torch.long)
+    values = torch.cat((continuous, torch.nn.functional.one_hot(category, 4).float()), -1)
+    center = torch.tensor(centers, dtype=torch.float64)
+    payload = dict(schema=CENTERED_SCHEMA, planner_layout='centered-overlap', plan_span_beats=16,
+        plan_stride_beats=4, chart_ids=keys, center_beats=center,
+        start_ticks=((center-8)*96).long(), end_ticks=((center+8)*96).long(),
+        window_ids=[f'{key}:center:{beat:g}' for key, beat in zip(keys, centers)],
+        plan_values=values, valid=torch.ones(len(keys), dtype=torch.bool),
+        continuous=continuous, category=category)
+    path = OUTPUT/'banks'/f'{variant}.pt'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix('.tmp')
+    torch.save(payload, temporary)
+    saved = torch.load(temporary, map_location='cpu', weights_only=True)
+    if saved.keys() != payload.keys() or not torch.isfinite(saved['plan_values']).all():
+        raise ValueError('centered Plan storage roundtrip differs')
+    for key, value in payload.items():
+        if not (torch.equal(saved[key], value) if isinstance(value, torch.Tensor) else saved[key] == value):
+            raise ValueError('centered Plan storage roundtrip differs: '+key)
+    centered_index(saved)
+    temporary.replace(path)
+    digest = hashlib.sha256()
+    with path.open('rb') as stream:
+        for block in iter(lambda: stream.read(1024*1024), b''):
+            digest.update(block)
+    return variant, dict(path='banks/'+path.name, anchors=len(keys), charts=len(by_chart),
+        shape=list(values.shape), dtype=str(values.dtype), bytes=path.stat().st_size,
+        sha256=digest.hexdigest(), consumer_read_verified=True)
+
+
 def export(config, output, workers=12):
     output = Path(output)
     if output.exists() and any(output.iterdir()):
@@ -196,6 +301,13 @@ def export(config, output, workers=12):
         if config['target_beats'] != 16:
             raise ValueError('GT Plan4 export requires target_beats=16')
         meta.update(parent_window_beats=16, plan_span_beats=4, plans_per_window=4, tick_rate=96)
+    if config.get('planner_layout', 'legacy') == 'centered-overlap':
+        if span != 16 or config.get('planner_stride_beats') != 4 or config['target_beats'] != 16:
+            raise ValueError('centered Plan export requires span16/stride4/parent16')
+        meta.update(schema=CENTERED_SCHEMA, planner_layout='centered-overlap', plan_span_beats=16,
+            plan_stride_beats=4, parent_window_beats=16, tick_rate=96,
+            anchor_mode='integer', read_interval='[center-8,center+8]',
+            statistics_interval='[center-8,center+8)', unique_key='chart_id,center_beats')
     _write_json(output/'manifest.json', meta)
     with ProcessPoolExecutor(max_workers=workers, initializer=initialize, initargs=(config, str(output))) as pool:
         for variant, row in pool.map(export_variant, tasks):

@@ -65,10 +65,17 @@ def collate_windows(examples, *, device, expand=True):
 
 def select_condition_windows(z, groups, starts, window_valid, config):
     """Consumer calls the public data-only selector; no learned parameters are shared."""
+    if config.get('planner_layout', 'legacy') == 'centered-overlap':
+        from maidata.draft.windows import gather_centers
+        from maidata.draft.types import WindowLatents
+        desired = starts[:, None] + torch.arange(-3, 20, device=starts.device, dtype=starts.dtype)
+        selected = gather_centers(z, groups, desired, window_valid)
+        return WindowLatents(selected, starts, config['target_beats'], window_valid)
     from maidata.draft.windows import select_windows
     return select_windows(z, groups, starts, window_valid, target_beats=config['target_beats'],
                           before_beats=config['decoder_z_before_beats'], after_beats=config['decoder_z_after_beats'],
-                          z_stride_beats=config['draft_z_stride_beats'])
+                          z_stride_beats=config['draft_z_stride_beats'],
+                          anchor_mode=config.get('draft_z_anchor_mode', 'block-center'))
 
 
 def audio_key_spans(valid, *, validate=True):

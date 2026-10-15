@@ -185,7 +185,7 @@ def test_reconstruction_has_no_row_interaction_and_relative_positions(config):
                                        torch.ones(1, 6, dtype=torch.bool)),
                             torch.tensor([0.]), 3, torch.tensor([True]))
     full_queries = query_batch(windows, notes=240)
-    short_queries = replace(full_queries, **{name: getattr(full_queries, name)[:, :5]
+    short_queries = replace(full_queries, **{name: None if getattr(full_queries, name) is None else getattr(full_queries, name)[:, :5]
                             for name in full_queries.__dataclass_fields__})
     a, b = short(windows, short_queries), long(windows, full_queries)
     for name in a.field_logits:

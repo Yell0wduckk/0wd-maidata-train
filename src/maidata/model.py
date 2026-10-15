@@ -35,6 +35,7 @@ def build_planner(config):
     from .draft.planner import PlannerHead
     keys = ('dim', 'heads', 'mlp_dim', 'dropout', 'norm_eps')
     return PlannerHead(latent_dim=config['draft_latent_dim'], span_beats=plan_span(config),
+        layout=config.get('planner_layout', 'legacy'), stride_beats=config.get('planner_stride_beats') or 4,
         **{key: config['planner_' + key] for key in keys},
         rope_base=config['rope_base'], rope_position_scale=config['rope_position_scale'])
 
@@ -44,6 +45,18 @@ def plan_span(config):
     span = config.get('planner_span_beats', 16)
     if type(span) is not int or span not in (4, 16):
         raise ValueError('planner_span_beats must be 4 or 16')
+    layout = config.get('planner_layout', 'legacy')
+    if layout not in ('legacy', 'centered-overlap'):
+        raise ValueError('unsupported planner_layout')
+    if layout == 'centered-overlap':
+        if (span != 16 or config.get('planner_stride_beats') != 4
+                or config.get('draft_z_anchor_mode') != 'integer'
+                or config['draft_z_stride_beats'] != 1
+                or config.get('reconstruction_span_beats') != 4
+                or config['target_beats'] != 16
+                or config['decoder_z_before_beats'] != 4 or config['decoder_z_after_beats'] != 4):
+            raise ValueError('centered-overlap requires integer Z1, four-beat reconstruction, Plan16/stride4 and target16/context4')
+        return span
     if span == 4 and config['draft_z_stride_beats'] != 4:
         raise ValueError('four-beat Plan requires aligned four-beat Z')
     if span == 4 and (config['target_beats'] != 16 or
@@ -58,6 +71,8 @@ def build_reconstruction(config):
             'position_base', 'position_scale')
     return ReconstructionHead(latent_dim=config['draft_latent_dim'], target_beats=config['target_beats'],
                                z_stride_beats=config['draft_z_stride_beats'],
+                               anchor_mode=config.get('draft_z_anchor_mode', 'block-center'),
+                               span_beats=config.get('reconstruction_span_beats'),
                                count_loss=config.get('reconstruction_count_loss', 'ce'),
                                route_vocabulary=config.get('reconstruction_route_vocabulary', 'route71'),
                                **{key: config['reconstruction_' + key] for key in keys})
@@ -76,5 +91,6 @@ def build_decoder(config):
     model = Decoder(audio_dim=config['d_model'], latent_dim=config['draft_latent_dim'],
                     z_normalization=config.get('decoder_z_normalization', False),
                     plan_span_beats=plan_span(config),
+                    planner_layout=config.get('planner_layout', 'legacy'),
                     **{key: config['decoder_' + key] for key in keys})
     return model

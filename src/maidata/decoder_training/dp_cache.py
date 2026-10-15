@@ -12,7 +12,8 @@ from torch.utils.data import DataLoader, Dataset
 from maidata.entry import CONFIG
 from maidata.chart_cache.cache import load_chart
 from maidata.draft.conditions import read_condition, make_draft_inputs
-from maidata.draft.layout import prepare_selection
+from maidata.draft.layout import prepare_selection, prepare_centers
+from maidata.draft.planner import select_planner_windows
 from maidata.draft.types import BeatMemory
 from maidata.draft.windows import SongCoverage, select_windows
 from maidata.training.data import worker_init
@@ -63,7 +64,8 @@ class CachedP0Dataset(Dataset):
             source['source_path'] = str(Path(self.config['decoder_train_source_root'])/source['song_id']/'maidata.txt')
             conditions.append(read_condition(source))
         inputs, mapping = make_draft_inputs(conditions, [variant], [coverage], device='cpu',
-            z_stride_beats=self.config['draft_z_stride_beats'])
+            z_stride_beats=self.config['draft_z_stride_beats'],
+            anchor_mode=self.config.get('draft_z_anchor_mode', 'block-center'))
         inputs.valid_indices = inputs.draft_valid.flatten().nonzero().flatten()
         ownership = dict(zip(keys, mapping.tolist()))
         windows = self.windows[variant]
@@ -76,17 +78,24 @@ class CachedP0Dataset(Dataset):
         layout = prepare_selection(inputs.query_beats, inputs.draft_valid, groups, starts, valid,
             target_beats=self.config['target_beats'],before_beats=0,after_beats=0,
             z_stride_beats=self.config['draft_z_stride_beats'])
+        if self.config.get('planner_layout', 'legacy') == 'centered-overlap':
+            layout = prepare_centers(inputs.query_beats, inputs.draft_valid, groups,
+                                     starts[:, None]+torch.arange(-8, 25), valid)
         return pack_batch(dict(variant=variant,bank=bank,inputs=inputs,groups=groups,starts=starts,
             valid=valid,layout=layout,chart_to_group=ownership,conditions=[asdict(c) for c in conditions],
             window_ids=[w['window_id'] for w in windows],chart_ids=[w['chart_id'] for w in windows]))
 
 
-def save_outputs(path, batch, z, plan, producer_sha, *, z_stride_beats=None, plan_span_beats=16):
+def save_outputs(path, batch, z, plan, producer_sha, *, z_stride_beats=None, plan_span_beats=16,
+                 planner_layout='legacy', planner_stride_beats=4, z_anchor_mode='block-center',
+                 reconstruction_span_beats=None):
     from maidata.draft.spacing import z_stride
     stride = z_stride(z_stride_beats)
     payload = dict(schema=SCHEMA,audio_variant=batch['variant'],producer_sha256=producer_sha,
         z_representation=Z_REPRESENTATION,z_width=z.values.shape[-1],z_stride_beats=stride,
-        plan_span_beats=plan_span_beats,
+        plan_span_beats=plan_span_beats, planner_layout=planner_layout,
+        plan_stride_beats=planner_stride_beats, z_anchor_mode=z_anchor_mode,
+        reconstruction_span_beats=reconstruction_span_beats,
         chart_to_group=batch['chart_to_group'],conditions=batch['conditions'],
         z={k:getattr(z,k).detach().cpu() for k in ('values','beats','valid')},
         planner=dict(window_ids=batch['window_ids'],chart_ids=batch['chart_ids'],
@@ -94,7 +103,23 @@ def save_outputs(path, batch, z, plan, producer_sha, *, z_stride_beats=None, pla
             groups=batch['groups'].cpu(),starts=batch['starts'].cpu(),
             plan_values=plan.plan_values.detach().cpu(),valid=plan.valid.cpu()))
     expected_shape = (len(batch['window_ids']), 12)
-    if plan_span_beats == 4:
+    if planner_layout == 'centered-overlap':
+        if plan.plan_beats is None or plan.plan_values.shape != (len(batch['window_ids']), 5, 12):
+            raise ValueError('centered D/P export requires five positioned plans per window')
+        chosen, seen, charts, centers = [], set(), [], []
+        for row, chart in enumerate(batch['chart_ids']):
+            for slot, center in enumerate(plan.plan_beats[row].cpu().tolist()):
+                key = chart, float(center)
+                if key not in seen:
+                    seen.add(key); chosen.append(row*5+slot); charts.append(chart); centers.append(center)
+        index = torch.tensor(chosen, dtype=torch.long)
+        payload['planner'] = dict(planner_layout=planner_layout, plan_span_beats=16, plan_stride_beats=4,
+            chart_ids=charts, center_beats=torch.tensor(centers, dtype=torch.float64),
+            window_ids=[f'{chart}:center:{center:g}' for chart, center in zip(charts, centers)],
+            plan_values=plan.plan_values.detach().cpu().reshape(-1, 12)[index],
+            valid=plan.valid.cpu().flatten()[index])
+        expected_shape = (len(index), 12)
+    elif plan_span_beats == 4:
         expected_shape = (len(batch['window_ids']), 4, 12)
         payload['planner']['center_beats'] = batch['starts'].cpu()[:, None] + torch.arange(4)*4+2
     if (not torch.isfinite(payload['z']['values']).all()
@@ -106,6 +131,10 @@ def save_outputs(path, batch, z, plan, producer_sha, *, z_stride_beats=None, pla
     path.parent.mkdir(parents=True,exist_ok=True)
     temporary = path.with_suffix('.tmp')
     torch.save(payload,temporary)
+    saved = torch.load(temporary, map_location='cpu', weights_only=True)
+    for key in ('plan_values', 'valid', 'center_beats'):
+        if key in payload['planner'] and not torch.equal(saved['planner'][key], payload['planner'][key]):
+            raise ValueError('frozen Plan storage roundtrip differs: '+key)
     temporary.replace(path)
     return dict(path='banks/'+path.name,sha256=digest_file(path),bytes=path.stat().st_size,
         z_shape=list(z.values.shape),z_dtype=str(z.values.dtype),
@@ -163,6 +192,10 @@ def export(config, p0_root, output):
         z_representation=Z_REPRESENTATION,z_width=teacher['draft_latent_dim'],
         z_stride_beats=teacher['draft_z_stride_beats'],
         plan_span_beats=teacher.get('planner_span_beats', 16),
+        planner_layout=teacher.get('planner_layout', 'legacy'),
+        plan_stride_beats=teacher.get('planner_stride_beats', 4),
+        z_anchor_mode=teacher.get('draft_z_anchor_mode', 'block-center'),
+        reconstruction_span_beats=teacher.get('reconstruction_span_beats'),
         p0_manifest_sha256=None if external_encoder else digest_file(p0_root/'manifest.json'),p0_root=str(p0_root),
         precision=config['decoder_train_precision'],workers=workers,splits=splits,groups={},
         plans={} if external_encoder else {side:{name:digest_file(Path(config['decoder_train_'+side+'_plan'])/name)
@@ -177,18 +210,27 @@ def export(config, p0_root, output):
         batch = raw.to(device)
         with autocast(device,config):
             z = draft(batch['bank'],batch['inputs'])
-            target = select_windows(z,batch['groups'],batch['starts'],batch['valid'],
-                target_beats=teacher['target_beats'],before_beats=0,after_beats=0,layout=batch['layout'],
-                z_stride_beats=teacher['draft_z_stride_beats'])
+            target = select_planner_windows(z,batch['groups'],batch['starts'],batch['valid'],teacher,
+                                             layout=batch['layout'])
             plan = planner(target)
         path = output/'banks'/f'{batch["variant"]}.pt'
         row = save_outputs(path,batch,z,plan,producer['sha256'],
             z_stride_beats=teacher['draft_z_stride_beats'],
-            plan_span_beats=teacher.get('planner_span_beats', 16))
+            plan_span_beats=teacher.get('planner_span_beats', 16),
+            planner_layout=teacher.get('planner_layout', 'legacy'),
+            planner_stride_beats=teacher.get('planner_stride_beats', 4),
+            z_anchor_mode=teacher.get('draft_z_anchor_mode', 'block-center'),
+            reconstruction_span_beats=teacher.get('reconstruction_span_beats'))
+        # R is not executed by this export, but its producer-side semantics
+        # remain recorded with the D weights rather than relabeled as M input.
         if not report['groups']:
             saved = torch.load(path,map_location='cpu',weights_only=True)
             assert all(torch.equal(saved['z'][k],getattr(z,k).cpu()) for k in ('values','beats','valid'))
-            assert torch.equal(saved['planner']['plan_values'],plan.plan_values.cpu())
+            if teacher.get('planner_layout', 'legacy') == 'centered-overlap':
+                from .gt_plan_cache import centered_index
+                centered_index(saved['planner'])
+            else:
+                assert torch.equal(saved['planner']['plan_values'],plan.plan_values.cpu())
             report['first_bank_roundtrip_exact'] = True
         report['groups'][batch['variant']] = row
         write_json(output/'manifest.json',report)

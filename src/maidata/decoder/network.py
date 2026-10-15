@@ -15,7 +15,7 @@ class Decoder(nn.Module):
                  shared_ffn_dim, expert_ffn_dim, experts, readout_ffn_dim, dropout,
                  norm_eps, rope_base, rope_position_scale, note_dims, route_dims,
                  time_base, time_scale, condition_gate_init, z_cross_attention, z_normalization=False,
-                 plan_span_beats=16):
+                 plan_span_beats=16, planner_layout='legacy'):
         super().__init__()
         self.validate_inputs = True
         if type(z_cross_attention) is not bool:
@@ -34,9 +34,10 @@ class Decoder(nn.Module):
             raise ValueError('invalid Decoder numerical configuration')
         self.dim, self.audio_dim, self.router_layer = dim, audio_dim, router_layer
         self.plan_span_beats = plan_span_beats
+        self.planner_layout = planner_layout
         self.embedding = TokenEmbedding(dim, note_dims, route_dims, time_base, time_scale)
         self.condition = ConditionAdapter(latent_dim, dim, z_cross_attention, norm_eps, z_normalization,
-                                          plan_span_beats=plan_span_beats)
+                                          plan_span_beats=plan_span_beats, planner_layout=planner_layout)
         self.target_type = nn.Embedding(5, dim)
         self.router_norm = nn.LayerNorm(dim, eps=norm_eps)
         self.type_head = nn.Linear(dim, 5)
@@ -55,7 +56,7 @@ class Decoder(nn.Module):
             validate_memory(audio, self.audio_dim)
         return tuple(layer.audio_attn.project(audio, indices=indices) for layer in self.layers)
 
-    def prepare_memory(self, audio_kv, audio_mapping, z, plan, plan_valid, *, audio_layout=None):
+    def prepare_memory(self, audio_kv, audio_mapping, z, plan, plan_valid, *, audio_layout=None, plan_beats=None):
         """One fresh object per target window batch; conditions come from public tensors."""
         if (self.validate_inputs and (len(audio_kv) != len(self.layers) or audio_mapping.dtype != torch.long
                 or audio_mapping.shape != (len(z.values),))):
@@ -66,8 +67,8 @@ class Decoder(nn.Module):
         if audio_layout is not None:
             if self.validate_inputs:
                 require((audio_mapping == audio_layout['mapping']).all(), 'audio query layout ownership differs')
-        condition = self.condition(z, plan, plan_valid)
-        plan_index = z.values.shape[1] if self.plan_span_beats == 16 else None
+        condition = self.condition(z, plan, plan_valid, plan_beats)
+        plan_index = z.values.shape[1] if self.plan_span_beats == 16 and self.planner_layout == 'legacy' else None
         condition_indices = None if audio_layout is None else audio_layout.get('condition_rows', {}).get('key_indices')
         def select(kv):
             if audio_layout is not None:

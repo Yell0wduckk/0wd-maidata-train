@@ -60,26 +60,44 @@ def assemble_full_p0(local, starts, window_to_audio, coverages, *, p0_rate, layo
 
 
 
-def draft_queries(coverages, audio_mapping, *, z_stride_beats=None):
+def draft_queries(coverages, audio_mapping, *, z_stride_beats=None, anchor_mode='block-center'):
     from .spacing import z_stride
     rows, valid = [], []
     for index in audio_mapping.tolist():
         c = coverages[index]
         stride = z_stride(z_stride_beats, target_beats=c.target_beats)
-        count = c.draft_beats // stride
-        rows.append(c.first_beat + torch.arange(count, device=audio_mapping.device).float()*stride + stride/2)
+        if anchor_mode == 'integer':
+            if stride != 1:
+                raise ValueError('integer D centers require stride one')
+            count, offset = c.draft_beats + 1, 0.
+        elif anchor_mode == 'block-center':
+            count, offset = c.draft_beats // stride, stride/2
+        else:
+            raise ValueError('unsupported D anchor mode')
+        rows.append(c.first_beat + torch.arange(count, device=audio_mapping.device).float()*stride + offset)
         valid.append(torch.ones(count, device=audio_mapping.device, dtype=torch.bool))
     return pad_sequence(rows, batch_first=True), pad_sequence(valid, batch_first=True)
 
 
 def select_windows(z, window_groups, starts, window_valid, *, target_beats, before_beats, after_beats,
-                   layout=None, z_stride_beats=None):
+                   layout=None, z_stride_beats=None, anchor_mode='block-center'):
     """Separate calls select R, P or Decoder contexts; no query regeneration."""
     from .layout import prepare_selection, to_device
     if layout is None:
         layout = to_device(prepare_selection(z.beats.detach().cpu(), z.valid.cpu(), window_groups.cpu(),
             starts.detach().cpu(), window_valid.cpu(), target_beats=target_beats,
-            before_beats=before_beats, after_beats=after_beats, z_stride_beats=z_stride_beats), z.values.device)
+            before_beats=before_beats, after_beats=after_beats, z_stride_beats=z_stride_beats,
+            anchor_mode=anchor_mode), z.values.device)
     values = z.values.flatten(0, 1)[layout['indices']].masked_fill(~layout['valid'][..., None], 0)
     return WindowLatents(BeatMemory(values, layout['beats'], layout['valid']),
                          starts, target_beats, window_valid)
+
+
+def gather_centers(z, window_groups, centers, window_valid, *, layout=None):
+    """Select any exact center grid without changing coordinates or detaching values."""
+    from .layout import prepare_centers, to_device
+    if layout is None:
+        layout = to_device(prepare_centers(z.beats.detach().cpu(), z.valid.cpu(), window_groups.cpu(),
+            centers.detach().cpu(), window_valid.cpu()), z.values.device)
+    values = z.values.flatten(0, 1)[layout['indices']].masked_fill(~layout['valid'][..., None], 0)
+    return BeatMemory(values, layout['beats'], layout['valid'])

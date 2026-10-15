@@ -142,6 +142,10 @@ def restore(payload, model, optimizer, scheduler, *, config, binding, source, st
     saved.setdefault('reconstruction_route_loss', 'ce')
     current.setdefault('planner_span_beats', 16)
     saved.setdefault('planner_span_beats', 16)
+    for key, default in (('planner_layout', 'legacy'), ('planner_stride_beats', None),
+                         ('draft_z_anchor_mode', 'block-center'), ('reconstruction_span_beats', None)):
+        current.setdefault(key, default)
+        saved.setdefault(key, default)
     saved.setdefault('pretrain_audio_mode', 'joint')
     saved.setdefault('draft_z_stride_beats', 1)  # Legacy split checkpoints are per-beat.
     if payload.get('audio_producer') != model.audio_producer:

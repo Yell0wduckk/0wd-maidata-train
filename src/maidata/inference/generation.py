@@ -276,7 +276,8 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
         selected = decoder_z_window(conditions, i, config, device)
         audio_index = i if conditions.audio_scope == 'window' else 0
         memory = decoder.prepare_memory(audio_kv, torch.tensor([audio_index], device=device), selected,
-                                        conditions.plans[i:i+1], conditions.plan_valid[i:i+1])
+            conditions.plans[i:i+1], conditions.plan_valid[i:i+1],
+            **({} if conditions.plan_beats is None else {'plan_beats': conditions.plan_beats[i:i+1]}))
         session.reset_attention()
         boundary, session.cache, history_count = prefill(decoder, memory, groups, timing, start_tick,
                                                         config['chart_history_beats'], device=device)
@@ -305,6 +306,7 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
             boundary_delta_ms=boundary.delta_ms, generated_tokens=len(tokens), onsets=len(new),
             plan12=conditions.plans[i].float().cpu().tolist(),
             plan_valid=conditions.plan_valid[i].cpu().tolist(),
+            plan_beats=None if conditions.plan_beats is None else conditions.plan_beats[i].cpu().tolist(),
             plan_span_beats=config.get('planner_span_beats', 16),
             time_sampling='tick384-continue-substep-greedy' if options.temperature == 0 else 'tick384-continue-substep-sampling', **report))
         emit(progress, 'window_done', window=i+1, windows=len(conditions.starts), tokens=len(tokens),
