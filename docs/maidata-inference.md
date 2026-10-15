@@ -127,6 +127,8 @@ M使用独立CONT输入；续接锁定时间类型，每次CONT执行主干并�
 
 经过判定区后的撞尾（`path_guard`）例外采用 NOTE 采样后的修复，不在 type / kind / pad / flags 选择时硬屏蔽。间隔按 Slide 实际进入该判定区至 NOTE 起音的秒数计算：`150 <= gap <= 200 ms` 自动设置 `ex=1`，保留 kind、pad、其他 flags 及后续 Hold / Slide 内容；`0 < gap < 150 ms` 放弃这个 NOTE，强制回到 MOMENT 并重新选择时间，不在原起音改选 Touch。已有 EX 也不能跳过150 ms以内的回退。多个路径同时命中时任一严重撞尾即回退，初次重试时间至少到所有命中路径的150 ms边界；不是将其他音符或未来窗口整体向后移动。Slide 起点 `launch_guard`、占手、重叠和其他 Physical 规则不变。
 
+Hold / Touch Hold 与 Slide 最终 route 的最后判定区另有推理时概率修复：duration 完成后比较位置字段和时长的合法原概率；换 route 排除同终点并重推 duration，换 pad 保留 duration。判定、CONT 概率与状态合同见 [最终判定区修复](inference-hold-slide-final-area.md)。
+
 若撞尾发生于 MOMENT 后的第一个 NOTE，撤回尚未落音的 MOMENT 再重采样，避免连续 MOMENT 或遗留空起音；若同一起音已有完成音符，则保留它们并选择下一 MOMENT。前缀、规则、K/V、流式文本和 IR 同步回退。每窗生成报告及交互结果的 `tail_repairs` 记录加 EX / MOMENT 修复，搜索撤回也撤销对应修复记录；这些有意修复不计为 Physical bypass。整曲、续写和范围生成共用该流程。
 
 加 EX 不增加模型前向，只修改尚未送回模型的 NOTE。MOMENT 回退复用原前缀和 Router 前半层输出，但重新执行时间类型对应的后半层；延后起音的 NOTE 也需重新预测，长时值可能增加 CONT 步骤。不重跑 Encoder、Drafter / Planner 或整段前缀，不能将其计算量描述为完全不变。CPU 小模型测试核对了实际 begin / complete 调用次数及重算后 K/V 与接受序列的一致性。

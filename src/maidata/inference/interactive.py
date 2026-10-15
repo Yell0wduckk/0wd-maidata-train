@@ -332,6 +332,7 @@ class Interactive:
         repeat_prefix = repetition_history(groups, options.repetition_history_limit)
         generated, produced, reused, computed, bypass, repairs = [], 0, 0, 0, 0, []
         stop_reason = limit_reason
+        hold_repairs = []
         floor = start
         while floor < end:
             index = floor // self.window_ticks
@@ -368,6 +369,7 @@ class Interactive:
             reused, computed = reused + kept, computed + fresh
             bypass += len(report['physical_bypass'])
             repairs.extend(report['tail_repairs'])
+            hold_repairs.extend(report.get('hold_slide_tail_repairs', ()))
             if new:
                 cursor, more = origin, []
                 for token in new:
@@ -417,6 +419,7 @@ class Interactive:
             tokens=produced, reused_rows=reused, computed_rows=computed,
             skipped_notes=self.skipped, physical_bypass=bypass, seed=options.seed,
             limit_tick=end, stop_reason=stop_reason, plan_source=plan_source, tail_repairs=repairs,
+            hold_slide_tail_repairs=hold_repairs,
             max_slide_judge_areas=options.max_slide_judge_areas,
             **options.repetition_settings)
 

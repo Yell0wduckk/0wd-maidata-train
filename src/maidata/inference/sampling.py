@@ -10,6 +10,7 @@ from maidata.chart.windows import TimeTarget
 from maidata.time.discrete import compile_support_tree, TimeQuery, CONTINUE
 from .options import resolve_seed, resolve_repetition, validate_slide_limit
 from .tail_collision import TailRepair
+from .hold_tail import FieldProbabilities, DurationDistribution
 
 
 @dataclass(frozen=True)
@@ -43,9 +44,10 @@ class Sampler:
         self.seed = resolve_seed(seed)
         self.generator = torch.Generator(device='cpu').manual_seed(self.seed)
         self.physical_hard_mask = physical_hard_mask
+        self.field_choice = self.duration_choice = None
 
-    def order(self, scores, allowed=None, *, identities=None, history=(), field=None):
-        """Lazy weighted sampling without replacement; retries never repeat a choice."""
+    def filtered_scores(self, scores, allowed=None, *, identities=None, history=(), field=None):
+        """Original sampling support, before the deferred Hold/final-area rule."""
         values = scores.detach().float().cpu().flatten().clone()
         if torch.isnan(values).any() or torch.isposinf(values).any():
             raise ValueError('nonfinite model sampling scores')
@@ -80,6 +82,20 @@ class Sampler:
             keep = torch.zeros_like(values, dtype=torch.bool)
             keep[indices] = True
             values.masked_fill_(~keep, -torch.inf)
+        return values
+
+    def log_probabilities(self, values):
+        if not torch.isfinite(values).any():
+            return torch.full_like(values, -torch.inf, dtype=torch.float64)
+        return (values.double() / (self.temperature or 1.)).log_softmax(0)
+
+    def order(self, scores, allowed=None, *, identities=None, history=(), field=None):
+        yield from self.order_filtered(self.filtered_scores(scores, allowed,
+            identities=identities, history=history, field=field))
+
+    def order_filtered(self, values):
+        """Lazy weighted sampling without replacement; unchanged normal RNG."""
+        values = values.clone()
         while torch.isfinite(values).any():
             index = (int(values.argmax()) if self.temperature == 0 else
                      int(torch.multinomial(((values-values.max()) / self.temperature).softmax(0), 1, generator=self.generator)))
@@ -100,8 +116,10 @@ class Sampler:
                 name, kt = KINDS[k], torch.tensor(k, device=device)
                 pads = TOUCH_PADS if name in ('touch', 'touch_hold') else BUTTON_PADS
                 positions = oracle.query_positions(name)
-                for p in self.order(heads.pad_logits(h, kt)[:len(pads)], [self.allowed(positions[n]) for n in pads],
-                                    identities=pads, history=history, field='pad'):
+                values = self.filtered_scores(heads.pad_logits(h, kt)[:len(pads)],
+                    [self.allowed(positions[n]) for n in pads], identities=pads, history=history, field='pad')
+                probabilities = FieldProbabilities(tuple(self.log_probabilities(values).tolist()), tuple(pads))
+                for p in self.order_filtered(values):
                     logits = heads.flag_logits(h, kt, torch.tensor(p, device=device)).float().log_softmax(-1)
                     applicable = APPLICABLE[name]
                     options = [Note.make(name, pads[p], **dict(zip(applicable, bits)))
@@ -113,6 +131,7 @@ class Sampler:
                         note = options[f]
                         repair = oracle.tail_repair(note) if hasattr(oracle, 'tail_repair') else None
                         candidate = repair or note
+                        self.field_choice = probabilities if name in ('hold', 'touch_hold') else None
                         yield (candidate,output.cache) if return_cache else candidate
                         if isinstance(repair, TailRepair) and repair.minimum_tick is not None:
                             # The caller must retry time, never another pad/kind
@@ -121,12 +140,16 @@ class Sampler:
         elif kind == 'ROUTE':
             first = oracle.physical.grammar.state.phase in ('route', 'track_done')
             candidates = [Route(i, 0 if first else None) for i in range(71)]
-            for r in self.order(heads.route(h), [self.allowed(oracle.query(n)) for n in candidates],
-                                identities=range(71), history=history, field='route'):
+            values = self.filtered_scores(heads.route(h), [self.allowed(oracle.query(n)) for n in candidates],
+                identities=range(71), history=history, field='route')
+            probabilities = FieldProbabilities(tuple(self.log_probabilities(values).tolist()), tuple(range(71)))
+            for r in self.order_filtered(values):
                 if first:
                     for b in self.order(heads.break_logits(h, torch.tensor(r, device=device))):
+                        self.field_choice = probabilities
                         yield (Route(r,b),output.cache) if return_cache else Route(r,b)
                 else:
+                    self.field_choice = probabilities
                     yield (candidates[r],output.cache) if return_cache else candidates[r]
         else:
             cursor = oracle.physical.grammar.state.cursor
@@ -137,6 +160,12 @@ class Sampler:
             if output is None:
                 raise ValueError('time generation requires a reusable completed main prefix')
             tree = compile_support_tree(stage,timing,kind=kind,window_end=end_tick,cap_tick=cap_tick,target=None)
+            if kind != 'MOMENT':
+                distribution = DurationDistribution(self, decoder, output, tree, timing)
+                for leaf in distribution.sampled():
+                    self.duration_choice = distribution
+                    yield (leaf.token, leaf.cache) if return_cache else leaf.token
+                return
             from maidata.decoder.batching import pack_tokens
             from maidata.decoder.sequence import continue_token
             def emit(token, current):
