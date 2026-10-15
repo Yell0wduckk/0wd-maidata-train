@@ -73,7 +73,9 @@ def test_real_integer_generation_online_cold_hot_and_independent_plan_keys(
     assert reports[1]['cache']['audio']['hit'] is False and reports[2]['cache']['audio']['hit'] is True
 
 
-def test_integer_preencode_predraft_strict_load_and_semantic_cache_rejection(integer_config, tmp_path, capsys):
+@pytest.mark.parametrize('corruption', ['plan-phase', 'z-length'])
+def test_integer_preencode_predraft_strict_load_and_semantic_cache_recovery(
+        integer_config, tmp_path, capsys, corruption):
     path = inputs(integer_config, tmp_path)
     with ExitStack() as stack:
         calls = spies(stack, forbid=('draft', 'planner', 'decoder'))
@@ -101,10 +103,28 @@ def test_integer_preencode_predraft_strict_load_and_semantic_cache_rejection(int
     checkpoint.config['planner_layout'] = 'legacy'
     second = draft_identity(checkpoint, 'audio', difficulty=5, level=14.5, device='cpu', precision='fp32')
     assert identity_key(first) != identity_key(second)
-    # Same tensor shapes with a shifted phase must still fail and preserve cache.
-    saved['plan_beats'][0, 0] = 2
+    if corruption == 'plan-phase':
+        # Even the same tensor shapes with a shifted phase require new D/P output.
+        saved['plan_beats'][0, 0] = 2
+        reason = 'cached centered Plan coordinates'
+    else:
+        saved['z'] = {key: value[:, :-1] for key, value in saved['z'].items()}
+        reason = 'invalid cached memory'
     torch.save(saved, draft_path)
-    original = draft_path.read_bytes()
-    with pytest.raises(ValueError, match='cached centered Plan coordinates'):
+    original_audio = audio_path.read_bytes()
+    with ExitStack() as stack:
+        calls = spies(stack, forbid=('encoder', 'decoder'))
         predraft(args)
-    assert draft_path.read_bytes() == original
+        assert calls['draft'].call_count == calls['planner'].call_count == 1
+    report = json.loads(capsys.readouterr().out)['draft_cache']
+    assert report['hit'] is False and report['invalidated'] is True
+    assert reason in report['error']
+    assert audio_path.read_bytes() == original_audio
+    repaired = torch.load(draft_path, weights_only=True)
+    assert repaired['z']['beats'].tolist() == [list(range(33))]
+    assert repaired['plan_beats'].tolist() == [[0,4,8,12,16], [16,20,24,28,32]]
+    assert torch.equal(repaired['plans'], saved['plans'])
+    with ExitStack() as stack:
+        spies(stack, forbid=('encoder', 'draft', 'planner', 'decoder'))
+        predraft(args)
+    assert json.loads(capsys.readouterr().out)['draft_cache']['hit'] is True

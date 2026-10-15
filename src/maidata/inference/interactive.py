@@ -1,7 +1,7 @@
 """python -m maidata.inference.interactive: a resident joint decoder for editor requests.
 
-The process loads only M and reuses the audio and Draft/Plan caches written by
-``preencode`` / ``predraft`` (it never runs E, D or P). It then answers JSON-line
+The process normally loads only M and reuses audio and Draft/Plan caches written
+by ``preencode`` / ``predraft``; invalid entries are rebuilt once. It answers JSON-line
 requests on stdin with JSON-line events on stdout:
 
 - ``{"op": "chart", "revision": r, "ir": <maimai.chart_ir.v1>}`` replaces the
@@ -184,14 +184,19 @@ class Interactive:
         from maidata.model import decoder_time_distributions
         from .cache import JointCache, draft_identity, identity_key
         from .checkpoint import JointCheckpoint
-        from .precompute import read_timing, requested_audio_identity
+        from .precompute import read_features, read_timing, requested_audio_identity
         self.emit = emit
         self.device = torch.device(args.device)
         self.precision = args.precision
         self.timing_data, self.timing = read_timing(args)
         checkpoint = JointCheckpoint(args.joint_checkpoint)
         cache = JointCache(args.cache_dir, checkpoint, device=self.device, precision=args.precision)
-        encoded = cache.find_audio(requested_audio_identity(checkpoint, args, self.timing, self.device))
+        identity = requested_audio_identity(checkpoint, args, self.timing, self.device)
+        with self.autocast():
+            encoded = cache.find_audio(identity)
+            if encoded is None and cache.report['audio'].get('invalidated'):
+                grid, duration = read_features(args, self.timing_data, checkpoint.config)
+                encoded = cache.encode(identity, grid, self.timing, duration)
         if encoded is None:
             raise FileNotFoundError('No matching audio cache; run audio preencoding for this audio/timing/checkpoint first')
         draft = cache.root/'draft'/(identity_key(draft_identity(checkpoint, encoded.key, difficulty=args.difficulty,

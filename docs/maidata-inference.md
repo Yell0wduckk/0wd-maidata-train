@@ -86,7 +86,7 @@ python -m maidata.inference.predraft \
 
 来源只比较绝对路径、文件大小、纳秒修改时间及配方元数据；引用 Mel 的 grid 还读取小型侧车 JSON 并记录引用文件元数据。不扫描目录、不计算音频/权重/源码内容哈希；KEY 仅是小型身份文档的摘要。同路径替换文件须更新文件元数据。历史联合配方未记录 P0 归一化时沿用 False，不继承新训练默认值。
 
-不同身份使用不同缓存项，每项通过同目录唯一临时文件原子替换，Windows 占用最多重试约一秒；未发布的临时文件不会命中。损坏、截断或身份/张量形状不一致的已有项明确报错，不静默重算覆盖。某层失败时保留已成功发布的其他层，下次调用可继续复用；不把预计算成功当成整曲生成成功。
+不同身份使用不同缓存项，每项通过同目录唯一临时文件原子替换，Windows 占用最多重试约一秒；未发布的临时文件不会命中。当前请求对应的音频或 Draft/Plan 项若损坏、截断，或身份/张量形状、数值、坐标不一致，会记录原因，只清理该文件，并按原请求重建一次。坏 Draft/Plan 复用有效音频，只运行 D/P；坏音频在预编码、普通推理或交互会话中使用原音频参数重跑 E。报告记录 `hit=false`、`invalidated=true` 和 `error`；修复后再次调用正常命中。权限、内存/显存、模型加载/计算和保存失败照常报错，不触发清理或循环重试。显式 `predraft --audio-cache` 只读指定音频文件，不能删除任意传入路径；该音频文件无效时需用原参数执行预编码，checkpoint/device/precision 不匹配也不删除。某层失败时保留已成功发布的其他层，下次调用可继续复用；不把预计算成功当成整曲生成成功。
 
 Python 在线与缓存入口共用 `encode_joint_audio(...) -> (local_conditions, center_p0)` 和 `decode_joint_draft(..., local_conditions, center_p0, difficulty=..., level=...) -> Conditions`。`JointCheckpoint.models(device=..., components=...)` 严格恢复所选模块；原 `load_joint_models(...)` 默认仍加载 E/D/P/M。缓存不包含 R、IR 或可变生成状态。
 

@@ -68,6 +68,9 @@ class StderrProgress:
                 message = f'{label}: {status} ({elapsed:.1f}s)'
                 if kind == 'stage_error':
                     message += f"; {event['error']}"
+        elif kind == 'cache_invalid':
+            label = 'Audio' if event['cache'] == 'audio' else 'Draft/Plan'
+            message = f"Invalid {label} cache removed; rebuilding: {event['path']}; {event['error']}"
         elif kind == 'encoder_progress':
             key = ('encoder', event.get('encoder'))
             complete = event['completed'] == event['total']

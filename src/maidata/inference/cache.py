@@ -1,10 +1,11 @@
-"""Two immutable inference caches; identities use metadata, never payload hashing."""
+"""Two inference caches with exact-entry recovery; identities use metadata only."""
 from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 import math
 import os
 from pathlib import Path, PureWindowsPath
+import pickle
 import tempfile
 import time
 
@@ -15,10 +16,17 @@ from maidata.draft.windows import SongCoverage, song_coverage
 from maidata.model import ENCODER_KEYS
 from .conditioning import (Conditions, encode_joint_audio, decode_joint_draft, empty_plan_geometry,
                            plan_centers_for_starts)
-from .progress import stage
+from .progress import emit, stage
 
 AUDIO_SCHEMA = 'maidata.inference-audio.v1'
 DRAFT_SCHEMA = 'maidata.inference-draft-plan.v1'
+
+
+class InvalidCacheError(ValueError):
+    """A serialized inference cache fails its content contract, not execution."""
+
+
+CONTENT_ERRORS = (ValueError, KeyError, TypeError, AttributeError, IndexError, OverflowError)
 
 
 def file_identity(path):
@@ -114,6 +122,9 @@ def memory_payload(memory):
 
 
 def read_memory(row, *, width, rows, length=None, empty=False):
+    if (not isinstance(row, dict) or any(not isinstance(row.get(key), torch.Tensor)
+            or row[key].layout != torch.strided for key in ('values', 'beats', 'valid'))):
+        raise ValueError('invalid cached memory tensor structure')
     values, beats, valid = (row[key] for key in ('values', 'beats', 'valid'))
     if (values.ndim != 3 or values.shape[0] != rows or values.shape[-1] != width
             or valid.shape != values.shape[:2] or beats.shape != valid.shape
@@ -130,6 +141,19 @@ def read_payload(path, schema, identity=None):
     path = Path(path)
     try:
         payload = torch.load(path, map_location='cpu', weights_only=True)
+    except torch.OutOfMemoryError:
+        raise
+    except RuntimeError as exc:
+        # torch.load uses RuntimeError for malformed ZIP/legacy archives too.
+        # Allocator, device and other runtime failures must keep the cache intact.
+        if not any(message in str(exc) for message in (
+                'PytorchStreamReader', 'Invalid magic number', 'Invalid protocol version',
+                'unexpected EOF', 'storage has wrong byte size')):
+            raise
+        raise InvalidCacheError(f'invalid inference cache {path}: {exc}') from exc
+    except (pickle.UnpicklingError, EOFError, *CONTENT_ERRORS) as exc:
+        raise InvalidCacheError(f'invalid inference cache {path}: {exc}') from exc
+    try:
         if (payload['schema'] != schema or payload['complete'] is not True
                 or payload['identity']['schema'] != schema
                 or payload['key'] != identity_key(payload['identity'])
@@ -137,8 +161,8 @@ def read_payload(path, schema, identity=None):
                 or (identity is not None and payload['identity'] != canonical(identity))):
             raise ValueError('cache identity/schema differs')
         return payload
-    except Exception as exc:
-        raise ValueError(f'invalid inference cache {path}: {exc}') from exc
+    except CONTENT_ERRORS as exc:
+        raise InvalidCacheError(f'invalid inference cache {path}: {exc}') from exc
 
 
 @dataclass
@@ -171,14 +195,15 @@ def load_audio(path, config, *, device, identity=None):
                             length=context*config['fpn_rates'][0])
         centers = read_memory(payload['centers'], width=config['d_model'], rows=1,
                               length=coverage.audio_windows*config['target_beats']*config['fpn_rates'][0])
-        local, centers = (BeatMemory(*(getattr(bank, k).to(device) for k in ('values', 'beats', 'valid')))
-                          for bank in (local, centers))
-        z, plans, plan_valid = empty_plan_geometry(starts, coverage, config, device)
-        conditions = Conditions(local, z, plans, plan_valid, starts, coverage, 'window',
-                                plan_centers_for_starts(starts, config, device))
-        return EncodedAudio(conditions, centers, duration, payload['key'], payload['identity'])
-    except Exception as exc:
-        raise ValueError(f'invalid inference cache {path}: {exc}') from exc
+    except CONTENT_ERRORS as exc:
+        raise InvalidCacheError(f'invalid inference cache {path}: {exc}') from exc
+    # Device allocation is execution, and must never trigger cache deletion.
+    local, centers = (BeatMemory(*(getattr(bank, k).to(device) for k in ('values', 'beats', 'valid')))
+                      for bank in (local, centers))
+    z, plans, plan_valid = empty_plan_geometry(starts, coverage, config, device)
+    conditions = Conditions(local, z, plans, plan_valid, starts, coverage, 'window',
+                            plan_centers_for_starts(starts, config, device))
+    return EncodedAudio(conditions, centers, duration, payload['key'], payload['identity'])
 
 
 class JointCache:
@@ -187,13 +212,31 @@ class JointCache:
         self.device, self.precision, self.progress = device, precision, progress
         self.report = dict(audio=None, draft=None)
 
+    def _record(self, kind, path, *, hit):
+        absolute = str(path.resolve())
+        previous = self.report[kind] or {}
+        self.report[kind] = dict(previous if previous.get('path') == absolute else {},
+                                 path=absolute, hit=hit)
+
+    def _invalidate(self, kind, path, error):
+        # Only callers with a key computed from this request reach this method.
+        # Explicit --audio-cache paths and checkpoint files never reach unlink.
+        path.unlink(missing_ok=True)
+        self._record(kind, path, hit=False)
+        self.report[kind].update(invalidated=True, error=str(error))
+        emit(self.progress, 'cache_invalid', cache=kind, path=str(path.resolve()), error=str(error))
+
     def find_audio(self, identity):
         path = self.root/'audio'/(identity_key(identity)+'.pt')
-        self.report['audio'] = dict(path=str(path.resolve()), hit=path.is_file())
+        self._record('audio', path, hit=path.is_file())
         if not path.exists():
             return None
-        with stage(self.progress, 'audio_cache_read'):
-            return load_audio(path, self.checkpoint.config, device=self.device, identity=identity)
+        try:
+            with stage(self.progress, 'audio_cache_read'):
+                return load_audio(path, self.checkpoint.config, device=self.device, identity=identity)
+        except InvalidCacheError as exc:
+            self._invalidate('audio', path, exc)
+            return None
 
     def encode(self, identity, grid, timing, duration):
         models = self.checkpoint.models(device=self.device, components=('encoder',))
@@ -206,43 +249,52 @@ class JointCache:
             local=memory_payload(local.audio), centers=memory_payload(centers))
         with stage(self.progress, 'audio_cache_write'):
             atomic_save(path, payload)
-        self.report['audio'] = dict(path=str(path.resolve()), hit=False)
+        self._record('audio', path, hit=False)
         return result
+
+    def _read_draft(self, path, identity, encoded):
+        payload = read_payload(path, DRAFT_SCHEMA, identity)
+        try:
+            c = self.checkpoint.config
+            z = read_memory(payload['z'], width=c['draft_latent_dim'], rows=1,
+                length=(encoded.local.coverage.draft_beats+1 if c.get('draft_z_anchor_mode') == 'integer'
+                        else encoded.local.coverage.draft_beats//c['draft_z_stride_beats']))
+            plans, valid = payload['plans'], payload['plan_valid']
+            plan_shape = ((len(encoded.local.starts),
+                (c['target_beats']+c['decoder_z_before_beats']+c['decoder_z_after_beats'])//4, 12)
+                if c.get('planner_span_beats', 16) == 4 else (len(encoded.local.starts), 12))
+            plan_beats = None
+            if c.get('planner_layout', 'legacy') == 'centered-overlap':
+                plan_shape = (len(encoded.local.starts), 5, 12)
+                plan_beats = payload.get('plan_beats')
+                desired = plan_centers_for_starts(encoded.local.starts, c, 'cpu')
+                if (not isinstance(plan_beats, torch.Tensor) or plan_beats.layout != torch.strided
+                        or plan_beats.shape != desired.shape or not torch.equal(plan_beats, desired)):
+                    raise ValueError('cached centered Plan coordinates differ')
+            if (payload['starts'] != list(encoded.local.starts)
+                    or not isinstance(plans, torch.Tensor) or not isinstance(valid, torch.Tensor)
+                    or plans.layout != torch.strided or valid.layout != torch.strided
+                    or plans.shape != plan_shape or not plans.is_floating_point()
+                    or valid.shape != plans.shape[:-1] or valid.dtype != torch.bool
+                    or not torch.isfinite(plans).all()):
+                raise ValueError('invalid cached plan shape, dtype or values')
+        except CONTENT_ERRORS as exc:
+            raise InvalidCacheError(f'invalid inference cache {path}: {exc}') from exc
+        z = BeatMemory(*(getattr(z, k).to(self.device) for k in ('values', 'beats', 'valid')))
+        return replace(encoded.local, z=z, plans=plans.to(self.device), plan_valid=valid.to(self.device),
+            plan_beats=None if plan_beats is None else plan_beats.to(self.device))
 
     def draft(self, encoded, *, difficulty, level):
         identity = draft_identity(self.checkpoint, encoded.key, difficulty=difficulty, level=level,
                                   device=self.device, precision=self.precision)
         path = self.root/'draft'/(identity_key(identity)+'.pt')
-        self.report['draft'] = dict(path=str(path.resolve()), hit=path.is_file())
+        self._record('draft', path, hit=path.is_file())
         if path.exists():
-            with stage(self.progress, 'draft_cache_read'):
-                payload = read_payload(path, DRAFT_SCHEMA, identity)
-                try:
-                    c = self.checkpoint.config
-                    z = read_memory(payload['z'], width=c['draft_latent_dim'], rows=1,
-                        length=(encoded.local.coverage.draft_beats+1 if c.get('draft_z_anchor_mode') == 'integer'
-                                else encoded.local.coverage.draft_beats//c['draft_z_stride_beats']))
-                    plans, valid = payload['plans'], payload['plan_valid']
-                    plan_shape = ((len(encoded.local.starts),
-                        (c['target_beats']+c['decoder_z_before_beats']+c['decoder_z_after_beats'])//4, 12)
-                        if c.get('planner_span_beats', 16) == 4 else (len(encoded.local.starts), 12))
-                    plan_beats = None
-                    if c.get('planner_layout', 'legacy') == 'centered-overlap':
-                        plan_shape = (len(encoded.local.starts), 5, 12)
-                        plan_beats = payload.get('plan_beats')
-                        desired = plan_centers_for_starts(encoded.local.starts, c, 'cpu')
-                        if plan_beats is None or plan_beats.shape != desired.shape or not torch.equal(plan_beats, desired):
-                            raise ValueError('cached centered Plan coordinates differ')
-                    if (payload['starts'] != list(encoded.local.starts)
-                            or plans.shape != plan_shape or not plans.is_floating_point()
-                            or valid.shape != plans.shape[:-1] or valid.dtype != torch.bool
-                            or not torch.isfinite(plans).all()):
-                        raise ValueError('invalid cached plan shape, dtype or values')
-                except Exception as exc:
-                    raise ValueError(f'invalid inference cache {path}: {exc}') from exc
-                z = BeatMemory(*(getattr(z, k).to(self.device) for k in ('values', 'beats', 'valid')))
-                return replace(encoded.local, z=z, plans=plans.to(self.device), plan_valid=valid.to(self.device),
-                    plan_beats=None if plan_beats is None else plan_beats.to(self.device))
+            try:
+                with stage(self.progress, 'draft_cache_read'):
+                    return self._read_draft(path, identity, encoded)
+            except InvalidCacheError as exc:
+                self._invalidate('draft', path, exc)
         models = self.checkpoint.models(device=self.device, components=('draft', 'planner'))
         conditions = decode_joint_draft(models.draft, models.planner, models.config,
             encoded.local, encoded.centers, difficulty=difficulty, level=level,
