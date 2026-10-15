@@ -12,6 +12,8 @@ def main(argv=None):
     parser.add_argument('--config', type=Path, help='JSON overrides for the unique entry.CONFIG')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--resume', type=Path, help='complete-epoch joint checkpoint')
+    parser.add_argument('--upgrade-z-normalization', action='store_true',
+                        help='Explicitly enable parameter-free Z adapter normalization on a legacy joint resume')
     parser.add_argument('--show-config', action='store_true')
     checks = parser.add_mutually_exclusive_group()
     checks.add_argument('--cuda-check', action='store_true', help='one original batch correctness audit only')
@@ -29,6 +31,8 @@ def main(argv=None):
         config['joint_train_output'] = str(args.output)
     if args.resume and (args.cuda_check or args.cost_check):
         parser.error('diagnostics use an independent scratch model, not a resume')
+    if args.upgrade_z_normalization and not args.resume:
+        parser.error('--upgrade-z-normalization requires --resume')
     if args.check_step is not None and args.check_step < 0:
         parser.error('--check-step must be nonnegative')
     config = resolve(config)
@@ -37,7 +41,8 @@ def main(argv=None):
         return 0
     from .runner import run
     run(config, resume=args.resume, cuda_check=args.cuda_check,
-        cost_check=args.cost_check, check_step=args.check_step)
+        cost_check=args.cost_check, check_step=args.check_step,
+        upgrade_z_normalization=args.upgrade_z_normalization)
     return 0
 
 

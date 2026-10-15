@@ -8,6 +8,7 @@ import numpy as np
 import torch
 
 from maidata.model import ENCODER_KEYS
+from maidata.draft.route_acceptance import route_loss_recipe
 from .data import read_json
 
 
@@ -22,9 +23,12 @@ def digest_file(path):
 
 def recipe(config):
     # Unused Decoder/sampling knobs cannot change this training contract.
-    return json.loads(json.dumps({k: v for k, v in config.items()
+    value = {k: v for k, v in config.items()
         if (k in ENCODER_KEYS or k.startswith(('draft_', 'reconstruction_', 'planner_', 'pretrain_')))
-        and k not in PATH_KEYS}, sort_keys=True))
+        and k not in PATH_KEYS
+        and k not in ('reconstruction_route_loss', 'reconstruction_route_acceptance')}
+    value.update(route_loss_recipe(config))
+    return json.loads(json.dumps(value, sort_keys=True))
 
 
 def source_identity():
@@ -133,6 +137,11 @@ def restore(payload, model, optimizer, scheduler, *, config, binding, source, st
     if payload.get('schema') != SCHEMA:
         raise ValueError('resume architecture, recipe or scheduler steps changed: split Drafter requires v3 checkpoint')
     current, saved = recipe(config), dict(payload['recipe'])
+    current.setdefault('reconstruction_route_vocabulary', 'route71')
+    saved.setdefault('reconstruction_route_vocabulary', 'route71')
+    saved.setdefault('reconstruction_route_loss', 'ce')
+    current.setdefault('planner_span_beats', 16)
+    saved.setdefault('planner_span_beats', 16)
     saved.setdefault('pretrain_audio_mode', 'joint')
     saved.setdefault('draft_z_stride_beats', 1)  # Legacy split checkpoints are per-beat.
     if payload.get('audio_producer') != model.audio_producer:

@@ -4,7 +4,7 @@ from contextlib import nullcontext
 
 import torch
 
-from maidata.draft.losses import FIELD_PREFIX
+from maidata.draft.losses import FIELD_PREFIX, COUNT_TERMS, count_supervision_enabled
 from maidata.training.pretrain import weighted_loss, autocast
 from maidata.training.runner import supports
 from maidata.decoder_training.runner import Metrics as DecoderMetrics, chunk_loss
@@ -57,7 +57,7 @@ class AuxiliaryMetrics:
         reconstruction += sum(terms[key]['mean'] * config[weight] for key, weight in (
             ('moment96', 'reconstruction_moment_weight'), ('count', 'reconstruction_count_weight'),
             ('empty', 'reconstruction_empty_weight'), ('positive_count', 'reconstruction_positive_count_weight'))
-            if key in terms)
+            if key in terms and (key not in COUNT_TERMS or count_supervision_enabled(config)))
         planner = sum(terms[key]['mean'] * config[key+'_weight']
                       for key in ('planner_continuous', 'planner_category'))
         return dict(loss=reconstruction+planner, reconstruction=reconstruction, planner=planner,
@@ -93,7 +93,8 @@ class JointMetrics:
             moment=mean('moment96') * config['reconstruction_moment_weight'] * r_weight,
             count=(mean('count') * config['reconstruction_count_weight']
                    + mean('empty') * config['reconstruction_empty_weight']
-                   + mean('positive_count') * config['reconstruction_positive_count_weight']) * r_weight)
+                   + mean('positive_count') * config['reconstruction_positive_count_weight']) * r_weight
+                   if count_supervision_enabled(config) else 0.)
         losses = dict(main_decoder=weighted['decoder'],
             drafter=weighted['reconstruction'] + weighted['planner'],
             drafter_fields=parts['fields'], drafter_moment=parts['moment'], drafter_count=parts['count'],

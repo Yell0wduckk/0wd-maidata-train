@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from maidata.decoder.types import Memory
 from maidata.decoder_training.conditioning import Conditions
-from maidata.decoder_training.gt_plan_cache import GTPlanCache
+from maidata.decoder_training.gt_plan_cache import GTPlanCache, select_plan_window
 from maidata.decoder_training.ordering import history_dropped
 from maidata.decoder_training.plan import DecoderPlan
 from maidata.decoder_training.preparation import prepare_batch
@@ -44,7 +44,7 @@ class JointDataset(Dataset):
         self.windows = windows if windows is not None else WindowCache(
             [plan.decoder_plan], config, {})
         self.gt_plan = gt_plan if gt_plan is not None else GTPlanCache(
-            config['decoder_train_gt_plan_cache'])
+            config['decoder_train_gt_plan_cache'], config)
 
     def __len__(self):
         return len(self.plan.groups)
@@ -172,9 +172,9 @@ def collate_audio(items, *, config, packed=False):
             unique[identity] = len(unique)
             variant = chart_variant[window['chart_id']]
             gt = item_lookup[variant]['gt_plan']
-            index = gt['window_index'][identity]
-            plans.append(gt['plan_values'][index])
-            plan_valid.append(gt['valid'][index])
+            plan, mask = select_plan_window(gt, identity, window['chart_id'], window['start'], config)
+            plans.append(plan)
+            plan_valid.append(mask)
             decoder_groups.append(ownership[window['chart_id']])
             decoder_starts.append(window['start'])
             audio_mapping.append(audio_lookup[(variant, window['start'])])

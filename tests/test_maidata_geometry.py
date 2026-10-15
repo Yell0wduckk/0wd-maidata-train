@@ -145,7 +145,7 @@ def stage_grid(length, start=-3.0, width=2, valid=True):
 
 def test_pyramid_accepts_nondefault_rates_and_keeps_absolute_grid_and_gradients():
     stages = [stage_grid(length) for length in (48, 24, 12)]
-    pyramid = LocalPyramid(2, (5, 3, 2), 3, 1)
+    pyramid = LocalPyramid(2, (5, 3, 2), 3, 1, p0_normalization=False)
     output = pyramid(stages, torch.tensor([-2]))
     assert set(vars(output)) == {"P0", "P1", "P2"}
     for result, rate in zip((output.P0, output.P1, output.P2), (5, 3, 2)):
@@ -158,7 +158,7 @@ def test_pyramid_accepts_nondefault_rates_and_keeps_absolute_grid_and_gradients(
 
 
 def test_pyramid_projection_bias_cannot_revive_empty_branch_or_fine_padding():
-    pyramid = LocalPyramid(2, (5, 3, 2), 3, 1)
+    pyramid = LocalPyramid(2, (5, 3, 2), 3, 1, p0_normalization=False)
     for projection in pyramid.projections:
         torch.nn.init.zeros_(projection.weight)
         torch.nn.init.constant_(projection.bias, 100)
@@ -180,4 +180,4 @@ def test_pyramid_projection_bias_cannot_revive_empty_branch_or_fine_padding():
 
 def test_pyramid_rejects_unrepresentable_output_grid():
     with pytest.raises(ValueError, match="integer grid length"):
-        LocalPyramid(2, (1.1, 2, 3), 3, 1)
+        LocalPyramid(2, (1.1, 2, 3), 3, 1, p0_normalization=False)

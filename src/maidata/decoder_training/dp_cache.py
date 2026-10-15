@@ -81,19 +81,25 @@ class CachedP0Dataset(Dataset):
             window_ids=[w['window_id'] for w in windows],chart_ids=[w['chart_id'] for w in windows]))
 
 
-def save_outputs(path, batch, z, plan, producer_sha, *, z_stride_beats=None):
+def save_outputs(path, batch, z, plan, producer_sha, *, z_stride_beats=None, plan_span_beats=16):
     from maidata.draft.spacing import z_stride
     stride = z_stride(z_stride_beats)
     payload = dict(schema=SCHEMA,audio_variant=batch['variant'],producer_sha256=producer_sha,
         z_representation=Z_REPRESENTATION,z_width=z.values.shape[-1],z_stride_beats=stride,
+        plan_span_beats=plan_span_beats,
         chart_to_group=batch['chart_to_group'],conditions=batch['conditions'],
         z={k:getattr(z,k).detach().cpu() for k in ('values','beats','valid')},
         planner=dict(window_ids=batch['window_ids'],chart_ids=batch['chart_ids'],
+            plan_span_beats=plan_span_beats,
             groups=batch['groups'].cpu(),starts=batch['starts'].cpu(),
             plan_values=plan.plan_values.detach().cpu(),valid=plan.valid.cpu()))
+    expected_shape = (len(batch['window_ids']), 12)
+    if plan_span_beats == 4:
+        expected_shape = (len(batch['window_ids']), 4, 12)
+        payload['planner']['center_beats'] = batch['starts'].cpu()[:, None] + torch.arange(4)*4+2
     if (not torch.isfinite(payload['z']['values']).all()
             or not torch.isfinite(payload['planner']['plan_values']).all()
-            or payload['planner']['plan_values'].shape != (len(batch['window_ids']),12)
+            or payload['planner']['plan_values'].shape != expected_shape
             or not payload['planner']['valid'].all()):
         raise ValueError('invalid frozen D/P output')
     path = Path(path)
@@ -138,10 +144,10 @@ def export(config, p0_root, output):
     model, producer, teacher = load_export_producer(config,binding)
     if external_encoder:
         from maidata.training.frozen_p0 import FrozenP0
-        from maidata.model import ENCODER_KEYS
+        from maidata.model import encoder_config
         frozen = FrozenP0(p0_root)
         if (producer.get('audio_producer') != frozen.identity or
-                json.loads(json.dumps({k: teacher[k] for k in ENCODER_KEYS})) != frozen.encoder_config):
+                json.loads(json.dumps(encoder_config(teacher))) != frozen.encoder_config):
             raise ValueError('Drafter checkpoint was not trained on the selected frozen P0')
     elif producer != p0['producer'] or binding != p0['normalization'] or p0['p0_rate'] != teacher['fpn_rates'][0]:
         raise ValueError('P0 producer or normalization differs')
@@ -156,6 +162,7 @@ def export(config, p0_root, output):
     report = dict(schema=SCHEMA,complete=False,producer=producer,normalization=binding,
         z_representation=Z_REPRESENTATION,z_width=teacher['draft_latent_dim'],
         z_stride_beats=teacher['draft_z_stride_beats'],
+        plan_span_beats=teacher.get('planner_span_beats', 16),
         p0_manifest_sha256=None if external_encoder else digest_file(p0_root/'manifest.json'),p0_root=str(p0_root),
         precision=config['decoder_train_precision'],workers=workers,splits=splits,groups={},
         plans={} if external_encoder else {side:{name:digest_file(Path(config['decoder_train_'+side+'_plan'])/name)
@@ -176,7 +183,8 @@ def export(config, p0_root, output):
             plan = planner(target)
         path = output/'banks'/f'{batch["variant"]}.pt'
         row = save_outputs(path,batch,z,plan,producer['sha256'],
-            z_stride_beats=teacher['draft_z_stride_beats'])
+            z_stride_beats=teacher['draft_z_stride_beats'],
+            plan_span_beats=teacher.get('planner_span_beats', 16))
         if not report['groups']:
             saved = torch.load(path,map_location='cpu',weights_only=True)
             assert all(torch.equal(saved['z'][k],getattr(z,k).cpu()) for k in ('values','beats','valid'))

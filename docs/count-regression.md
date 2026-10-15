@@ -2,7 +2,13 @@
 
 2026-10-11 用户要求停止 full 联合训练，修改数量目标后从头训练。
 
-新 CONFIG 默认 `reconstruction_count_loss="mse"`、`reconstruction_count_weight=1`。
+新 CONFIG 默认 `reconstruction_count_supervision=false`，关闭独立 COUNT 监督。
+显式设为 `true` 时启用 `reconstruction_count_loss="mse"`、`reconstruction_count_weight=1`。
+开关同时覆盖 MSE 与旧 CE 两头：关闭时不计算数量 loss、不反传数量梯度，
+总目标和进度报告中的 `drafter_count` 为零；字段、MOMENT、Planner（含其数量/密度目标）
+和 M→Z→D→E 路径不变。它是监督开关，不改变 R 参数结构；数量头仍保留，
+关闭期间没有数量监督，其预测诊断不能视为已训练的数量能力。
+缺少此字段的旧配方按原来的启用状态解释，不能将旧 checkpoint 的目标静默改为关闭。
 R 的 COUNT 查询输出一个线性标量，直接拟合每拍真实 MOMENT 数量（起音组数量，
 不是同时按键数量）。有效拍含零数量和完整空尾；目标没有 log、标准化或截断，
 训练输出没有 sigmoid、取整或截断。MSE 在 FP32 中累计平方误差，除以同一次逻辑
@@ -18,7 +24,8 @@ R 的 COUNT 查询输出一个线性标量，直接拟合每拍真实 MOMENT 数
 | count | 全部有效拍的原始数量 MSE 均值，含空拍 | 1 |
 | Planner | 8 个连续目标 MSE 均值 + 0.25 × 配置类别 CE 均值 | 整体 1 |
 
-总目标为 `L_M + L_fields + L_moment + L_count + L_planner`。
+启用 COUNT 时总目标为 `L_M + L_fields + L_moment + L_count + L_planner`；
+关闭时去掉 `L_count`。
 `L_M = L_main + 0.8 L_physical + 0.5 L_judge + 0.5 L_trajectory`，
 Physical 的既有四类内部权重 `(1,1,4,1)` / 4 不变。
 权重相同不表示数值或梯度贡献相同；MSE 与原 CE 的数值不能直接比较。

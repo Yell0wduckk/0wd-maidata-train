@@ -10,7 +10,7 @@ from .types import EncoderOutput, ScaleMemory
 
 
 class LocalPyramid(nn.Module):
-    def __init__(self, d_model, fpn_rates, context_beats, audio_before_beats):
+    def __init__(self, d_model, fpn_rates, context_beats, audio_before_beats, *, p0_normalization):
         super().__init__()
         if len(fpn_rates) != 3:
             raise ValueError("the local pyramid requires three sampling rates")
@@ -21,6 +21,12 @@ class LocalPyramid(nn.Module):
         self.lengths = tuple(int(length) for length in lengths)
         self.audio_before_beats = audio_before_beats
         self.projections = nn.ModuleList(nn.Linear(d_model, d_model) for _ in range(2))
+        if type(p0_normalization) is not bool:
+            raise ValueError('P0 normalization must be boolean')
+        # One producer boundary shared by D and M. No learned gain can undo
+        # the output scale control; P1/P2 and the fusion computation stay intact.
+        self.p0_norm = (nn.LayerNorm(d_model, elementwise_affine=False)
+                        if p0_normalization else nn.Identity())
 
     def forward(self, stages: list[ScaleMemory], target_start_beats: Tensor, layout=None) -> EncoderOutput:
         start = target_start_beats.float().unsqueeze(1) - self.audio_before_beats
@@ -38,4 +44,6 @@ class LocalPyramid(nn.Module):
             result[index] = ScaleMemory(
                 mask_values(target.values + branch, target.valid), target.beats, target.valid
             )
+        p0 = result[0]
+        result[0] = ScaleMemory(mask_values(self.p0_norm(p0.values), p0.valid), p0.beats, p0.valid)
         return EncoderOutput(*result)

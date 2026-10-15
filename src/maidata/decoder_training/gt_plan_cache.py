@@ -7,23 +7,85 @@ from pathlib import Path
 
 
 SCHEMA = 'maidata.gt-plan12.v1'
+PLAN4_SCHEMA = 'maidata.gt-plan4x12.v1'
 CONTINUOUS = ('note_count', 'note_density', 'chord_ratio', 'slide_ratio',
               'last_position', 'touch_ratio', 'hold_ratio', 'relative_intensity')
 CATEGORIES = ('single', 'chord', 'slide', 'touch')
 
 
 class GTPlanCache:
-    def __init__(self, root):
+    def __init__(self, root, config=None):
         self.root = Path(root)
         path = self.root/'manifest.json'
         self.manifest = json.loads(path.read_text(encoding='utf-8'))
+        schema = self.manifest.get('schema')
+        if schema not in (None, SCHEMA, PLAN4_SCHEMA):
+            raise ValueError('unsupported GT plan cache schema')
+        # Older unschematized plan16 metadata remains readable. A plan4 cache
+        # always has its explicit schema and four-beat producer semantics.
+        self.span_beats = 4 if schema == PLAN4_SCHEMA else 16
+        if config is not None and config.get('planner_span_beats', 16) != self.span_beats:
+            raise ValueError('GT plan cache schema differs from planner_span_beats')
+        if self.span_beats == 4 and any(self.manifest.get(key) != value for key, value in (
+                ('plan_span_beats', 4), ('parent_window_beats', 16),
+                ('plans_per_window', 4), ('tick_rate', 96))):
+            raise ValueError('GT Plan4 manifest interval semantics differ')
         self.groups = self.manifest['groups']
         self.binding = str(path)
 
     def read(self, variant):
         import torch
         value = torch.load(self.root/self.groups[variant]['path'], map_location='cpu', weights_only=True)
-        return dict(value, window_index={key: i for i, key in enumerate(value['window_ids'])})
+        value = dict(value, plan_span_beats=self.span_beats,
+                     window_index={key: i for i, key in enumerate(value['window_ids'])})
+        if self.span_beats == 4:
+            value['chart_center_index'] = plan4_index(value)
+        return value
+
+
+def plan4_index(bank):
+    """Index a loaded small bank once by its chart and absolute segment center."""
+    values, valid, beats = bank['plan_values'], bank['valid'], bank['center_beats']
+    count = len(bank['chart_ids'])
+    if values.shape != (count, 4, 12) or valid.shape != (count, 4) or beats.shape != (count, 4):
+        raise ValueError('Plan4 bank requires aligned [N,4,12] values and [N,4] coordinates/masks')
+    lookup = {}
+    for row, (chart, centers) in enumerate(zip(bank['chart_ids'], beats.tolist(), strict=True)):
+        for segment, center in enumerate(centers):
+            key = (chart, float(center))
+            if key in lookup:
+                raise ValueError('duplicate Plan4 chart/center in bank')
+            lookup[key] = (row, segment)
+    return lookup
+
+
+def select_plan_window(bank, identity, chart_id, start, config, *, window_index=None):
+    """Gather actual neighboring four-beat plans; absent context stays invalid."""
+    import torch
+    span = config.get('planner_span_beats', 16)
+    if span not in (4, 16):
+        raise ValueError('planner_span_beats must be 4 or 16')
+    if bank.get('plan_span_beats', 16) != span:
+        raise ValueError('cached plan_span_beats differs from planner_span_beats')
+    if span == 16:
+        if bank['plan_values'].ndim != 2 or bank['plan_values'].shape[-1] != 12:
+            raise ValueError('Plan16 bank requires [N,12] values')
+        lookup = bank['window_index'] if window_index is None else window_index
+        row = lookup[identity]
+        return bank['plan_values'][row], bank['valid'][row]
+    if (config['target_beats'] != 16 or config['draft_z_stride_beats'] != 4
+            or config['decoder_z_before_beats'] != 4 or config['decoder_z_after_beats'] != 4):
+        raise ValueError('Plan4 conditions require 16 target beats and four-beat Z/context spacing')
+    if 'chart_center_index' not in bank:
+        bank['chart_center_index'] = plan4_index(bank)
+    values = bank['plan_values'].new_zeros((6, 12))
+    valid = torch.zeros(6, dtype=torch.bool)
+    for slot, offset in enumerate((-2, 2, 6, 10, 14, 18)):
+        index = bank['chart_center_index'].get((chart_id, float(start)+offset))
+        if index is not None:
+            values[slot] = bank['plan_values'][index]
+            valid[slot] = bank['valid'][index]
+    return values.masked_fill(~valid[:, None], 0), valid
 
 
 def _write_json(path, value):
@@ -47,6 +109,9 @@ def export_variant(task):
     from maidata.chart_cache.cache import load_chart
     from maidata.draft.chart_data import from_record
     from maidata.draft.plan_targets import MusicPlanTargets
+    span = CONFIG.get('planner_span_beats', 16)
+    if span not in (4, 16):
+        raise ValueError('planner_span_beats must be 4 or 16')
     variant, rows, charts = task
     by_chart = defaultdict(list)
     for row in rows:
@@ -59,13 +124,29 @@ def export_variant(task):
         chart = from_record(dict(record, source=source), validate_input=False)
         planner = MusicPlanTargets(chart, validate_input=False)
         for row in windows:
-            targets[row['window_id']] = planner.window(row['start_tick'], row['end_tick'])
+            if span == 4:
+                if row['end_tick']-row['start_tick'] != 16*96:
+                    raise ValueError('GT Plan4 export requires complete sixteen-beat base windows')
+                targets[row['window_id']] = [planner.window(row['start_tick']+k*384,
+                    row['start_tick']+(k+1)*384) for k in range(4)]
+            else:
+                targets[row['window_id']] = planner.window(row['start_tick'], row['end_tick'])
     ordered = [targets[row['window_id']] for row in rows]
-    continuous = torch.tensor([target.continuous for target in ordered], dtype=torch.float32)
-    category = torch.tensor([target.category for target in ordered], dtype=torch.long)
+    if span == 4:
+        continuous = torch.tensor([[target.continuous for target in group] for group in ordered], dtype=torch.float32)
+        category = torch.tensor([[target.category for target in group] for group in ordered], dtype=torch.long)
+    else:
+        continuous = torch.tensor([target.continuous for target in ordered], dtype=torch.float32)
+        category = torch.tensor([target.category for target in ordered], dtype=torch.long)
     values = torch.cat((continuous, torch.nn.functional.one_hot(category, 4).float()), -1)
-    payload = dict(plan_values=values, valid=torch.ones(len(rows), dtype=torch.bool),
+    shape = (len(rows), 4) if span == 4 else (len(rows),)
+    payload = dict(plan_values=values, valid=torch.ones(shape, dtype=torch.bool),
                    window_ids=[row['window_id'] for row in rows])
+    if span == 4:
+        starts = torch.tensor([row['start_tick'] for row in rows], dtype=torch.long)[:, None]+torch.arange(4)*384
+        payload.update(schema=PLAN4_SCHEMA, plan_span_beats=4, chart_ids=[row['chart_id'] for row in rows],
+            continuous=continuous, category=category, start_ticks=starts, end_ticks=starts+384,
+            center_beats=starts.to(torch.float64)/96+2)
     path = OUTPUT/'banks'/f'{variant}.pt'
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix('.tmp')
@@ -73,11 +154,17 @@ def export_variant(task):
     # Accept only this newly generated asset, once. Training never repeats this.
     saved = torch.load(temporary, map_location='cpu', weights_only=True)
     if (saved['window_ids'] != payload['window_ids'] or
-            saved['plan_values'].dtype != torch.float32 or saved['plan_values'].shape != (len(rows), 12) or
-            saved['valid'].dtype != torch.bool or saved['valid'].shape != (len(rows),) or
+            saved['plan_values'].dtype != torch.float32 or saved['plan_values'].shape != (*shape, 12) or
+            saved['valid'].dtype != torch.bool or saved['valid'].shape != shape or
             not torch.isfinite(saved['plan_values']).all() or not saved['valid'].all() or
             not torch.equal(saved['plan_values'], values) or not torch.equal(saved['valid'], payload['valid'])):
         raise ValueError('GT plan12 storage roundtrip differs')
+    if span == 4:
+        for key in ('start_ticks', 'end_ticks', 'center_beats', 'continuous', 'category'):
+            if not torch.equal(saved[key], payload[key]):
+                raise ValueError('GT Plan4 storage roundtrip differs: '+key)
+        if saved['chart_ids'] != payload['chart_ids']:
+            raise ValueError('GT Plan4 storage roundtrip differs: chart_ids')
     temporary.replace(path)
     return variant, dict(path='banks/'+path.name, windows=len(rows), shape=list(values.shape),
                          dtype=str(values.dtype), bytes=path.stat().st_size)
@@ -98,9 +185,17 @@ def export(config, output, workers=12):
             grouped[row['audio_variant']].append(row)
     tasks = [(variant, rows, {key: charts[key] for key in dict.fromkeys(row['chart_id'] for row in rows)})
              for variant, rows in grouped.items()]
-    meta = dict(schema=SCHEMA, complete=False, continuous=list(CONTINUOUS), categories=list(CATEGORIES),
+    span = config.get('planner_span_beats', 16)
+    if span not in (4, 16):
+        raise ValueError('planner_span_beats must be 4 or 16')
+    meta = dict(schema=PLAN4_SCHEMA if span == 4 else SCHEMA, complete=False,
+                continuous=list(CONTINUOUS), categories=list(CATEGORIES),
                 encoding='continuous8 + category one_hot4', splits=splits, groups={}, workers=workers,
                 target_beats=config['target_beats'])
+    if span == 4:
+        if config['target_beats'] != 16:
+            raise ValueError('GT Plan4 export requires target_beats=16')
+        meta.update(parent_window_beats=16, plan_span_beats=4, plans_per_window=4, tick_rate=96)
     _write_json(output/'manifest.json', meta)
     with ProcessPoolExecutor(max_workers=workers, initializer=initialize, initargs=(config, str(output))) as pool:
         for variant, row in pool.map(export_variant, tasks):

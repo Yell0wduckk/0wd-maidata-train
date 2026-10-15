@@ -6,7 +6,7 @@ import random
 import numpy as np
 import torch
 
-from maidata.draft.losses import FIELD_PREFIX
+from maidata.draft.losses import FIELD_PREFIX, COUNT_TERMS, count_supervision_enabled
 
 
 LOSS_WEIGHT_KEYS = {
@@ -27,6 +27,7 @@ def weighted_loss(terms, config, *, denominators=None):
     still participates in the equal-field average if supervised anywhere else
     in the same logical update.
     """
+    count_enabled = count_supervision_enabled(config)
     counts = ({name: int(term.count) for name, term in terms.items()}
               if denominators is None else denominators)
     active_fields = sum(name.startswith(FIELD_PREFIX) and count > 0
@@ -37,11 +38,16 @@ def weighted_loss(terms, config, *, denominators=None):
         if not math.isfinite(weight) or weight < 0:
             raise ValueError('loss weights must be finite and nonnegative')
     for name, term in terms.items():
+        if not count_enabled and name in COUNT_TERMS:
+            continue
         field = name.startswith(FIELD_PREFIX)
         key = LOSS_WEIGHT_KEYS['classification' if field else name]
         divisor = max(1, counts[name]) * (max(1, active_fields) if field else 1)
         value = term.total / divisor * config[key]
         result = value if result is None else result + value
+    if result is None and terms:
+        # A disabled COUNT-only selection must not retain its autograd graph.
+        return next(iter(terms.values())).total.new_zeros((), requires_grad=True)
     return result
 
 

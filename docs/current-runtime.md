@@ -32,7 +32,9 @@ Encoder 合成验证见[入口文档](maidata-entry.md#cpu-合成验证)。独�
 
 R使用共享残差MLP，只索引所属拍块Z，没有邻拍读取或查询间attention。MOMENT、NOTE_KIND、NOTE_FLAGS、ROUTE_ID、TRACK_BREAK、COUNT分别编码允许条件；kind和当前route只进入下级查询，不输入pad、duration、总行数或未来类型表。真实起音监督拍内0…95，包含窗首0，上一真实起音可来自前拍/前窗；不再生成Draft终端、窗外起音、CONT、删失或duration标签。SLIDE_DURATION仍负责轨道分隔和前缀复位。COUNT拆为空/非空2类和仅非空拍监督的正计数96类。P继续独立读取全部目标16拍。
 
-分类每字段独立累计总和/计数，字段均值等权；microbatch共享逻辑更新分母，epoch/validation沿用累计规则。MOMENT无smoothing，其余分类及数量头0.05；Planner权重1/0.25保持。末轮诊断增加条件MOMENT准确率/96类分布、数量两头与合成数量准确率、分类混淆及少数类召回。
+分类每字段独立累计总和/计数，字段均值等权；microbatch共享逻辑更新分母，epoch/validation沿用累计规则。ROUTE默认37类接受度损失 `-log(sum_j A[y,j]*p[j])`，固定矩阵保留非对称关系、不归一化，替换该字段的CE和均匀smoothing；WiFi自然退化为硬标签NLL，精确37类准确率定义不变。MOMENT无smoothing，其他分类及数量头沿用原配置（默认0.05）；Planner权重1/0.25保持。阶段一及联合训练共用普通/prepared损失路径，见[Route-37接受度监督](draft-route37.md)。末轮诊断增加条件MOMENT准确率/96类分布、数量两头与合成数量准确率、分类混淆及少数类召回。
+
+`reconstruction_route_loss` 默认 `acceptance37`，显式 `ce` 保留旧监督；历史recipe缺项解释为CE。recipe保存损失模式和实际37×37矩阵，完整续训不能静默改变目标；网络state_dict及推理权重加载不因损失模式改变。Decoder ROUTE监督本次保持现状，其按相似度分配非GT概率的软标签方案仅记录为[未来方向](decoder-route-soft-label-future.md)。
 
 `pretrain_batch_reference_rows=207`只保留原分批proxy，实际查询数量另记；pilot320组顺序及边界、workers12、BF16/scratch、学习率/调度、完整轮保存及每5轮/末轮验证不变。阶段一checkpoint为`maidata.encoder-draft-training.v3`，标签导出为`beat-local-tick96`。旧checkpoint不能完整续训，不隐式部分加载；旧128维Z不能补零扩维。原谱、音频、Physical、计划、GT plan及主M窗口缓存直接复用。
 
@@ -61,6 +63,10 @@ CPU验证覆盖默认与非默认架构、并行/增量一致、目标类型隔�
 统一新窗口编译器从精确原谱v2和完整Physical整数区间生产`maidata.decoder-window-tensors.v5`监督，增量与从零入口共用；完整源资产和迁移不变。GT duration、真实动作与历史保持完整，监督到跨音频窗CONT或窗内发出的最后短值；旧v3局部cap监督需重编译标签，不能混用。迁移命令见[缓存迁移](time384-cache-migration.md)。E/D/P权重变化后的神经特征需重新前向导出。
 
 ## 从头联合训练入口
+
+独立实验覆盖配置 `configs/joint-main320-z4-gt.json` 将 E/D/M 设为320维、8头、每头40维，E/M前段FFN1280、D/M每专家640；M前2层不动、后段4→6层。外层上限3完整音频组、预算80000、最大LR6e-4、M内部chunk预算32768，以上已由用户确定；不整体替换默认CONFIG。M内部chunk预算另支持显式null，独立阶段二row_budget保持原合同。该覆盖配置现选择6枚独立、有绝对拍位置的Plan4，与6枚Z4逐槽对齐，包含前后各4拍上下文；P每个基础窗监督4段且不重复监督上下文。默认及旧checkpoint继续按Plan16解释，详见[六枚Plan4合同](plan4-joint.md)。参数、平均每轮更新次数、预算限制来源及此前最大LR5e-4/Plan16时的极端/连续CUDA证据见[320维容量实测](main320-capacity.md)。
+
+训练及验证可通过 `decoder_train_plan_input` 控制 M 是否接收 plan，默认 `True`。关闭时屏蔽有效 plan attention key，不改变 Z 输入及 P 自身监督；阶段二/SFT/联合训练共用此设置，见[训练 plan 输入开关](decoder-training-plan-input.md)。
 
 `python -m maidata.joint_training`独立随机初始化唯一E/D/R/P/M，从第一个更新联合训练；默认90轮停止/150轮cosine、LR4e-4、warmup200、BF16、workers12、Z4及256维末层归一化Z、GT plan。外层沿用完整音频组和45056/207分批，M保留全部occurrence并按8192行内部分块；E一次编码coverage与M所需局部窗并集，M直接读取对应24拍局部P0，D只读取coverage中心。多块音频KV＋Z梯度桥最终只反传真实共享图一次。联合checkpoint保存五模块及完整轮恢复状态；单checkpoint推理共用一套E的实际局部输出，plan由P预测。旧两阶段入口保留。命令和显式短CUDA诊断见[联合训练](joint-training.md)，测试与成本见[实施记录](joint-training-implementation.md)。
 

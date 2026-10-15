@@ -2,7 +2,7 @@
 import json
 import torch
 
-from maidata.model import ENCODER_KEYS
+from maidata.model import ENCODER_KEYS, encoder_config
 from maidata.training.frozen_p0 import FrozenP0
 from .checkpoint import SCHEMA, ARCHITECTURE
 
@@ -22,7 +22,7 @@ def prepare(config, resume=None):
     saved = payload['recipe']
     if saved.get('decoder_train_audio_scope') != 'window':
         raise ValueError('adaptation must preserve the source Decoder local-window audio scope')
-    encoder = {k: saved[k] for k in ENCODER_KEYS}
+    encoder = encoder_config(saved)
     if json.loads(json.dumps(encoder)) != p0.encoder_config:
         raise ValueError('initial Decoder Encoder configuration differs from frozen P0')
     # M architecture comes from the selected checkpoint; the new optimization
@@ -30,6 +30,8 @@ def prepare(config, resume=None):
     architecture = {k: v for k, v in saved.items() if k in ENCODER_KEYS or
                     k.startswith('decoder_') and not k.startswith('decoder_train_')}
     architecture.pop('decoder_z_cross_attention', None)
+    architecture['planner_span_beats'] = saved.get('planner_span_beats', 16)
+    architecture.update(encoder)
     return dict(config, **architecture), payload
 
 

@@ -239,11 +239,8 @@ class Interactive:
         c, conditions = self.config, self.conditions
         start = conditions.starts[index]
         with self.autocast():
-            selected = select_windows(conditions.z, torch.tensor([0], device=self.device),
-                torch.tensor([start], device=self.device, dtype=torch.float32), torch.tensor([True], device=self.device),
-                target_beats=c['target_beats'], before_beats=c['decoder_z_before_beats'],
-                after_beats=c['decoder_z_after_beats'], z_stride_beats=c['draft_z_stride_beats']
-                ).memory if c['decoder_z_cross_attention'] else conditions.z
+            from .conditioning import decoder_z_window
+            selected = decoder_z_window(conditions, index, c, self.device)
             audio_index = index if conditions.audio_scope == 'window' else 0
             plans, valid = conditions.plans[index:index+1], conditions.plan_valid[index:index+1]
             if plan_source == 'none':

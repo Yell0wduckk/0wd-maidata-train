@@ -110,6 +110,7 @@ def test_fractional_encoder_grid_is_preserved_by_full_p0(target, after, rate):
 
 def test_trainable_chain_empty_tail_and_auxiliary_gradients():
     config, timing, coverage, song, window, e, d, p, r, inputs = small_chain()
+    config['reconstruction_count_supervision'] = True  # This probe explicitly checks COUNT gradients.
     with patch.object(e, 'prepare_song', wraps=e.prepare_song) as prepare:
         local = e(song, window)
         bank = assemble_full_p0(local.P0, window.target_start_beats, window.window_to_song,

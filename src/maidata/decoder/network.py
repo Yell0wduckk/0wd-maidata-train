@@ -14,11 +14,14 @@ class Decoder(nn.Module):
     def __init__(self, *, dim, audio_dim, latent_dim, layers, router_layer, heads,
                  shared_ffn_dim, expert_ffn_dim, experts, readout_ffn_dim, dropout,
                  norm_eps, rope_base, rope_position_scale, note_dims, route_dims,
-                 time_base, time_scale, condition_gate_init, z_cross_attention):
+                 time_base, time_scale, condition_gate_init, z_cross_attention, z_normalization=False,
+                 plan_span_beats=16):
         super().__init__()
         self.validate_inputs = True
         if type(z_cross_attention) is not bool:
             raise ValueError('z_cross_attention must be boolean')
+        if type(z_normalization) is not bool:
+            raise ValueError('z_normalization must be boolean')
         integers = (dim, audio_dim, latent_dim, layers, router_layer, heads, shared_ffn_dim,
                     expert_ffn_dim, experts, readout_ffn_dim)
         if any(type(v) is not int or v <= 0 for v in integers):
@@ -30,8 +33,10 @@ class Decoder(nn.Module):
                 or min(rope_base, time_base) <= 0):
             raise ValueError('invalid Decoder numerical configuration')
         self.dim, self.audio_dim, self.router_layer = dim, audio_dim, router_layer
+        self.plan_span_beats = plan_span_beats
         self.embedding = TokenEmbedding(dim, note_dims, route_dims, time_base, time_scale)
-        self.condition = ConditionAdapter(latent_dim, dim, z_cross_attention, norm_eps)
+        self.condition = ConditionAdapter(latent_dim, dim, z_cross_attention, norm_eps, z_normalization,
+                                          plan_span_beats=plan_span_beats)
         self.target_type = nn.Embedding(5, dim)
         self.router_norm = nn.LayerNorm(dim, eps=norm_eps)
         self.type_head = nn.Linear(dim, 5)
@@ -62,6 +67,7 @@ class Decoder(nn.Module):
             if self.validate_inputs:
                 require((audio_mapping == audio_layout['mapping']).all(), 'audio query layout ownership differs')
         condition = self.condition(z, plan, plan_valid)
+        plan_index = z.values.shape[1] if self.plan_span_beats == 16 else None
         condition_indices = None if audio_layout is None else audio_layout.get('condition_rows', {}).get('key_indices')
         def select(kv):
             if audio_layout is not None:
@@ -69,9 +75,9 @@ class Decoder(nn.Module):
             return KV(kv.key.index_select(0, audio_mapping), kv.value.index_select(0, audio_mapping),
                       kv.valid.index_select(0, audio_mapping))
         return DecoderMemory(tuple(select(kv) for kv in audio_kv),
-            tuple(layer.condition_attn.project(condition, plan_index=z.values.shape[1], indices=condition_indices)
+            tuple(layer.condition_attn.project(condition, plan_index=plan_index, indices=condition_indices)
                   for layer in self.layers),
-            z.values.shape[1], None if audio_layout is None else audio_layout['valid_indices'], condition.beats)
+            plan_index, None if audio_layout is None else audio_layout['valid_indices'], condition.beats)
 
     def begin(self, tokens, memory, *, cache=None):
         """Run ONLY the shared front. No next type or content label is accepted."""

@@ -29,11 +29,12 @@ def occurrence_batches(rows, audio_lengths, input_lengths, config):
 
 
 def window_chunks(windows, token_budget):
+    """Keep complete windows in order; None uses one unrestricted M chunk."""
     chunks, current, length = [], [], 0
     for i, row in enumerate(windows):
         size = row['length']
         padded = max(length, size) * (len(current)+1)
-        if current and padded > token_budget:
+        if token_budget is not None and current and padded > token_budget:
             chunks.append(current)
             current, length = [], 0
         current.append(i)

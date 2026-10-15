@@ -37,7 +37,8 @@ def compare_gradients(actual, expected, parameters, bf16):
 @pytest.mark.parametrize('bf16', [False, True])
 @pytest.mark.parametrize('count_loss', ['ce', 'mse'])
 def test_prepared_auxiliary_sparse_empty_padding_values_gradients_and_no_nonzero(config, empty, bf16, count_loss):
-    c = dict(config, target_beats=16, draft_z_stride_beats=4, reconstruction_count_loss=count_loss)
+    c = dict(config, target_beats=16, draft_z_stride_beats=4, reconstruction_count_loss=count_loss,
+             reconstruction_count_supervision=True)
     source = chart() if empty else chart([(0, [Note.make('tap', 'A1')]),
         (95, [Note.make('slide', 'A2'), Route(0, 1), Route(3), SlideDuration(97)]),
         (4*96, [Note.make('touch', 'C')])])

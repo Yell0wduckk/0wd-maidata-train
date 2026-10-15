@@ -61,7 +61,7 @@ class KV:
 class DecoderMemory:
     audio: tuple[KV, ...]
     condition: tuple[KV, ...]
-    plan_index: int
+    plan_index: int | None
     row_indices: Tensor | None = None
     condition_beats: Tensor | None = None
 

@@ -49,7 +49,7 @@ class DecoderDataset(Dataset):
         self.gt_plan = None
         if config['decoder_train_plan_source'] == 'gt':
             from .gt_plan_cache import GTPlanCache
-            self.gt_plan = GTPlanCache(config['decoder_train_gt_plan_cache'])
+            self.gt_plan = GTPlanCache(config['decoder_train_gt_plan_cache'], config)
 
     def __len__(self):
         return len(self.plan.groups)

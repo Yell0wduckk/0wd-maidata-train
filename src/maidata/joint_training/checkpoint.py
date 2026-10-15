@@ -2,6 +2,7 @@
 import json
 
 from maidata.model import ENCODER_KEYS
+from maidata.draft.route_acceptance import route_loss_recipe
 from maidata.training.checkpoint import (atomic_save, rng_state, restore_rng,
                                         source_identity, validate_cursor)
 from maidata.decoder_training.recipe import restore_optimizer
@@ -12,7 +13,7 @@ ARCHITECTURE = 'maidata.joint-encoder-draft-decoder.v1'
 
 
 def recipe(config):
-    return json.loads(json.dumps({key: value for key, value in config.items()
+    value = {key: value for key, value in config.items()
         if (key in ENCODER_KEYS or key.startswith(('draft_', 'reconstruction_', 'planner_',
                                                  'joint_train_', 'decoder_'))
             or key in ('target_stride_beats', 'chart_history_beats', 'complex_rhythm_min_kinds',
@@ -20,7 +21,10 @@ def recipe(config):
                        'pretrain_token_budget', 'pretrain_batch_reference_rows',
                        'pretrain_audio_token_weight', 'pretrain_row_token_weight',
                        'pretrain_gradient_accumulation_steps'))
-        and key not in PATH_KEYS and not key.endswith(('_checkpoint', '_cache', '_output'))}, sort_keys=True))
+        and key not in PATH_KEYS and not key.endswith(('_checkpoint', '_cache', '_output'))
+        and key not in ('reconstruction_route_loss', 'reconstruction_route_acceptance')}
+    value.update(route_loss_recipe(config))
+    return json.loads(json.dumps(value, sort_keys=True))
 
 
 def capture(model, opt, sched, *, epoch, step, config, binding, source, steps, loaders, best, metrics):
@@ -34,18 +38,30 @@ def capture(model, opt, sched, *, epoch, step, config, binding, source, steps, l
     return payload
 
 
-def restore(payload, model, opt, sched, *, loaders, **_):
+def restore(payload, model, opt, sched, *, loaders, upgrade_z_normalization=False, **_):
     if payload.get('schema') != SCHEMA or payload.get('architecture') != ARCHITECTURE:
         raise ValueError('joint resume requires its complete E/D/R/P/M v1 checkpoint')
     validate_cursor(payload, payload['steps_by_epoch'])
     if len(payload['loader_rng']) != len(loaders) or len(payload['loader_started']) != len(loaders):
         raise ValueError('joint checkpoint DataLoader RNG inventory differs')
     if 'config' in _:
-        current, saved = recipe(_['config']), payload['recipe']
+        current, saved = recipe(_['config']), dict(payload['recipe'])
+        saved.setdefault('reconstruction_route_loss', 'ce')
+        saved.setdefault('planner_span_beats', 16)
+        previous_z_norm = saved.get('decoder_z_normalization', False)
+        current_z_norm = current.get('decoder_z_normalization', False)
+        if upgrade_z_normalization and not (previous_z_norm is False and current_z_norm is True):
+            raise ValueError('Z normalization upgrade requires an unnormalized checkpoint and normalized model')
         keys = [key for key in current if key in ENCODER_KEYS or
                 key.startswith(('draft_', 'reconstruction_', 'planner_')) or
                 key.startswith('decoder_') and not key.startswith('decoder_train_')]
-        if any(current[key] != saved.get(key) for key in keys):
+        def differs(key):
+            if key == 'reconstruction_route_vocabulary':
+                return current[key] != saved.get(key, 'route71')
+            if key == 'decoder_z_normalization':
+                return current_z_norm != previous_z_norm and not upgrade_z_normalization
+            return current[key] != saved.get(key)
+        if any(differs(key) for key in keys):
             raise ValueError('joint checkpoint architecture/representation differs')
     model.load_state_dict(payload['model_state'], strict=True)
     restore_optimizer(opt, payload['optimizer_state'])

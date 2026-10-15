@@ -11,6 +11,8 @@ PATH_KEYS = tuple('decoder_train_'+k for k in ('checkpoint','init_checkpoint','p
 
 
 def validate(config):
+    if type(config.get('decoder_train_plan_input', True)) is not bool:
+        raise ValueError('decoder_train_plan_input must be a boolean')
     cached = config['decoder_train_audio_mode'] == 'cached'
     if config['decoder_train_audio_mode'] not in ('joint', 'cached'):
         raise ValueError('decoder_train_audio_mode must be joint or cached')
@@ -32,12 +34,16 @@ def validate(config):
         export_only.add('decoder_train_dp_cache')
     if config['decoder_train_plan_source'] == 'predicted':
         export_only.add('decoder_train_gt_plan_cache')
-    missing = [k for k in keys if k not in export_only and config[k] is None]
+    missing = [k for k in keys if k not in export_only
+               and k != 'decoder_train_chunk_token_budget' and config[k] is None]
     if missing:
         raise ValueError('set explicit Decoder training recipe: '+', '.join(missing))
-    for key in ('gradient_accumulation_steps','row_budget','chunk_token_budget','scheduler_epochs','stop_after_epochs'):
+    for key in ('gradient_accumulation_steps','row_budget','scheduler_epochs','stop_after_epochs'):
         if type(config['decoder_train_'+key]) is not int or config['decoder_train_'+key] < 1:
             raise ValueError(f'{key} must be a positive integer')
+    chunk_budget = config['decoder_train_chunk_token_budget']
+    if chunk_budget is not None and (type(chunk_budget) is not int or chunk_budget < 1):
+        raise ValueError('chunk_token_budget must be a positive integer or None')
     for key in ('warmup_steps','workers'):
         if type(config['decoder_train_'+key]) is not int or config['decoder_train_'+key] < 0:
             raise ValueError(f'{key} must be a nonnegative integer')

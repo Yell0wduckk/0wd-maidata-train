@@ -18,6 +18,7 @@ CONFIG = {
     "frequency_dim": 64,
     "frequency_queries": 4,
     "fpn_rates": (8, 4, 2),
+    "fpn_p0_normalization": True,
     "target_beats": 16,
     "target_stride_beats": 16,
     "audio_before_beats": 4,
@@ -46,6 +47,7 @@ CONFIG = {
     "planner_mlp_dim": 256,
     "planner_dropout": 0.1,
     "planner_norm_eps": 1e-5,
+    "planner_span_beats": 16,  # Historical Plan16; the joint Plan4 override selects 4.
     "reconstruction_ffn_dim": 512,
     "reconstruction_dropout": 0.1,
     "reconstruction_norm_eps": 1e-5,
@@ -53,8 +55,11 @@ CONFIG = {
     "reconstruction_position_base": 10000.0,
     "reconstruction_position_scale": 1.0,
     "reconstruction_label_smoothing": 0.05,
+    "reconstruction_route_vocabulary": "axis15-37",
+    "reconstruction_route_loss": "acceptance37",
     "reconstruction_classification_weight": 1.0,
     "reconstruction_moment_weight": 1.0,
+    "reconstruction_count_supervision": False,
     "reconstruction_count_loss": "mse",
     "reconstruction_count_weight": 1.0,
     "reconstruction_empty_weight": 1.0,
@@ -101,6 +106,7 @@ CONFIG = {
     "decoder_rope_position_scale": 1.0,
     "decoder_condition_gate_init": 1e-3,
     "decoder_z_cross_attention": True,
+    "decoder_z_normalization": True,
     "decoder_note_dims": (64, 128, 16, 16, 16, 8, 8),
     "decoder_route_dims": (240, 16),
     "decoder_time_base": 10000.0,
@@ -115,6 +121,7 @@ CONFIG = {
     "decoder_train_init_checkpoint": None,  # Weight initialization only; never an optimizer/epoch resume.
     "decoder_train_dp_cache": None,  # Matching frozen Z and predicted plan12 export.
     "decoder_train_plan_source": "gt",  # Match GT charts in training; inference reads predicted plan12.
+    "decoder_train_plan_input": True,  # Feed plan to M during training/validation; independent of Z and P supervision.
     "decoder_train_gt_plan_cache": None,  # Required only for gt; offline MusicPlanTargets export.
     "decoder_train_optimizer": "adamw",
     "decoder_train_fused_optimizer": True,  # CUDA backend; optimizer moments are preserved on resume.

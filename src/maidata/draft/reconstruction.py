@@ -6,11 +6,13 @@ from maidata.nn.position import sinusoidal
 from .attention import positive_ints, numerical_config
 from .schema import FIELD_SIZES, MOMENT_CLASSES, POSITIVE_COUNT_CLASSES, QUERY_ROLES, KINDS
 from .types import ReconstructionOutput
+from .route_vocabulary import route_class_count
 
 
 class ReconstructionHead(nn.Module):
     def __init__(self, *, latent_dim, ffn_dim, dropout, norm_eps,
-                 target_beats, position_base, position_scale, z_stride_beats, count_loss):
+                 target_beats, position_base, position_scale, z_stride_beats, count_loss,
+                 route_vocabulary='route71'):
         super().__init__()
         positive_ints(latent_dim=latent_dim, ffn_dim=ffn_dim, target_beats=target_beats)
         numerical_config(dropout, norm_eps, position_base, position_scale)
@@ -29,8 +31,10 @@ class ReconstructionHead(nn.Module):
         self.ffn = nn.Sequential(nn.Linear(latent_dim, ffn_dim), nn.GELU(),
                                  nn.Dropout(dropout), nn.Linear(ffn_dim, latent_dim))
         self.norm = nn.LayerNorm(latent_dim, eps=norm_eps)
+        self.route_vocabulary = route_vocabulary
+        sizes = dict(FIELD_SIZES, route_id=route_class_count(route_vocabulary))
         self.field_heads = nn.ModuleDict({'field_' + name: nn.Linear(latent_dim, n)
-                                         for name, n in FIELD_SIZES.items()})
+                                         for name, n in sizes.items()})
         self.moment_head = nn.Linear(latent_dim, MOMENT_CLASSES)
         if count_loss not in ('mse', 'ce'):
             raise ValueError('unsupported reconstruction count loss')

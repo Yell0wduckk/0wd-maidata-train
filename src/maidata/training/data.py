@@ -17,7 +17,7 @@ from maidata.chart_cache.cache import load_chart
 from maidata.draft.chart_data import from_record
 from maidata.draft.conditions import read_condition, make_draft_inputs
 from maidata.draft.plan_targets import MusicPlanTargets
-from maidata.draft.targets import reconstruction_target, collate_reconstruction, collate_planner
+from maidata.draft.targets import reconstruction_target, collate_reconstruction, collate_planner, planner_target
 from maidata.draft.windows import song_coverage, audio_windows
 from maidata.preparation.cache import load_grid, song_inputs, window_inputs
 from maidata.time import TimingMap
@@ -95,7 +95,8 @@ class AudioDataset(Dataset):
             windows.append((w['window_id'], key, w['start_beat'],
                 reconstruction_target(charts[key], start_tick=w['start_tick'], target_beats=c['target_beats'],
                     audio_after_beats=c['audio_after_beats'], audio_end_seconds=meta['audio_end_seconds'], validate_input=False),
-                plans[key].window(w['start_tick'], w['end_tick'])))
+                planner_target(plans[key], w['start_tick'], w['end_tick'],
+                               span_beats=c.get('planner_span_beats', 16))))
         return dict(variant=variant, grid=grid, p0=p0, coverage=coverage, conditions=conditions, windows=windows)
 
 

@@ -20,11 +20,12 @@ def test_weighted_logical_batch_supports_and_gradients():
     terms = {name: LossTerm(total, count)
              for name, total, count in zip(('field/kind', 'field/route_id', 'moment96',
                  'empty', 'positive_count', 'planner_continuous', 'planner_category'), totals, counts)}
-    loss = pretrain.weighted_loss(terms, CONFIG)
+    loss = pretrain.weighted_loss(terms, dict(CONFIG, reconstruction_count_supervision=True))
     assert loss.item() == pytest.approx(15.)
     loss.backward()
     torch.testing.assert_close(totals.grad, torch.tensor([.25, .05, 1/3, .5, .2, 1/3, 1/28]))
-    config = dict(CONFIG, reconstruction_moment_weight=0, planner_category_weight=2)
+    config = dict(CONFIG, reconstruction_moment_weight=0, planner_category_weight=2,
+                  reconstruction_count_supervision=True)
     assert pretrain.weighted_loss(terms, config).item() == pytest.approx(16.5)
     empty = {name: LossTerm(totals.sum() * 0, torch.tensor(0)) for name in terms}
     assert pretrain.weighted_loss(empty, config).item() == 0

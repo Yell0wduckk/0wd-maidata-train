@@ -261,6 +261,34 @@ def test_chunk_budget_never_crops_history_or_reorders_occurrences():
     assert values!=[history_rng(99,3,'a',i).random() for i in range(6)]
 
 
+@pytest.mark.parametrize('budget', [None, 16])
+def test_chunk_budget_empty_input_and_indivisible_large_window(budget):
+    assert window_chunks([], budget) == []
+    rows = [dict(length=n) for n in (7, 3, 100000, 4)]
+    expected = [[0, 1, 2, 3]] if budget is None else [[0, 1], [2], [3]]
+    assert window_chunks(rows, budget) == expected
+    assert [row['length'] for row in rows] == [7, 3, 100000, 4]
+
+
+@pytest.mark.parametrize('budget', [None, 16])
+def test_recipe_accepts_optional_chunk_budget_without_relaxing_row_budget(config, tmp_path, budget):
+    c = dict(config, **{k: str(tmp_path/k) for k in recipe.PATH_KEYS})
+    c.update(decoder_train_init_checkpoint=None, decoder_train_chunk_token_budget=budget)
+    recipe.validate(c)
+    with pytest.raises(ValueError, match='decoder_train_row_budget'):
+        recipe.validate(dict(c, decoder_train_row_budget=None))
+    with pytest.raises(ValueError, match='row_budget must be a positive integer'):
+        recipe.validate(dict(c, decoder_train_row_budget=0))
+
+
+@pytest.mark.parametrize('budget', [0, -1, 16.0, True])
+def test_recipe_rejects_invalid_finite_chunk_budget(config, tmp_path, budget):
+    c = dict(config, **{k: str(tmp_path/k) for k in recipe.PATH_KEYS})
+    c.update(decoder_train_init_checkpoint=None, decoder_train_chunk_token_budget=budget)
+    with pytest.raises(ValueError, match='chunk_token_budget must be a positive integer or None'):
+        recipe.validate(c)
+
+
 def write_plan(root,records,c,*,training):
     from maidata.sampling.plan import chart_windows,make_occurrences,write_plan as save_plan,CONFIG_KEYS
     windows = [w for r in records for w in chart_windows(r,config=c)]

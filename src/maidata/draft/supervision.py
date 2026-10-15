@@ -1,6 +1,6 @@
 """Composition for R/P supervision; no Encoder or Decoder instance is owned."""
 from .windows import select_windows
-from .losses import reconstruction_loss, planner_loss
+from .losses import reconstruction_loss, planner_loss, count_supervision_enabled
 
 
 def predict_auxiliary(z, groups, starts, valid, reconstruction, planner, config, layouts=None, queries=None):
@@ -16,5 +16,7 @@ def predict_auxiliary(z, groups, starts, valid, reconstruction, planner, config,
 def auxiliary_losses(reconstruction, planner, reconstruction_targets, planner_targets, config, *, prepared=None):
     """Return separately normalized terms. The training recipe chooses weights."""
     return {**reconstruction_loss(reconstruction, reconstruction_targets,
-        label_smoothing=config['reconstruction_label_smoothing'], prepared=prepared),
+        label_smoothing=config['reconstruction_label_smoothing'], prepared=prepared,
+        route_loss=config.get('reconstruction_route_loss', 'ce'),
+        count_supervision=count_supervision_enabled(config)),
         **planner_loss(planner, planner_targets, prepared=prepared)}

@@ -272,11 +272,8 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
         emit(progress, 'window_start', window=i+1, windows=len(conditions.starts),
              start_beat=start, end_beat=end_tick/96)
         cap_tick = end_tick + config['audio_after_beats']*96
-        selected = select_windows(conditions.z, torch.tensor([0], device=device),
-            torch.tensor([start], device=device, dtype=torch.float32), torch.tensor([True], device=device),
-            target_beats=config['target_beats'], before_beats=config['decoder_z_before_beats'],
-            after_beats=config['decoder_z_after_beats'],
-            z_stride_beats=config['draft_z_stride_beats']).memory if config['decoder_z_cross_attention'] else conditions.z
+        from .conditioning import decoder_z_window
+        selected = decoder_z_window(conditions, i, config, device)
         audio_index = i if conditions.audio_scope == 'window' else 0
         memory = decoder.prepare_memory(audio_kv, torch.tensor([audio_index], device=device), selected,
                                         conditions.plans[i:i+1], conditions.plan_valid[i:i+1])
@@ -307,7 +304,8 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
         windows.append(dict(start_beat=start, end_beat=end_tick/96, history_tokens=history_count,
             boundary_delta_ms=boundary.delta_ms, generated_tokens=len(tokens), onsets=len(new),
             plan12=conditions.plans[i].float().cpu().tolist(),
-            plan_valid=bool(conditions.plan_valid[i]),
+            plan_valid=conditions.plan_valid[i].cpu().tolist(),
+            plan_span_beats=config.get('planner_span_beats', 16),
             time_sampling='tick384-continue-substep-greedy' if options.temperature == 0 else 'tick384-continue-substep-sampling', **report))
         emit(progress, 'window_done', window=i+1, windows=len(conditions.starts), tokens=len(tokens),
              backtracks=report['backtracks'], cursor_beat=session.rules.grammar.state.cursor/96,

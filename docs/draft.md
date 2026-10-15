@@ -62,7 +62,9 @@ E按音频准备G0并编码覆盖窗，唯一中心P0拼接成全曲bank；同�
 
 `ReconstructionTargets`分别持有字段标签、`moment_tick [B,Q]`、`moment_counts [B,T]`、窗口有效位及独立queries。`ReconstructionOutput`为`field_logits`、`moment_logits [B,Q,96]`、`empty_logits [B,T,2]`、`positive_count_logits [B,T,96]`、窗口/query/count有效位。Q只是batch补齐宽度，不是网络容量或可见总行数。
 
-分类kind、route_id、track_break及每个flag各有独立CE总和/计数，各自归一后对逻辑更新中有监督的字段等权平均。总loss为字段均值＋MOMENT96＋空/非空＋正计数＋Planner连续项＋0.25×Planner类别项。MOMENT无smoothing，其余分类和数量头smoothing0.05；无标签项贡献有限零。累积先取得整个逻辑更新共同分母，再反传各microbatch分子；epoch及validation也按累计分子/分母报告。
+分类kind、route_id、track_break及每个flag各有独立损失总和/计数，各自归一后对逻辑更新中有监督的字段等权平均。ROUTE默认合并为37类，采用固定接受度矩阵的 `-log(sum_j A[y,j]*p[j])`，不使用均匀smoothing；矩阵空白为0、对角为1、保留非对称关系且不归一化。普通与prepared路径共用FP32稳定计算，WiFi退化为硬标签NLL，准确率仍按精确37类GT统计。详见[Route-37接受度监督](draft-route37.md)。
+
+总loss为字段均值＋MOMENT96＋空/非空＋正计数＋Planner连续项＋0.25×Planner类别项。MOMENT无smoothing，除接受度ROUTE外的分类和数量头沿用原配置（默认0.05）；无标签项贡献有限零。累积先取得整个逻辑更新共同分母，再反传各microbatch分子；epoch及validation也按累计分子/分母报告。
 
 训练继续复用pilot320计划、完整组、顺序和batch边界。`pretrain_batch_reference_rows=207`仅为既有成本proxy，真实查询数量另记；workers12、BF16、scratch、学习率/调度、完整轮checkpoint及每5轮/末轮validation不变。末轮诊断包括条件MOMENT准确率、96类真值/预测分布、数量两头准确率、GT非空条件正计数与合成数量准确率，以及分类混淆和少数类召回。
 
@@ -74,6 +76,8 @@ python -m maidata.draft.capacity --plan /path/to/plan.json --split /path/to/spli
 ```
 
 标签导出标识为`beat-local-tick96`。原谱v2、Mel/aux32、Physical、采样计划、GT plan及主M窗口缓存直接复用，不迁移整库。新阶段一checkpoint为`maidata.encoder-draft-training.v3`，严格记录结构和损失配方；旧checkpoint不作为完整续训输入，不隐式部分加载。
+
+`reconstruction_route_loss` 默认 `acceptance37`，显式 `ce` 保留旧监督；历史配方缺项按 `ce` 解释。阶段一与联合训练recipe保存模式及实际接受度矩阵，完整续训不静默切换目标。损失配置不改变网络state_dict；相同词表的旧权重仍保持原形状，E/D/P/M推理加载不受此损失选择影响。主Decoder监督保持现状，软标签仅记录为[未来方向](decoder-route-soft-label-future.md)。
 
 旧128维Z不能补零扩为新缓存。取得新教师权重后须在另目录前向导出Z/预测plan；新DP缓存schema为`maidata.frozen-draft-planner.v2`，记录`z_representation=final-normalized-beat-z`、`z_width`及`z_stride_beats`，P0格式不变。导出与消费代码支持新宽度，教师配置与M配置分别构造。M启用Z时投影须匹配生产者宽度；关闭Z且GT/无plan时不加载教师。
 

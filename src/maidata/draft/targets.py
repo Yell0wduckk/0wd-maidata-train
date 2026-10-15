@@ -150,11 +150,34 @@ def collate_reconstruction(targets, *, target_beats, device, query_rows=None, va
     return ReconstructionTargets(fields, moment, counts, valid, q)
 
 
+def planner_target(planner, start_tick, end_tick, *, span_beats=16):
+    """Keep the original scalar target or recompute each exact four-beat target."""
+    if type(span_beats) is not int or span_beats not in (4, 16):
+        raise ValueError('Planner span must be 4 or 16 beats')
+    if span_beats == 16:
+        return planner.window(start_tick, end_tick)
+    if end_tick <= start_tick or (end_tick - start_tick) % (4 * 96):
+        raise ValueError('Four-beat Planner target interval must contain whole four-beat segments')
+    return [planner.window(start, start + 4 * 96) for start in range(start_tick, end_tick, 4 * 96)]
+
+
 def collate_planner(targets, *, device, validate_input=True):
     import torch
     from .types import PlannerTargets
     if validate_input and not targets:
         raise ValueError('empty Planner target batch')
+    segmented = [t for t in targets if isinstance(t, (list, tuple))]
+    if segmented:
+        width = len(segmented[0])
+        if width < 1 or any(t is not None and (not isinstance(t, (list, tuple)) or len(t) != width) for t in targets):
+            raise ValueError('Planner target segments must have a common positive length')
+        rows = [list(t) if t is not None else [None] * width for t in targets]
+        return PlannerTargets(
+            torch.tensor([[t.continuous if t is not None else (0.,) * 8 for t in row] for row in rows],
+                         device=device, dtype=torch.float32),
+            torch.tensor([[t.category if t is not None else 0 for t in row] for row in rows],
+                         device=device, dtype=torch.long),
+            torch.tensor([[t is not None for t in row] for row in rows], device=device, dtype=torch.bool))
     return PlannerTargets(
         torch.tensor([t.continuous if t is not None else (0.,) * 8 for t in targets], device=device, dtype=torch.float32),
         torch.tensor([t.category if t is not None else 0 for t in targets], device=device, dtype=torch.long),
