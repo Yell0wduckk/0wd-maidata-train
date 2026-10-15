@@ -33,8 +33,8 @@ def prepare(config, resume=None):
     architecture['planner_span_beats'] = saved.get('planner_span_beats', 16)
     architecture['planner_layout'] = saved.get('planner_layout', 'legacy')
     architecture['planner_stride_beats'] = saved.get('planner_stride_beats')
-    if architecture['planner_layout'] == 'centered-overlap':
-        # These coordinates determine M's 23-Z/5-Plan layout even though the
+    if architecture['planner_layout'] in ('centered-overlap', 'window-single'):
+        # These coordinates determine M's 23-Z layout even though the
         # adaptation does not execute R. Preserve the source representation
         # before FrozenCache checks it; its Z width remains consumer-selected.
         architecture.update(draft_z_anchor_mode=saved.get('draft_z_anchor_mode', 'block-center'),

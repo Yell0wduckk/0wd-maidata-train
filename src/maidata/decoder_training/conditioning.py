@@ -62,9 +62,9 @@ def collate_conditions(items, windows, config, *, audio, audio_keys=None):
                                  local_audio[(item['variant'], window['start'])])
         indices.append(unique[identity])
     if not use_z:
-        centered = config.get('planner_layout', 'legacy') == 'centered-overlap'
-        offsets = (torch.arange(-3, 20) if centered else torch.tensor((-2, 2, 6, 10, 14, 18)))
-        slots = 23 if centered else (6 if config.get('planner_span_beats', 16) == 4 else 0)
+        integer_context = config.get('planner_layout', 'legacy') in ('centered-overlap', 'window-single')
+        offsets = (torch.arange(-3, 20) if integer_context else torch.tensor((-2, 2, 6, 10, 14, 18)))
+        slots = 23 if integer_context else (6 if config.get('planner_span_beats', 16) == 4 else 0)
         beats = torch.tensor(starts, dtype=torch.float32)[:, None] + offsets
         z = Memory(torch.zeros((len(starts), slots, config['draft_latent_dim'])),
                    beats[:, :slots], torch.zeros((len(starts), slots), dtype=torch.bool))

@@ -46,16 +46,17 @@ def plan_span(config):
     if type(span) is not int or span not in (4, 16):
         raise ValueError('planner_span_beats must be 4 or 16')
     layout = config.get('planner_layout', 'legacy')
-    if layout not in ('legacy', 'centered-overlap'):
+    if layout not in ('legacy', 'centered-overlap', 'window-single'):
         raise ValueError('unsupported planner_layout')
-    if layout == 'centered-overlap':
-        if (span != 16 or config.get('planner_stride_beats') != 4
+    if layout in ('centered-overlap', 'window-single'):
+        expected_stride = 4 if layout == 'centered-overlap' else None
+        if (span != 16 or config.get('planner_stride_beats') != expected_stride
                 or config.get('draft_z_anchor_mode') != 'integer'
                 or config['draft_z_stride_beats'] != 1
                 or config.get('reconstruction_span_beats') != 4
                 or config['target_beats'] != 16
                 or config['decoder_z_before_beats'] != 4 or config['decoder_z_after_beats'] != 4):
-            raise ValueError('centered-overlap requires integer Z1, four-beat reconstruction, Plan16/stride4 and target16/context4')
+            raise ValueError(layout+' requires integer Z1, four-beat reconstruction, Plan16 and target16/context4 with its own Plan spacing')
         return span
     if span == 4 and config['draft_z_stride_beats'] != 4:
         raise ValueError('four-beat Plan requires aligned four-beat Z')

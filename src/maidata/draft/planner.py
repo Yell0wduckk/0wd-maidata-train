@@ -16,6 +16,10 @@ def select_planner_windows(z, groups, starts, valid, config, layout=None):
         centers = starts[:, None] + torch.arange(-8, 25, device=starts.device)
         return WindowLatents(gather_centers(z, groups, centers, valid, layout=layout),
                              starts, config['target_beats'], valid)
+    if config.get('planner_layout', 'legacy') == 'window-single':
+        centers = starts[:, None] + torch.arange(17, device=starts.device)
+        return WindowLatents(gather_centers(z, groups, centers, valid, layout=layout),
+                             starts, config['target_beats'], valid)
     return select_windows(z, groups, starts, valid, target_beats=config['target_beats'],
         before_beats=0, after_beats=0, z_stride_beats=config['draft_z_stride_beats'], layout=layout)
 
@@ -30,10 +34,12 @@ class PlannerHead(nn.Module):
             raise ValueError('Planner span must be 4 or 16 beats')
         self.latent_dim = latent_dim
         self.span_beats = span_beats
-        if layout not in ('legacy', 'centered-overlap'):
+        if layout not in ('legacy', 'centered-overlap', 'window-single'):
             raise ValueError('unsupported Planner layout')
         if layout == 'centered-overlap' and (span_beats != 16 or stride_beats != 4):
             raise ValueError('centered-overlap Planner requires span16/stride4')
+        if layout == 'window-single' and span_beats != 16:
+            raise ValueError('window-single Planner requires span16')
         self.layout, self.stride_beats = layout, stride_beats
         self.query = nn.Parameter(torch.zeros(dim))
         self.pool = Attention(dim, latent_dim, dim, heads, dropout,
@@ -46,6 +52,8 @@ class PlannerHead(nn.Module):
     def forward(self, windows):
         if self.layout == 'centered-overlap':
             return self._centered(windows)
+        if self.layout == 'window-single':
+            return self._window_single(windows)
         if self.span_beats == 4:
             return self._four_beat(windows)
         memory = windows.memory
@@ -58,6 +66,24 @@ class PlannerHead(nn.Module):
         query = self.query[None, None].expand(len(starts), 1, -1)
         kv = self.pool.project_memory(memory.values, memory.beats, valid)
         pooled = self.pool(query, starts[:, None], active[:, None], kv, valid)[:, 0]
+        h = self.mlp(pooled)
+        continuous = self.continuous(h).masked_fill(~active[:, None], 0)
+        category = self.category(h).masked_fill(~active[:, None], 0)
+        plan = torch.cat((continuous.float().sigmoid(), category.float().softmax(-1)), -1)
+        return PlannerOutput(continuous, category, plan.masked_fill(~active[:, None], 0), active)
+
+    def _window_single(self, windows):
+        """One window statistic reads its seventeen integer nodes, including endpoints."""
+        if windows.target_beats != 16:
+            raise ValueError('window-single Planner requires sixteen-beat parent windows')
+        memory, starts = windows.memory, windows.target_start
+        valid = (memory.valid & windows.window_valid[:, None]
+                 & (memory.beats >= starts[:, None]) & (memory.beats <= starts[:, None]+16))
+        active = valid.any(-1) & windows.window_valid
+        query = self.query[None, None].expand(len(starts), 1, -1)
+        kv = self.pool.project_memory(memory.values, memory.beats, valid)
+        # P retains its internal absolute-beat RoPE. Only M's Plan key is unpositioned.
+        pooled = self.pool(query, (starts+8)[:, None], active[:, None], kv, valid)[:, 0]
         h = self.mlp(pooled)
         continuous = self.continuous(h).masked_fill(~active[:, None], 0)
         category = self.category(h).masked_fill(~active[:, None], 0)

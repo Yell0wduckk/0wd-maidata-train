@@ -185,7 +185,7 @@ def collate_audio(items, *, config, packed=False):
         before_beats=config['decoder_z_before_beats'], after_beats=config['decoder_z_after_beats'],
         z_stride_beats=config['draft_z_stride_beats'],
         anchor_mode=config.get('draft_z_anchor_mode', 'block-center'))
-    if centered:
+    if config.get('planner_layout', 'legacy') in ('centered-overlap', 'window-single'):
         layouts['decoder'] = prepare_centers(draft.query_beats, draft.draft_valid,
             decoder_groups, decoder_starts[:, None]+torch.arange(-3, 20).float(), decoder_valid)
     z_layout = layouts['decoder']

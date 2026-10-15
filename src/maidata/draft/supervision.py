@@ -20,6 +20,9 @@ def prepare_auxiliary(items, config, ownership, draft):
     if config.get('planner_layout', 'legacy') == 'centered-overlap':
         p_layout = prepare_centers(draft.query_beats, draft.draft_valid, groups,
                                   starts[:, None]+torch.arange(-8, 25).float(), valid)
+    elif config.get('planner_layout', 'legacy') == 'window-single':
+        p_layout = prepare_centers(draft.query_beats, draft.draft_valid, groups,
+                                  starts[:, None]+torch.arange(17).float(), valid)
     else:
         p_layout = prepare_selection(draft.query_beats, draft.draft_valid, groups, starts, valid,
             target_beats=config['target_beats'], before_beats=0, after_beats=0,

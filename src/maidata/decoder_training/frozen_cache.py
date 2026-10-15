@@ -40,7 +40,8 @@ class FrozenCache:
             if self.use_z and self.z_anchor_mode != config.get('draft_z_anchor_mode', 'block-center'):
                 raise ValueError('fixed Z anchor mode differs from the M recipe')
             if self.predicted_plan and (manifest.get('planner_layout', 'legacy') != self.planner_layout
-                    or self.planner_layout == 'centered-overlap' and manifest.get('plan_stride_beats') != 4):
+                    or self.planner_layout == 'centered-overlap' and manifest.get('plan_stride_beats') != 4
+                    or self.planner_layout == 'window-single' and manifest.get('plan_stride_beats') is not None):
                 raise ValueError('fixed predicted Plan layout/stride differs from the M recipe')
             if (config['decoder_train_plan_source'] == 'predicted'
                     and manifest.get('plan_span_beats', 16) != self.plan_span_beats):
@@ -60,6 +61,10 @@ class FrozenCache:
                 or dp.get('z_width') != self.latent_dim
                 or dp.get('z_stride_beats', 1) != self.z_stride_beats
                 or dp.get('z_anchor_mode', 'block-center') != self.z_anchor_mode
+                or self.predicted_plan and (dp.get('planner_layout', 'legacy') != self.planner_layout
+                    or dp.get('plan_span_beats', 16) != self.plan_span_beats
+                    or self.planner_layout == 'centered-overlap' and dp.get('plan_stride_beats') != 4
+                    or self.planner_layout == 'window-single' and dp.get('plan_stride_beats') is not None)
                 or (self.predicted_plan and self.plan_span_beats == 4 and 'center_beats' not in dp['planner'])
                 or self.use_z and dp['z']['values'].shape[-1] != self.latent_dim):
             raise ValueError('fixed Draft representation/width differs; old Z cannot be expanded')

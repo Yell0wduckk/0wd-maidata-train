@@ -127,10 +127,10 @@ class ConditionAdapter(nn.Module):
         super().__init__()
         if type(plan_span_beats) is not int or plan_span_beats not in (4, 16):
             raise ValueError('plan_span_beats must be 4 or 16')
-        if planner_layout not in ('legacy', 'centered-overlap'):
-            raise ValueError('planner_layout must be legacy or centered-overlap')
-        if planner_layout == 'centered-overlap' and plan_span_beats != 16:
-            raise ValueError('centered-overlap requires Plan16')
+        if planner_layout not in ('legacy', 'centered-overlap', 'window-single'):
+            raise ValueError('unsupported planner_layout')
+        if planner_layout in ('centered-overlap', 'window-single') and plan_span_beats != 16:
+            raise ValueError(planner_layout+' requires Plan16')
         self.validate_inputs = True
         self.latent_dim = latent_dim
         self.z_cross_attention = z_cross_attention

@@ -68,7 +68,8 @@ class Decoder(nn.Module):
             if self.validate_inputs:
                 require((audio_mapping == audio_layout['mapping']).all(), 'audio query layout ownership differs')
         condition = self.condition(z, plan, plan_valid, plan_beats)
-        plan_index = z.values.shape[1] if self.plan_span_beats == 16 and self.planner_layout == 'legacy' else None
+        plan_index = (z.values.shape[1] if self.plan_span_beats == 16
+                      and self.planner_layout in ('legacy', 'window-single') else None)
         condition_indices = None if audio_layout is None else audio_layout.get('condition_rows', {}).get('key_indices')
         def select(kv):
             if audio_layout is not None:

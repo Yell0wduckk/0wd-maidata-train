@@ -26,7 +26,10 @@ class GTPlanCache:
         # always has its explicit schema and four-beat producer semantics.
         self.span_beats = 4 if schema == PLAN4_SCHEMA else 16
         self.layout = 'centered-overlap' if schema == CENTERED_SCHEMA else 'legacy'
-        if config is not None and config.get('planner_layout', 'legacy') != self.layout:
+        consumer_layout = config.get('planner_layout', 'legacy') if config is not None else self.layout
+        compatible_window_statistics = (consumer_layout == 'window-single'
+                                        and self.layout == 'legacy' and self.span_beats == 16)
+        if consumer_layout != self.layout and not compatible_window_statistics:
             raise ValueError('GT plan cache schema differs from planner_layout')
         if config is not None and config.get('planner_span_beats', 16) != self.span_beats:
             raise ValueError('GT plan cache schema differs from planner_span_beats')
@@ -108,8 +111,10 @@ def select_plan_window(bank, identity, chart_id, start, config, *, window_index=
     import torch
     if config.get('planner_layout', 'legacy') == 'centered-overlap':
         return select_plan_conditions(bank, identity, chart_id, start, config, window_index=window_index)[:2]
-    if bank.get('planner_layout', 'legacy') != 'legacy':
-        raise ValueError('cached planner_layout differs from legacy recipe')
+    consumer_layout = config.get('planner_layout', 'legacy')
+    allowed = ('legacy', 'window-single') if consumer_layout == 'window-single' else ('legacy',)
+    if bank.get('planner_layout', 'legacy') not in allowed:
+        raise ValueError('cached planner_layout differs from window-statistic recipe')
     span = config.get('planner_span_beats', 16)
     if span not in (4, 16):
         raise ValueError('planner_span_beats must be 4 or 16')

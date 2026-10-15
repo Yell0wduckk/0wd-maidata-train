@@ -65,10 +65,12 @@ def plan_centers_for_starts(starts, config, device):
 def empty_plan_geometry(starts, coverage, config, device):
     """Keep Plan4 coordinates even when M does not consume any Z values."""
     count, width = len(starts), config['draft_latent_dim']
-    if config.get('planner_layout', 'legacy') == 'centered-overlap':
+    if config.get('planner_layout', 'legacy') in ('centered-overlap', 'window-single'):
         beats = torch.as_tensor(starts, dtype=torch.float32, device=device)[:, None]+torch.arange(-3, 20, device=device)
         z = BeatMemory(torch.zeros((count, 23, width), device=device), beats,
                        torch.zeros((count, 23), dtype=torch.bool, device=device))
+        if config['planner_layout'] == 'window-single':
+            return z, torch.zeros((count, 12), device=device), torch.zeros(count, dtype=torch.bool, device=device)
         return z, torch.zeros((count, 5, 12), device=device), torch.zeros((count, 5), dtype=torch.bool, device=device)
     if config.get('planner_span_beats', 16) == 4:
         beats = torch.as_tensor(starts, dtype=torch.float32, device=device)[:, None]
@@ -84,7 +86,7 @@ def empty_plan_geometry(starts, coverage, config, device):
 def decoder_z_window(conditions, index, config, device):
     """Select real Z when enabled; otherwise supply only each Plan4 slot's beat."""
     start = conditions.starts[index]
-    if config.get('planner_layout', 'legacy') == 'centered-overlap':
+    if config.get('planner_layout', 'legacy') in ('centered-overlap', 'window-single'):
         if not config['decoder_z_cross_attention']:
             return empty_plan_geometry((start,), conditions.coverage, config, device)[0]
         from maidata.draft.windows import gather_centers
@@ -102,7 +104,7 @@ def decoder_z_window(conditions, index, config, device):
 
 
 def _planner_windows(z, groups, starts, valid, config):
-    if config.get('planner_layout', 'legacy') == 'centered-overlap':
+    if config.get('planner_layout', 'legacy') in ('centered-overlap', 'window-single'):
         return select_planner_windows(z, groups, starts, valid, config)
     span = config.get('planner_span_beats', 16)
     margin = 4 if span == 4 else 0

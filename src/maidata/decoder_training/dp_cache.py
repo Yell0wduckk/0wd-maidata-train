@@ -81,6 +81,9 @@ class CachedP0Dataset(Dataset):
         if self.config.get('planner_layout', 'legacy') == 'centered-overlap':
             layout = prepare_centers(inputs.query_beats, inputs.draft_valid, groups,
                                      starts[:, None]+torch.arange(-8, 25), valid)
+        elif self.config.get('planner_layout', 'legacy') == 'window-single':
+            layout = prepare_centers(inputs.query_beats, inputs.draft_valid, groups,
+                                     starts[:, None]+torch.arange(17), valid)
         return pack_batch(dict(variant=variant,bank=bank,inputs=inputs,groups=groups,starts=starts,
             valid=valid,layout=layout,chart_to_group=ownership,conditions=[asdict(c) for c in conditions],
             window_ids=[w['window_id'] for w in windows],chart_ids=[w['chart_id'] for w in windows]))
@@ -99,10 +102,12 @@ def save_outputs(path, batch, z, plan, producer_sha, *, z_stride_beats=None, pla
         chart_to_group=batch['chart_to_group'],conditions=batch['conditions'],
         z={k:getattr(z,k).detach().cpu() for k in ('values','beats','valid')},
         planner=dict(window_ids=batch['window_ids'],chart_ids=batch['chart_ids'],
-            plan_span_beats=plan_span_beats,
+            plan_span_beats=plan_span_beats, planner_layout=planner_layout,
             groups=batch['groups'].cpu(),starts=batch['starts'].cpu(),
             plan_values=plan.plan_values.detach().cpu(),valid=plan.valid.cpu()))
     expected_shape = (len(batch['window_ids']), 12)
+    if planner_layout == 'window-single' and plan.plan_beats is not None:
+        raise ValueError('window-single D/P export must not attach Plan positions')
     if planner_layout == 'centered-overlap':
         if plan.plan_beats is None or plan.plan_values.shape != (len(batch['window_ids']), 5, 12):
             raise ValueError('centered D/P export requires five positioned plans per window')

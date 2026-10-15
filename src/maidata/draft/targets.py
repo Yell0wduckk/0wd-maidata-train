@@ -197,6 +197,10 @@ def planner_target(planner, start_tick, end_tick, *, span_beats=16, layout='lega
             raise ValueError('centered-overlap Planner requires span16, stride4 and a sixteen-beat parent')
         return [planner.window(center-8*96, center+8*96) if index < 4 or last_parent else None
                 for index, center in enumerate(range(start_tick, end_tick+1, stride_beats*96))]
+    if layout == 'window-single':
+        if span_beats != 16 or end_tick-start_tick != 16*96:
+            raise ValueError('window-single Planner requires one sixteen-beat window statistic')
+        return planner.window(start_tick, end_tick)
     if layout != 'legacy':
         raise ValueError('unsupported Planner layout')
     if span_beats == 16:

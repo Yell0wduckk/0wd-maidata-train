@@ -73,10 +73,12 @@ def select_check_step(plan, config, steps, requested):
 
 
 def run(config, *, resume=None, cuda_check=False, cost_check=False, check_step=None,
-        upgrade_z_normalization=False):
+        upgrade_z_normalization=False, upgrade_single_plan16=False):
     config = recipe.resolve(config)
     if upgrade_z_normalization and not resume:
         raise ValueError('Z normalization upgrade requires a complete joint resume checkpoint')
+    if upgrade_single_plan16 and (not resume or upgrade_z_normalization):
+        raise ValueError('single Plan16 upgrade requires its own complete joint resume without another upgrade')
     recipe.validate(config)
     device = torch.device(config['joint_train_device'])
     if device.type == 'cuda' and (not torch.cuda.is_available() or
@@ -100,10 +102,18 @@ def run(config, *, resume=None, cuda_check=False, cost_check=False, check_step=N
     opt = recipe.optimizer(model.parameters(), config)
     sched = recipe.scheduler(opt, steps, config)
     completed, step, best, restored = 0, 0, None, [None, None]
+    plan_upgrade = None
     if resume:
         payload = torch.load(resume, map_location='cpu', weights_only=False)
         completed, step, best = checkpoint.restore(payload, model, opt, sched,
-            config=config, loaders=loaders, upgrade_z_normalization=upgrade_z_normalization)
+            config=config, loaders=loaders, upgrade_z_normalization=upgrade_z_normalization,
+            upgrade_single_plan16=upgrade_single_plan16, binding=binding, steps=steps)
+        if upgrade_single_plan16:
+            plan_upgrade = dict(from_layout=payload['recipe']['planner_layout'],
+                to_layout=config['planner_layout'],
+                from_gt_plan_cache=payload['binding']['paths']['decoder_train_gt_plan_cache'],
+                to_gt_plan_cache=binding['paths']['decoder_train_gt_plan_cache'],
+                source_checkpoint=payload.get('source'))
         restored = [state if started else None for state, started in
                     zip(payload['loader_rng'], payload['loader_started'])]
         del payload
@@ -134,6 +144,11 @@ def run(config, *, resume=None, cuda_check=False, cost_check=False, check_step=N
         write_json(output / 'z-normalization-upgrade.json', dict(
             resume=str(resume), completed_epochs=completed, step=step,
             change='parameter-free LayerNorm after M Z projection plus source embedding',
+            inherited='all E/D/R/P/M parameters, optimizer, scheduler, complete-epoch cursor and all RNG',
+            source=source))
+    if plan_upgrade is not None:
+        write_json(output / 'single-plan16-upgrade.json', dict(plan_upgrade,
+            resume=str(resume), completed_epochs=completed, step=step,
             inherited='all E/D/R/P/M parameters, optimizer, scheduler, complete-epoch cursor and all RNG',
             source=source))
     for epoch in range(completed + 1, config['joint_train_stop_after_epochs'] + 1):

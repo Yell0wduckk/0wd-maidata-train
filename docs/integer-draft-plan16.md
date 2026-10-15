@@ -38,6 +38,28 @@ python -m maidata.decoder_training.gt_plan_cache --config RUN_CONFIG --output NE
 
 旧Plan16单token、旧Plan4六token及旧Z块中心路径继续按保存配方加载。缺失新字段解释为历史默认值；参数形状相同也不能将旧语义作为新语义完整续训。
 
+`configs/joint-main320-z4-plan16-gt.json`单独保留扩容后的320维、M八层和3/80000预算，但使用旧Z4块中心与旧Plan16单token，明确设置`planner_layout=legacy`、`draft_z_anchor_mode=block-center`，两个新跨度/间隔字段保持null。D中心为2、6、10…，R解析各Z所属四拍块；P仅池化当前16拍内四枚Z。M读取六枚Z（相对中心−2、2、6、10、14、18）和一枚Plan，`plan_index=6`。Plan key不旋转，Plan评分使用未旋转query；Z评分仍使用绝对拍RoPE，两者保留旧单softmax数学。普通推理、预计算缓存与增量推理按checkpoint配方选择该历史路径，无需新增生产源码分支。
+
+该配置从头训练150轮、调度150轮，最大LR6e-4、M chunk32768、BF16、workers12。GT引用既有旧Plan16资产；部署到不同输入根时仅覆盖运行路径，不改其布局身份。兼容测试`tests/test_main320_plan16_compat.py`检查实际320维完整权重严格加载、旧字段缺省、单Plan无位置评分，以及小模型普通/冷缓存/热缓存和增量一致性；CPU测试不代表CUDA性能或生成谱面质量验收。
+
+## 整数Draft保留，改用单窗无位置Plan16
+
+独立模式`planner_layout=window-single`由`configs/joint-main320-integer-single-plan16-gt.json`选定。它保留整数Z0…T、Z1输出间隔、每枚Z的四拍重叠R任务与M的23枚Z；每个16拍窗口仅有一枚Plan，GT统计范围为`[s,s+16)`。P读取整数节点`s…s+16`共17槽，内部池化query位于`s+8`且保留P自身的绝对拍RoPE。输出为`[B,12]`及独立`[B]`有效位，`plan_beats=None`。
+
+M的23枚Z与单Plan共24个key，`plan_index=23`。Z的评分使用旋转后的query/key，Plan的评分使用未旋转的query/key，共用原单softmax计算；Plan不获得位置编码。该选择与旧Z4/单Plan16的`legacy`布局是两个不同配方身份，不能通过把layout改为legacy而丢失整数Draft几何。普通、GT/预测条件、预计算缓存、交互及增量推理保留同一语义。
+
+GT直接复用既有`maidata.gt-plan12.v1`窗口Plan16缓存，统计与归一化不变。消费者接受其历史`legacy`统计布局，但不改写缓存manifest、schema或生产者身份，也不生产新统计资产。P的辅助监督每个基础窗一次，对应相同的`[s,s+16)`统计；R监督及去重规则不变。预测D/P缓存和新checkpoint另行记录`window-single`，不能复用其他布局的预测Plan。
+
+从`centered-overlap`完整轮checkpoint迁移须显式执行：
+
+```text
+python -m maidata.joint_training --config NEW_RUN_CONFIG --resume COMPLETE_EPOCH_CHECKPOINT --upgrade-single-plan16
+```
+
+迁移只允许`centered-overlap/stride4`改为`window-single/stride=null`及GT缓存输入路径变化。全部其他配方字段、每轮更新数和其他输入路径必须一致；不能同时升级Z归一化。五模块权重严格加载，完整optimizer、scheduler、完整轮游标、DataLoader和全部RNG照常恢复；不修改原checkpoint。新输出记录`single-plan16-upgrade.json`来源及变更，此后新checkpoint按`window-single`正常续训，不再传迁移标志。普通resume仍拒绝跨布局。
+
+受影响CPU测试包括`test_window_single_plan_runtime.py`与`test_window_single_plan_resume.py`：P的17节点/中心与原centered第三槽数值相等，窗外Z不影响P；M24-key无位置Plan评分，dense/packed/增量一致；旧GT读取不修改资产；单块/多块E/D各一次共享反向；严格状态迁移和非法变更拒绝；普通/冷缓存/热缓存的GT、预测、独立条件开关一致。它们不作为真实CUDA训练或谱面质量证据。
+
 ## 参数与运行范围
 
 E/D/M保持320维、8头、每头40维；E/M前段FFN1280，D/M专家640，M为8层/router前2层。P与R结构不变。参数总数56,178,272，相对当前Plan4增加0；相对最初256×6结构增加23,431,846。相同seed下各模块初始权重逐项完全相同。

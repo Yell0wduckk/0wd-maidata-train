@@ -65,7 +65,7 @@ def collate_windows(examples, *, device, expand=True):
 
 def select_condition_windows(z, groups, starts, window_valid, config):
     """Consumer calls the public data-only selector; no learned parameters are shared."""
-    if config.get('planner_layout', 'legacy') == 'centered-overlap':
+    if config.get('planner_layout', 'legacy') in ('centered-overlap', 'window-single'):
         from maidata.draft.windows import gather_centers
         from maidata.draft.types import WindowLatents
         desired = starts[:, None] + torch.arange(-3, 20, device=starts.device, dtype=starts.dtype)
