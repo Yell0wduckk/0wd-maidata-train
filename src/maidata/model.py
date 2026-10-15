@@ -5,11 +5,24 @@ ENCODER_KEYS = (
     'stage_attention_radii', 'temporal_kernel_size', 'stem_channels', 'frequency_dim',
     'frequency_queries', 'fpn_rates', 'target_beats', 'audio_before_beats',
     'audio_after_beats', 'dropout', 'rope_base', 'rope_position_scale', 'fpn_p0_normalization',
+    'qk_normalization',
 )
+
+QK_KEYS = ('qk_normalization', 'draft_qk_normalization',
+           'planner_qk_normalization', 'decoder_qk_normalization')
+
+
+def with_legacy_defaults(saved):
+    """Parameter-free Q/K changes still require explicit historical semantics."""
+    result = dict(saved)
+    for key in QK_KEYS:
+        result.setdefault(key, False)
+    return result
+
 
 def encoder_config(config):
     """Old saved recipes predate P0 normalization and retain their old math."""
-    return {key: config.get(key, False) if key == 'fpn_p0_normalization' else config[key]
+    return {key: config.get(key, False) if key in ('fpn_p0_normalization', 'qk_normalization') else config[key]
             for key in ENCODER_KEYS}
 
 
@@ -26,6 +39,7 @@ def build_draft(config):
     keys = ('layers', 'dim', 'heads', 'experts', 'expert_ffn_dim', 'latent_dim',
             'dropout', 'norm_eps', 'difficulty_vocab_size', 'level_center', 'level_scale', 'span_scale')
     return DraftGenerator(audio_dim=config['d_model'],
+        qk_normalization=config.get('draft_qk_normalization', False),
         **{key: config['draft_' + key] for key in keys},
         rope_base=config['rope_base'], rope_position_scale=config['rope_position_scale'])
 
@@ -34,6 +48,7 @@ def build_planner(config):
     from .draft.planner import PlannerHead
     keys = ('dim', 'heads', 'mlp_dim', 'dropout', 'norm_eps')
     return PlannerHead(latent_dim=config['draft_latent_dim'], span_beats=plan_span(config),
+        qk_normalization=config.get('planner_qk_normalization', False),
         **{key: config['planner_' + key] for key in keys},
         rope_base=config['rope_base'], rope_position_scale=config['rope_position_scale'])
 
@@ -68,6 +83,7 @@ def build_decoder(config):
             'experts', 'readout_ffn_dim', 'dropout', 'norm_eps', 'rope_base', 'rope_position_scale',
             'note_dims', 'route_dims', 'time_base', 'time_scale', 'condition_gate_init', 'z_cross_attention')
     model = Decoder(audio_dim=config['d_model'], latent_dim=config['draft_latent_dim'],
+                    qk_normalization=config.get('decoder_qk_normalization', False),
                     z_normalization=config.get('decoder_z_normalization', False),
                     plan_span_beats=plan_span(config),
                     **{key: config['decoder_' + key] for key in keys})

@@ -1,7 +1,7 @@
 """One complete-epoch checkpoint for the shared E/D/R/P/M graph."""
 import json
 
-from maidata.model import ENCODER_KEYS
+from maidata.model import ENCODER_KEYS, with_legacy_defaults
 from maidata.draft.route_acceptance import route_loss_recipe
 from maidata.training.checkpoint import (atomic_save, rng_state, restore_rng,
                                         source_identity, validate_cursor)
@@ -45,7 +45,7 @@ def restore(payload, model, opt, sched, *, loaders, upgrade_z_normalization=Fals
     if len(payload['loader_rng']) != len(loaders) or len(payload['loader_started']) != len(loaders):
         raise ValueError('joint checkpoint DataLoader RNG inventory differs')
     if 'config' in _:
-        current, saved = recipe(_['config']), dict(payload['recipe'])
+        current, saved = with_legacy_defaults(recipe(_['config'])), with_legacy_defaults(payload['recipe'])
         saved.setdefault('reconstruction_route_loss', 'ce')
         saved.setdefault('planner_span_beats', 16)
         previous_z_norm = saved.get('decoder_z_normalization', False)

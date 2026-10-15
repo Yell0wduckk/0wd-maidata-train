@@ -6,6 +6,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from maidata.nn.position import apply_rope
+from maidata.nn.qk_norm import normalize_qk, validate_qk_normalization
 
 
 def positive_ints(**values):
@@ -21,13 +22,15 @@ def numerical_config(dropout, norm_eps, base, scale):
 
 
 class Attention(nn.Module):
-    def __init__(self, query_dim, memory_dim, width, heads, dropout, *, rotary, base, scale):
+    def __init__(self, query_dim, memory_dim, width, heads, dropout, *, rotary, base, scale,
+                 qk_normalization=False):
         super().__init__()
         positive_ints(query_dim=query_dim, memory_dim=memory_dim, width=width, heads=heads)
         if width % heads or (rotary and (width // heads) % 2):
             raise ValueError('attention width/heads must be integral; RoPE head width must be even')
         self.width, self.heads, self.dropout = width, heads, dropout
         self.rotary, self.base, self.scale = rotary, base, scale
+        self.qk_normalization = validate_qk_normalization(qk_normalization)
         self.query = nn.Linear(query_dim, width)
         self.key = nn.Linear(memory_dim, width)
         self.value = nn.Linear(memory_dim, width)
@@ -36,15 +39,22 @@ class Attention(nn.Module):
     def split(self, x):
         return x.reshape(*x.shape[:2], self.heads, self.width // self.heads).transpose(1, 2)
 
+    def normalize_qk(self, value):
+        return normalize_qk(value, self.qk_normalization)
+
+    def project_query(self, values):
+        """Return normalized, unrotated heads for ordinary and pooled queries."""
+        return self.normalize_qk(self.split(self.query(values)))
+
     def project_memory(self, values, beats, valid):
         values = values.masked_fill(~valid[..., None], 0)
-        k, v = self.split(self.key(values)), self.split(self.value(values))
+        k, v = self.normalize_qk(self.split(self.key(values))), self.split(self.value(values))
         if self.rotary:
             k = apply_rope(k, beats.masked_fill(~valid, 0), self.base, self.scale)
         return k, v
 
     def forward(self, query, beats, valid, kv, memory_valid):
-        q = self.split(self.query(query.masked_fill(~valid[..., None], 0)))
+        q = self.project_query(query.masked_fill(~valid[..., None], 0))
         if self.rotary:
             q = apply_rope(q, beats.masked_fill(~valid, 0), self.base, self.scale)
         allowed = valid[:, None, :, None] & memory_valid[:, None, None, :]

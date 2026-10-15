@@ -21,6 +21,7 @@ def self_attention(module, x, beats, valid, layout):
     layers = (module.query, module.key, module.value)
     parts = F.linear(x, torch.cat([m.weight for m in layers]), torch.cat([m.bias for m in layers]))
     raw, key, value = parts.reshape(len(x), 3, module.heads, module.dim//module.heads).unbind(1)
+    raw, key = module.normalize_qk(raw), module.normalize_qk(key)
     query, key = rotate(module, raw, beats), rotate(module, key, beats)
     sizes = [count*width for count, width, _ in layout['groups']]
     queries, keys, values = [t.index_select(0, layout['gather']).split(sizes) for t in (query, key, value)]
@@ -68,7 +69,7 @@ def condition_multiples(valid, layout, masks):
 
 
 def condition_attention(module, x, beats, valid, kv, plan_index, layout):
-    raw = module.query(x).reshape(len(x), module.heads, module.dim//module.heads)
+    raw = module.normalize_qk(module.query(x).reshape(len(x), module.heads, module.dim//module.heads))
     if plan_index is None:
         raise ValueError('condition attention requires the unpositioned Plan16 key boundary')
     query = torch.cat((rotate(module, raw, beats), raw), -1)

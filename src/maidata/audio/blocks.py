@@ -10,6 +10,7 @@ from maidata.audio.attention import (
 )
 from maidata.audio.geometry import mask_values, pool_stride
 from maidata.audio.types import ScaleMemory
+from maidata.nn.qk_norm import normalize_qk, validate_qk_normalization
 
 
 class MacaronFeedForward(nn.Module):
@@ -62,6 +63,7 @@ class SharedConformerBlock(nn.Module):
         dropout: float,
         rope_base: float,
         rope_position_scale: float,
+        qk_normalization: bool = False,
     ) -> None:
         super().__init__()
         if heads < 1 or d_model < 1 or d_model % heads or (d_model // heads) % 2:
@@ -71,6 +73,7 @@ class SharedConformerBlock(nn.Module):
         self.dropout_p = dropout
         self.rope_base = rope_base
         self.rope_position_scale = rope_position_scale
+        self.qk_normalization = validate_qk_normalization(qk_normalization)
         self.ffn1 = MacaronFeedForward(d_model, ffn_dim, dropout)
         self.attention_norm = nn.LayerNorm(d_model)
         self.q = nn.Linear(d_model, d_model)
@@ -87,7 +90,7 @@ class SharedConformerBlock(nn.Module):
 
     def _rotated(self, values: Tensor, memory: ScaleMemory) -> Tensor:
         return apply_rope(
-            self._heads(mask_values(values, memory.valid)),
+            normalize_qk(self._heads(mask_values(values, memory.valid)), self.qk_normalization),
             memory.beats.masked_fill(~memory.valid, 0.0),
             self.rope_base,
             self.rope_position_scale,

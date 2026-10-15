@@ -44,7 +44,10 @@ def execution(device, precision):
 
 
 def encoder_recipe(config):
-    return encoder_config(config)
+    recipe = encoder_config(config)
+    if not recipe.get('qk_normalization', False):
+        recipe.pop('qk_normalization', None)
+    return recipe
 
 
 def feature_identity(*, grid=None, mel_root=None, mel_stats=None):
@@ -80,7 +83,9 @@ def draft_identity(checkpoint, audio_key, *, difficulty, level, device, precisio
         raise ValueError('difficulty must be 1..7 and level finite')
     config = checkpoint.config
     keys = [key for key in config if key.startswith(('draft_', 'planner_'))
-            and not key.startswith(('draft_train_', 'planner_train_'))]
+            and not key.startswith(('draft_train_', 'planner_train_'))
+            and not (key in ('draft_qk_normalization', 'planner_qk_normalization')
+                     and not config[key])]
     return canonical(dict(schema=DRAFT_SCHEMA, checkpoint=checkpoint.identity, audio_key=audio_key,
         config={key: config[key] for key in keys},
         rope={key: config[key] for key in ('rope_base', 'rope_position_scale')},

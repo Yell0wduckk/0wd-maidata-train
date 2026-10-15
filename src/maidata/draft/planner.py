@@ -8,7 +8,7 @@ from .types import PlannerOutput
 
 class PlannerHead(nn.Module):
     def __init__(self, *, latent_dim, dim, heads, mlp_dim, dropout, norm_eps,
-                 rope_base, rope_position_scale, span_beats=16):
+                 rope_base, rope_position_scale, span_beats=16, qk_normalization=False):
         super().__init__()
         positive_ints(latent_dim=latent_dim, dim=dim, heads=heads, mlp_dim=mlp_dim)
         numerical_config(dropout, norm_eps, rope_base, rope_position_scale)
@@ -18,7 +18,8 @@ class PlannerHead(nn.Module):
         self.span_beats = span_beats
         self.query = nn.Parameter(torch.zeros(dim))
         self.pool = Attention(dim, latent_dim, dim, heads, dropout,
-                              rotary=True, base=rope_base, scale=rope_position_scale)
+                              rotary=True, base=rope_base, scale=rope_position_scale,
+                              qk_normalization=qk_normalization)
         self.mlp = nn.Sequential(nn.LayerNorm(dim, eps=norm_eps), nn.Linear(dim, mlp_dim),
                                  nn.GELU(), nn.Dropout(dropout))
         self.continuous = nn.Linear(mlp_dim, 8)

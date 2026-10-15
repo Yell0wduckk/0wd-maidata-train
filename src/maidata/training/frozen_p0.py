@@ -21,7 +21,8 @@ class FrozenP0:
         m = self.manifest
         if m.get('schema') != P0_SCHEMA or m.get('complete') is not True or 'encoder' not in m:
             raise ValueError('cached Drafter requires a complete P0 export with its frozen Encoder snapshot')
-        if set(m['encoder_config']) - {'fpn_p0_normalization'} != set(ENCODER_KEYS) - {'fpn_p0_normalization'}:
+        optional = {'fpn_p0_normalization', 'qk_normalization'}
+        if set(m['encoder_config']) - optional != set(ENCODER_KEYS) - optional:
             raise ValueError('P0 Encoder configuration keys differ')
         self.encoder_config = encoder_config(m['encoder_config'])
         if set(self.encoder_config) != set(ENCODER_KEYS) or m['p0_rate'] != self.encoder_config['fpn_rates'][0]:

@@ -2,7 +2,7 @@
 import json
 import torch
 
-from maidata.model import ENCODER_KEYS, encoder_config
+from maidata.model import ENCODER_KEYS, encoder_config, with_legacy_defaults
 from maidata.training.frozen_p0 import FrozenP0
 from .checkpoint import SCHEMA, ARCHITECTURE
 
@@ -19,7 +19,7 @@ def prepare(config, resume=None):
     if not config['decoder_train_p0_cache']:
         raise ValueError('cached adaptation requires --p0-cache including its frozen Encoder snapshot')
     p0 = FrozenP0(config['decoder_train_p0_cache'])
-    saved = payload['recipe']
+    saved = with_legacy_defaults(payload['recipe'])
     if saved.get('decoder_train_audio_scope') != 'window':
         raise ValueError('adaptation must preserve the source Decoder local-window audio scope')
     encoder = encoder_config(saved)

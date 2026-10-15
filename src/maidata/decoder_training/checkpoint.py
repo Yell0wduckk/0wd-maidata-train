@@ -5,7 +5,7 @@ import numpy as np
 from pathlib import Path
 import torch
 
-from maidata.model import ENCODER_KEYS
+from maidata.model import ENCODER_KEYS, QK_KEYS, with_legacy_defaults
 from maidata.training import checkpoint as stage_one
 from maidata.training.checkpoint import digest_file, rng_state, atomic_save, validate_cursor
 from .plan import read_json
@@ -15,7 +15,7 @@ from .recipe import PATH_KEYS, restore_optimizer
 SCHEMA = 'maidata.decoder-training.v4'
 ARCHITECTURE = 'maidata.decoder-causal-cont-tick384.v2'
 PLANNER_KEYS = ('planner_dim','planner_heads','planner_mlp_dim','planner_dropout','planner_norm_eps',
-                'planner_span_beats')
+                'planner_span_beats', 'planner_qk_normalization')
 
 
 def recipe(config):
@@ -102,9 +102,10 @@ def restore_rng(state):
 
 
 def _validate_producer(payload, config, binding):
-    keys = [k for k in config if k in ENCODER_KEYS or k.startswith('draft_') or k in PLANNER_KEYS]
-    current = json.loads(json.dumps({k:config[k] for k in keys}))
-    saved = dict(payload['recipe'])
+    effective = with_legacy_defaults(config)
+    keys = [k for k in effective if k in ENCODER_KEYS or k.startswith('draft_') or k in PLANNER_KEYS]
+    current = json.loads(json.dumps({k:effective[k] for k in keys}))
+    saved = with_legacy_defaults(payload['recipe'])
     saved.setdefault('fpn_p0_normalization', False)
     saved.setdefault('draft_z_stride_beats', 1)
     saved.setdefault('planner_span_beats', 16)
@@ -142,6 +143,9 @@ def restore(payload, model, opt, sched, *, config, binding, source, producer, st
         raise ValueError('joint/cached optimizer ownership differs; use weight initialization for adaptation')
     if payload['recipe'].get('planner_span_beats', 16) != config.get('planner_span_beats', 16):
         raise ValueError('Decoder resume Plan span differs')
+    for key in QK_KEYS:
+        if payload['recipe'].get(key, False) != config.get(key, False):
+            raise ValueError(f'Decoder resume representation {key} differs')
     if model.cached and (payload.get('audio_producer') != model.audio_producer or payload['producer'] != producer):
         raise ValueError('adaptation resume requires the same frozen P0 and Z producers')
     _load(model,payload['model_state'])
