@@ -1,5 +1,7 @@
 # 当前源码状态与实现边界
 
+整数Draft worktree另提供[Z2、全层Q/K RMSNorm与逐拍起音存在监督](z2-qknorm-onset.md)配方：每两拍一枚Z且每枚仍重建四拍，P9枚Z、M11枚Z加单枚无位置Plan16；起音存在头独立于关闭的数量监督。旧checkpoint按保存配方保留旧数学。
+
 当前主 Decoder 变更以 [独立 CONT 序列合同](decoder-cont-token-plan.md) 为准：删除 FieldReader，CONT 写入主 KV，窗口升级 v5。
 本文件区分已实现的新 `maidata` 音频 Encoder 和独立副本保留的旧模型。Encoder 规格位于[设计正本](../../0wd-v3-refactor-docs/new-audio-encoder.md)，模块、张量协议和 aux32 生产约定位于[实施文档](../../0wd-v3-refactor-docs/encoder-execution-plan.md)。来源与复制排除项见 [import-and-layout](import-and-layout.md)。
 

@@ -4,17 +4,19 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from maidata.nn.position import apply_rope
+from maidata.nn.qk_norm import normalize_qk, validate_qk_normalization
 from .types import KV, Memory, validate_memory
 from .checks import require
 from .condition_attention import attend as attend_condition
 
 
 class Attention(nn.Module):
-    def __init__(self, dim, memory_dim, heads, dropout, base, scale):
+    def __init__(self, dim, memory_dim, heads, dropout, base, scale, *, qk_normalization=False):
         super().__init__()
         self.validate_inputs = True
         self.dim, self.heads, self.dropout = dim, heads, dropout
         self.base, self.scale = base, scale
+        self.qk_normalization = validate_qk_normalization(qk_normalization)
         self.query = nn.Linear(dim, dim)
         self.key = nn.Linear(memory_dim, dim)
         self.value = nn.Linear(memory_dim, dim)
@@ -23,6 +25,16 @@ class Attention(nn.Module):
     def split(self, x):
         return x.reshape(*x.shape[:2], self.heads, self.dim // self.heads).transpose(1, 2)
 
+    def normalize_qk(self, value):
+        return normalize_qk(value, self.qk_normalization)
+
+    def project_query(self, values):
+        """Return normalized, unrotated heads; Plan scores use these same heads."""
+        projected = self.query(values)
+        if projected.ndim == 2:
+            projected = projected[None]
+        return self.normalize_qk(self.split(projected))
+
     def project(self, memory, *, plan_index=None, indices=None):
         if indices is not None:
             # CPU-prepared valid positions. Project/rotate only these rows,
@@ -30,7 +42,7 @@ class Attention(nn.Module):
             b, length = memory.valid.shape
             x = memory.values.flatten(0, 1).index_select(0, indices)[None]
             beats = memory.beats.flatten().index_select(0, indices)[None]
-            raw = self.split(self.key(x))
+            raw = self.normalize_qk(self.split(self.key(x)))
             key = apply_rope(raw, beats, self.base, self.scale)
             if plan_index is not None:
                 key = torch.where((indices % length >= plan_index)[None, None, :, None], raw, key)
@@ -41,14 +53,14 @@ class Attention(nn.Module):
                     0, indices, flat).reshape(b, length, self.heads, -1).transpose(1, 2)
             return KV(restore(key), restore(value), memory.valid)
         x = memory.values.masked_fill(~memory.valid[..., None], 0)
-        raw = self.split(self.key(x))
+        raw = self.normalize_qk(self.split(self.key(x)))
         k = apply_rope(raw, memory.beats.masked_fill(~memory.valid, 0), self.base, self.scale)
         if plan_index is not None:
             k = torch.cat((k[:, :, :plan_index], raw[:, :, plan_index:]), 2)
         return KV(k, self.split(self.value(x)), memory.valid)
 
     def forward(self, x, beats, valid, kv, *, plan_index=None, causal_offset=None):
-        raw = self.split(self.query(x.masked_fill(~valid[..., None], 0)))
+        raw = self.project_query(x.masked_fill(~valid[..., None], 0))
         return self.attend(raw, beats, valid, kv, plan_index=plan_index, causal_offset=causal_offset)
 
     def attend(self, raw, beats, valid, kv, *, plan_index=None, causal_offset=None):
@@ -114,6 +126,7 @@ class Attention(nn.Module):
         parts = F.linear(x.masked_fill(~valid[..., None], 0), torch.cat([m.weight for m in layers]),
                          torch.cat([m.bias for m in layers])).chunk(3, -1)
         raw, key, value = map(self.split, parts)
+        raw, key = self.normalize_qk(raw), self.normalize_qk(key)
         current = KV(apply_rope(key, beats.masked_fill(~valid, 0), self.base, self.scale), value, valid)
         offset = 0 if previous is None else previous.valid.shape[1]
         kv = current if previous is None else KV(torch.cat((previous.key, current.key), 2),

@@ -5,7 +5,7 @@ import numpy as np
 from pathlib import Path
 import torch
 
-from maidata.model import ENCODER_KEYS
+from maidata.model import ENCODER_KEYS, QK_KEYS, with_legacy_defaults
 from maidata.training import checkpoint as stage_one
 from maidata.training.checkpoint import digest_file, rng_state, atomic_save, validate_cursor
 from .plan import read_json
@@ -15,7 +15,8 @@ from .recipe import PATH_KEYS, restore_optimizer
 SCHEMA = 'maidata.decoder-training.v4'
 ARCHITECTURE = 'maidata.decoder-causal-cont-tick384.v2'
 PLANNER_KEYS = ('planner_dim','planner_heads','planner_mlp_dim','planner_dropout','planner_norm_eps',
-                'planner_span_beats','planner_stride_beats','planner_layout','reconstruction_span_beats')
+                'planner_span_beats','planner_stride_beats','planner_layout','reconstruction_span_beats',
+                'planner_qk_normalization')
 
 
 def recipe(config):
@@ -104,7 +105,7 @@ def restore_rng(state):
 def _validate_producer(payload, config, binding):
     keys = [k for k in config if k in ENCODER_KEYS or k.startswith('draft_') or k in PLANNER_KEYS]
     current = json.loads(json.dumps({k:config[k] for k in keys}))
-    saved = dict(payload['recipe'])
+    saved = with_legacy_defaults(payload['recipe'])
     saved.setdefault('fpn_p0_normalization', False)
     saved.setdefault('draft_z_stride_beats', 1)
     saved.setdefault('planner_span_beats', 16)
@@ -147,7 +148,8 @@ def restore(payload, model, opt, sched, *, config, binding, source, producer, st
     if payload['recipe'].get('planner_span_beats', 16) != config.get('planner_span_beats', 16):
         raise ValueError('Decoder resume Plan span differs')
     for key, default in (('planner_layout', 'legacy'), ('planner_stride_beats', None),
-                         ('draft_z_anchor_mode', 'block-center'), ('reconstruction_span_beats', None)):
+                         ('draft_z_anchor_mode', 'block-center'), ('reconstruction_span_beats', None),
+                         ('draft_z_stride_beats', 1), *[(key, False) for key in QK_KEYS]):
         if payload['recipe'].get(key, default) != config.get(key, default):
             raise ValueError(f'Decoder resume representation {key} differs')
     if model.cached and (payload.get('audio_producer') != model.audio_producer or payload['producer'] != producer):

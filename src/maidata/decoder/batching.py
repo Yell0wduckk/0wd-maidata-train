@@ -68,7 +68,9 @@ def select_condition_windows(z, groups, starts, window_valid, config):
     if config.get('planner_layout', 'legacy') in ('centered-overlap', 'window-single'):
         from maidata.draft.windows import gather_centers
         from maidata.draft.types import WindowLatents
-        desired = starts[:, None] + torch.arange(-3, 20, device=starts.device, dtype=starts.dtype)
+        from maidata.draft.spacing import integer_offsets
+        offsets = integer_offsets(-3, config['target_beats']+3, config['draft_z_stride_beats'])
+        desired = starts[:, None] + torch.tensor(offsets, device=starts.device, dtype=starts.dtype)
         selected = gather_centers(z, groups, desired, window_valid)
         return WindowLatents(selected, starts, config['target_beats'], window_valid)
     from maidata.draft.windows import select_windows

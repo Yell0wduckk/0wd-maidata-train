@@ -18,25 +18,36 @@ from .data import AudioPlan, make_loader, epoch_iterator
 from .network import Pretrainer
 from .frozen_p0 import resolve_audio_config
 from .pretrain import (LOSS_WEIGHT_KEYS, seed_scratch, make_optimizer, make_scheduler,
-                       clip_gradients, autocast, epoch_range, weighted_loss)
+                       clip_gradients, autocast, epoch_range, weighted_loss, loss_weight)
 
 
 def supports(batch):
     r, p = batch.reconstruction, batch.planner
     active = r.valid[:, None] & r.queries.valid
-    return dict({FIELD_PREFIX + name: int(((labels != -100) & active).sum())
+    result = dict({FIELD_PREFIX + name: int(((labels != -100) & active).sum())
                  for name, labels in r.fields.items()},
         moment96=int(((r.moment_tick != -100) & active).sum()),
         count=int(r.valid.sum()) * r.moment_counts.shape[1],
         empty=int(r.valid.sum()) * r.moment_counts.shape[1],
         positive_count=int(((r.moment_counts > 0) & r.valid[:, None]).sum()),
         planner_continuous=int(p.valid.sum()), planner_category=int(p.valid.sum()))
+    presence = getattr(r.queries, 'onset_presence', None)
+    if presence is not None:
+        mask = r.valid[:, None] & presence.valid
+        positive = int(((r.onset_presence_labels > 0) & mask).sum())
+        count = int(mask.sum())
+        result.update(onset_presence=count, onset_presence_positive=positive,
+                      onset_presence_negative=count-positive)
+    return result
 
 
 def query_cost(batch):
     """Report actual local queries separately from the preserved batch proxy."""
     r = batch.reconstruction
-    return int(r.queries.valid.sum()) + int(r.valid.sum()) * r.moment_counts.shape[1]
+    count = int(r.queries.valid.sum()) + int(r.valid.sum()) * r.moment_counts.shape[1]
+    if getattr(r.queries, 'onset_presence', None) is not None:
+        count += int((r.queries.onset_presence.valid & r.valid[:, None]).sum())
+    return count
 
 
 class Metrics:
@@ -44,29 +55,38 @@ class Metrics:
         self.sums = {k: [0., 0] for k in
                      (*[FIELD_PREFIX + name for name in FIELD_SIZES],
                       *[name for name in LOSS_WEIGHT_KEYS if name != 'classification'])}
+        self.presence_positive = self.presence_negative = 0
 
     def add(self, terms):
         for name, term in terms.items():
             self.sums[name][0] += float(term.total.detach())
             self.sums[name][1] += int(term.count)
+            if name == 'onset_presence':
+                self.presence_positive += int(term.positive_count)
+                self.presence_negative += int(term.negative_count)
 
     def report(self, config):
         terms = {k: dict(total=v[0], count=v[1], mean=v[0]/max(1, v[1])) for k,v in self.sums.items()}
+        if terms['onset_presence']['count']:
+            terms['onset_presence'].update(positive_count=self.presence_positive,
+                                           negative_count=self.presence_negative,
+                                           unit='owner_z_beat')
         fields = [v['mean'] for k,v in terms.items() if k.startswith(FIELD_PREFIX) and v['count']]
         classification = sum(fields) / max(1, len(fields))
         loss = classification * config[LOSS_WEIGHT_KEYS['classification']]
-        loss += sum(terms[k]['mean'] * config[w] for k,w in LOSS_WEIGHT_KEYS.items() if k != 'classification')
+        loss += sum(terms[k]['mean'] * loss_weight(config, w) for k,w in LOSS_WEIGHT_KEYS.items() if k != 'classification')
         return dict(loss=loss, classification=dict(mean=classification, active_fields=len(fields)), terms=terms)
 
 
 def update(model, batches, optimizer, scheduler, config, *, audit=False):
     device = next(model.parameters()).device
-    if any(not math.isfinite(config[k]) or config[k] < 0 for k in LOSS_WEIGHT_KEYS.values()):
+    if any(not math.isfinite(loss_weight(config, k)) or loss_weight(config, k) < 0 for k in LOSS_WEIGHT_KEYS.values()):
         raise ValueError('loss weights must be finite and nonnegative')
     total_counts = {k: 0 for k in Metrics().sums}
     for batch in batches:
         for k, n in supports(batch).items():
-            total_counts[k] += n
+            if k in total_counts:
+                total_counts[k] += n
     optimizer.zero_grad(set_to_none=True)
     metrics = Metrics()
     before = {k: [p.detach().clone() for p in m.parameters()] for k,m in model.named_children()} if audit else {}
@@ -108,6 +128,8 @@ class Diagnostics:
         self.composed = [0, 0]
         self.regression = dict(squared_error=0., absolute_error=0., correct=0, count=0)
         self.count_truth, self.count_prediction = Counter(), Counter()
+        self.onset_presence = torch.zeros(2, 2, dtype=torch.long)
+        self.onset_presence_seen = False
 
     @staticmethod
     def add_confusion(table, logits, labels, active):
@@ -132,6 +154,13 @@ class Diagnostics:
             self.add_confusion(self.confusion[name], logits, labels, active & (labels != -100))
         self.add_confusion(self.moment, output.moment_logits, target.moment_tick,
                            active & (target.moment_tick != -100))
+        if getattr(output, 'onset_presence_logits', None) is not None:
+            presence = target.queries.onset_presence
+            valid = target.valid[:, None] & presence.valid & output.onset_presence_valid
+            truth = target.onset_presence_labels[valid].long().detach().cpu()
+            prediction = (output.onset_presence_logits[valid] >= 0).long().detach().cpu()
+            self.onset_presence += torch.bincount(truth*2+prediction, minlength=4).reshape(2, 2)
+            self.onset_presence_seen = True
         beats = target.valid[:, None] & output.count_valid
         if getattr(output, 'count_values', None) is not None:
             prediction = output.count_values.float()[beats].detach().cpu()
@@ -187,6 +216,13 @@ class Diagnostics:
                 rounding='nearest integer, clamped only below zero; raw values used for MSE/MAE',
                 true_distribution=dict(sorted(self.count_truth.items())),
                 predicted_distribution=dict(sorted(self.count_prediction.items())))
+        if self.onset_presence_seen:
+            tn, fp, fn, tp = self.onset_presence.flatten().tolist()
+            result['onset_presence'] = dict(confusion=self.onset_presence.tolist(),
+                labels=['empty', 'onset'], count=tn+fp+fn+tp,
+                positive_count=fn+tp, negative_count=tn+fp,
+                precision=tp/max(1, tp+fp), recall=tp/max(1, tp+fn),
+                f1=2*tp/max(1, 2*tp+fp+fn), unit='owner_z_beat', threshold_logit=0.)
         return result
 
 
@@ -322,6 +358,8 @@ def run(config, *, resume=None, cuda_check=False):
             for k, value in metrics.sums.items():
                 epoch_metrics.sums[k][0] += value[0]
                 epoch_metrics.sums[k][1] += value[1]
+            epoch_metrics.presence_positive += metrics.presence_positive
+            epoch_metrics.presence_negative += metrics.presence_negative
             updates += 1
             step += 1
             windows += sum(len(b.window_ids) for b in batches)

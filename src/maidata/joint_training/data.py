@@ -21,6 +21,7 @@ from maidata.decoder_training.transport import pack
 from maidata.decoder_training.window_cache import WindowCache, select_window
 from maidata.draft.conditions import make_draft_inputs
 from maidata.draft.layout import prepare_p0, prepare_selection, prepare_centers
+from maidata.draft.spacing import integer_offsets
 from maidata.draft.supervision import prepare_auxiliary
 from maidata.preparation.cache import song_inputs, window_inputs
 from maidata.training.data import (AudioBatchSampler, AudioDataset, AudioPlan,
@@ -186,8 +187,9 @@ def collate_audio(items, *, config, packed=False):
         z_stride_beats=config['draft_z_stride_beats'],
         anchor_mode=config.get('draft_z_anchor_mode', 'block-center'))
     if config.get('planner_layout', 'legacy') in ('centered-overlap', 'window-single'):
+        offsets = integer_offsets(-3, config['target_beats']+3, config['draft_z_stride_beats'])
         layouts['decoder'] = prepare_centers(draft.query_beats, draft.draft_valid,
-            decoder_groups, decoder_starts[:, None]+torch.arange(-3, 20).float(), decoder_valid)
+            decoder_groups, decoder_starts[:, None]+torch.tensor(offsets).float(), decoder_valid)
     z_layout = layouts['decoder']
     z = Memory(torch.zeros((*z_layout['beats'].shape, config['draft_latent_dim'])),
                z_layout['beats'], z_layout['valid'])

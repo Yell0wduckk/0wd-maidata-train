@@ -5,12 +5,26 @@ ENCODER_KEYS = (
     'stage_attention_radii', 'temporal_kernel_size', 'stem_channels', 'frequency_dim',
     'frequency_queries', 'fpn_rates', 'target_beats', 'audio_before_beats',
     'audio_after_beats', 'dropout', 'rope_base', 'rope_position_scale', 'fpn_p0_normalization',
+    'qk_normalization',
 )
+
+QK_KEYS = ('qk_normalization', 'draft_qk_normalization',
+           'planner_qk_normalization', 'decoder_qk_normalization')
+
+
+def with_legacy_defaults(saved):
+    """Parameter-free changes still need explicit historical recipe semantics."""
+    result = dict(saved)
+    for key in QK_KEYS:
+        result.setdefault(key, False)
+    result.setdefault('reconstruction_onset_presence_supervision', False)
+    result.setdefault('reconstruction_onset_presence_weight', 1.0)
+    return result
 
 
 def encoder_config(config):
     """Old saved recipes predate P0 normalization and retain their old math."""
-    return {key: config.get(key, False) if key == 'fpn_p0_normalization' else config[key]
+    return {key: config.get(key, False) if key in ('fpn_p0_normalization', 'qk_normalization') else config[key]
             for key in ENCODER_KEYS}
 
 
@@ -27,6 +41,7 @@ def build_draft(config):
     keys = ('layers', 'dim', 'heads', 'experts', 'expert_ffn_dim', 'latent_dim',
             'dropout', 'norm_eps', 'difficulty_vocab_size', 'level_center', 'level_scale', 'span_scale')
     return DraftGenerator(audio_dim=config['d_model'],
+        qk_normalization=config.get('draft_qk_normalization', False),
         **{key: config['draft_' + key] for key in keys},
         rope_base=config['rope_base'], rope_position_scale=config['rope_position_scale'])
 
@@ -35,6 +50,7 @@ def build_planner(config):
     from .draft.planner import PlannerHead
     keys = ('dim', 'heads', 'mlp_dim', 'dropout', 'norm_eps')
     return PlannerHead(latent_dim=config['draft_latent_dim'], span_beats=plan_span(config),
+        qk_normalization=config.get('planner_qk_normalization', False),
         layout=config.get('planner_layout', 'legacy'), stride_beats=config.get('planner_stride_beats') or 4,
         **{key: config['planner_' + key] for key in keys},
         rope_base=config['rope_base'], rope_position_scale=config['rope_position_scale'])
@@ -52,11 +68,11 @@ def plan_span(config):
         expected_stride = 4 if layout == 'centered-overlap' else None
         if (span != 16 or config.get('planner_stride_beats') != expected_stride
                 or config.get('draft_z_anchor_mode') != 'integer'
-                or config['draft_z_stride_beats'] != 1
+                or config['draft_z_stride_beats'] not in (1, 2)
                 or config.get('reconstruction_span_beats') != 4
                 or config['target_beats'] != 16
                 or config['decoder_z_before_beats'] != 4 or config['decoder_z_after_beats'] != 4):
-            raise ValueError(layout+' requires integer Z1, four-beat reconstruction, Plan16 and target16/context4 with its own Plan spacing')
+            raise ValueError(layout+' requires integer Z1/Z2, four-beat reconstruction, Plan16 and target16/context4 with its own Plan spacing')
         return span
     if span == 4 and config['draft_z_stride_beats'] != 4:
         raise ValueError('four-beat Plan requires aligned four-beat Z')
@@ -75,6 +91,7 @@ def build_reconstruction(config):
                                anchor_mode=config.get('draft_z_anchor_mode', 'block-center'),
                                span_beats=config.get('reconstruction_span_beats'),
                                count_loss=config.get('reconstruction_count_loss', 'ce'),
+                               onset_presence_supervision=config.get('reconstruction_onset_presence_supervision', False),
                                route_vocabulary=config.get('reconstruction_route_vocabulary', 'route71'),
                                **{key: config['reconstruction_' + key] for key in keys})
 
@@ -90,6 +107,7 @@ def build_decoder(config):
             'experts', 'readout_ffn_dim', 'dropout', 'norm_eps', 'rope_base', 'rope_position_scale',
             'note_dims', 'route_dims', 'time_base', 'time_scale', 'condition_gate_init', 'z_cross_attention')
     model = Decoder(audio_dim=config['d_model'], latent_dim=config['draft_latent_dim'],
+                    qk_normalization=config.get('decoder_qk_normalization', False),
                     z_normalization=config.get('decoder_z_normalization', False),
                     plan_span_beats=plan_span(config),
                     planner_layout=config.get('planner_layout', 'legacy'),

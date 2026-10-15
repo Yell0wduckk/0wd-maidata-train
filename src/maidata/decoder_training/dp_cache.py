@@ -13,6 +13,7 @@ from maidata.entry import CONFIG
 from maidata.chart_cache.cache import load_chart
 from maidata.draft.conditions import read_condition, make_draft_inputs
 from maidata.draft.layout import prepare_selection, prepare_centers
+from maidata.draft.spacing import integer_offsets
 from maidata.draft.planner import select_planner_windows
 from maidata.draft.types import BeatMemory
 from maidata.draft.windows import SongCoverage, select_windows
@@ -79,11 +80,13 @@ class CachedP0Dataset(Dataset):
             target_beats=self.config['target_beats'],before_beats=0,after_beats=0,
             z_stride_beats=self.config['draft_z_stride_beats'])
         if self.config.get('planner_layout', 'legacy') == 'centered-overlap':
+            offsets = integer_offsets(-8, 24, self.config['draft_z_stride_beats'])
             layout = prepare_centers(inputs.query_beats, inputs.draft_valid, groups,
-                                     starts[:, None]+torch.arange(-8, 25), valid)
+                                     starts[:, None]+torch.tensor(offsets), valid)
         elif self.config.get('planner_layout', 'legacy') == 'window-single':
+            offsets = integer_offsets(0, 16, self.config['draft_z_stride_beats'])
             layout = prepare_centers(inputs.query_beats, inputs.draft_valid, groups,
-                                     starts[:, None]+torch.arange(17), valid)
+                                     starts[:, None]+torch.tensor(offsets), valid)
         return pack_batch(dict(variant=variant,bank=bank,inputs=inputs,groups=groups,starts=starts,
             valid=valid,layout=layout,chart_to_group=ownership,conditions=[asdict(c) for c in conditions],
             window_ids=[w['window_id'] for w in windows],chart_ids=[w['chart_id'] for w in windows]))

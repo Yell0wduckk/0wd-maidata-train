@@ -98,6 +98,8 @@ class AudioDataset(Dataset):
                 target = overlap_reconstruction_target(charts[key], start_tick=w['start_tick'],
                     target_beats=c['target_beats'], coverage_end_beat=end, first_beat=coverage.first_beat,
                     span_beats=c.get('reconstruction_span_beats') or c['draft_z_stride_beats'],
+                    z_stride_beats=c['draft_z_stride_beats'],
+                    onset_presence_supervision=c.get('reconstruction_onset_presence_supervision', False),
                     validate_input=False)
             else:
                 target = reconstruction_target(charts[key], start_tick=w['start_tick'], target_beats=c['target_beats'],

@@ -13,7 +13,8 @@ import torch
 
 from maidata.draft.types import BeatMemory
 from maidata.draft.windows import SongCoverage, song_coverage
-from maidata.model import ENCODER_KEYS
+from maidata.draft.spacing import integer_z_count
+from maidata.model import encoder_config
 from .conditioning import (Conditions, encode_joint_audio, decode_joint_draft, empty_plan_geometry,
                            plan_centers_for_starts)
 from .progress import emit, stage
@@ -53,8 +54,11 @@ def execution(device, precision):
 
 
 def encoder_recipe(config):
-    return dict({key: config[key] for key in ENCODER_KEYS},
-                fpn_p0_normalization=config.get('fpn_p0_normalization', False))
+    recipe = encoder_config(config)
+    # A missing/disabled parameter-free option retains historical cache keys.
+    if not recipe.get('qk_normalization', False):
+        recipe.pop('qk_normalization', None)
+    return recipe
 
 
 def feature_identity(*, grid=None, mel_root=None, mel_stats=None):
@@ -90,7 +94,9 @@ def draft_identity(checkpoint, audio_key, *, difficulty, level, device, precisio
         raise ValueError('difficulty must be 1..7 and level finite')
     config = checkpoint.config
     keys = [key for key in config if key.startswith(('draft_', 'planner_'))
-            and not key.startswith(('draft_train_', 'planner_train_'))]
+            and not key.startswith(('draft_train_', 'planner_train_'))
+            and not (key in ('draft_qk_normalization', 'planner_qk_normalization')
+                     and not config[key])]
     return canonical(dict(schema=DRAFT_SCHEMA, checkpoint=checkpoint.identity, audio_key=audio_key,
         config={key: config[key] for key in keys},
         rope={key: config[key] for key in ('rope_base', 'rope_position_scale')},
@@ -257,7 +263,8 @@ class JointCache:
         try:
             c = self.checkpoint.config
             z = read_memory(payload['z'], width=c['draft_latent_dim'], rows=1,
-                length=(encoded.local.coverage.draft_beats+1 if c.get('draft_z_anchor_mode') == 'integer'
+                length=(integer_z_count(encoded.local.coverage.draft_beats, c['draft_z_stride_beats'])
+                        if c.get('draft_z_anchor_mode') == 'integer'
                         else encoded.local.coverage.draft_beats//c['draft_z_stride_beats']))
             plans, valid = payload['plans'], payload['plan_valid']
             plan_shape = ((len(encoded.local.starts),

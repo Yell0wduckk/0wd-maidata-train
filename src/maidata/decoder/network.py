@@ -15,7 +15,7 @@ class Decoder(nn.Module):
                  shared_ffn_dim, expert_ffn_dim, experts, readout_ffn_dim, dropout,
                  norm_eps, rope_base, rope_position_scale, note_dims, route_dims,
                  time_base, time_scale, condition_gate_init, z_cross_attention, z_normalization=False,
-                 plan_span_beats=16, planner_layout='legacy'):
+                 plan_span_beats=16, planner_layout='legacy', qk_normalization=False):
         super().__init__()
         self.validate_inputs = True
         if type(z_cross_attention) is not bool:
@@ -46,7 +46,7 @@ class Decoder(nn.Module):
             middle=shared_ffn_dim if i < router_layer else expert_ffn_dim,
             experts=None if i < router_layer else experts, dropout=dropout, norm_eps=norm_eps,
             rope_base=rope_base, rope_position_scale=rope_position_scale,
-            condition_gate_init=condition_gate_init) for i in range(layers))
+            condition_gate_init=condition_gate_init, qk_normalization=qk_normalization) for i in range(layers))
         self.heads = ContentHeads(dim, readout_ffn_dim, norm_eps)
         self.architecture = 'maidata.decoder-causal-cont-tick384.v2'
 

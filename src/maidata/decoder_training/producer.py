@@ -2,7 +2,7 @@
 from torch import nn
 import torch
 from maidata.entry import CONFIG
-from maidata.model import build_model, build_draft, build_planner
+from maidata.model import build_model, build_draft, build_planner, with_legacy_defaults
 from maidata.training.checkpoint import SCHEMA as TEACHER_SCHEMA
 
 
@@ -10,7 +10,7 @@ def teacher_configuration(payload):
     """The producer recipe owns E_D/D/P, independently of the M recipe."""
     if payload.get('schema') != TEACHER_SCHEMA:
         raise ValueError('teacher export/load requires a split Drafter stage-I v3 checkpoint')
-    config = dict(CONFIG, **payload['recipe'])
+    config = dict(CONFIG, **with_legacy_defaults(payload['recipe']))
     if config['draft_latent_dim'] != config['draft_dim']:
         raise ValueError('split Drafter Z must equal the final normalized draft width')
     return config

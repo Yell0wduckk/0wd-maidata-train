@@ -153,6 +153,9 @@ def run(config, *, resume=None, cuda_check=False, cost_check=False, check_step=N
             source=source))
     for epoch in range(completed + 1, config['joint_train_stop_after_epochs'] + 1):
         epoch_start = time.perf_counter()
+        final = epoch == config['joint_train_stop_after_epochs']
+        training_diagnostics = (Diagnostics() if final and
+            config.get('reconstruction_onset_presence_supervision', False) else None)
         loaders[0].batch_sampler.epoch = epoch
         iterator = epoch_iterator(loaders[0], restored[0])
         restored[0] = None
@@ -164,7 +167,8 @@ def run(config, *, resume=None, cuda_check=False, cost_check=False, check_step=N
             if not batches:
                 break
             update_start = time.perf_counter()
-            current, audit = update(model, batches, opt, sched, config, geometry)
+            current, audit = update(model, batches, opt, sched, config, geometry,
+                **({'diagnostics': training_diagnostics} if training_diagnostics is not None else {}))
             update_seconds = time.perf_counter() - update_start
             metrics.merge(current)
             updates += 1
@@ -177,10 +181,13 @@ def run(config, *, resume=None, cuda_check=False, cost_check=False, check_step=N
                 loss=report['loss'], losses=report['losses'], lr=opt.param_groups[0]['lr'],
                 data_wait_seconds=data_seconds, update_seconds=update_seconds,
                 chunks=audit['chunks'], batch_costs=audit['batch_costs']), allow_nan=False), flush=True)
-        final = epoch == config['joint_train_stop_after_epochs']
         result = dict(epoch=epoch, step=step, train=metrics.report(config),
                       seconds=time.perf_counter() - epoch_start, audio_groups=len(audio_groups),
                       decoder_occurrences=windows, auxiliary_base_windows=auxiliary_windows)
+        if training_diagnostics is not None:
+            result['train']['diagnostics'] = dict(auxiliary=training_diagnostics.report(),
+                population='final training epoch, teacher-conditioned reconstruction',
+                numeric_count_supervision=config.get('reconstruction_count_supervision', True))
         improved = False
         if plans[1].groups and (epoch % 5 == 0 or final):
             loaders[1].batch_sampler.epoch = epoch

@@ -61,15 +61,13 @@ def assemble_full_p0(local, starts, window_to_audio, coverages, *, p0_rate, layo
 
 
 def draft_queries(coverages, audio_mapping, *, z_stride_beats=None, anchor_mode='block-center'):
-    from .spacing import z_stride
+    from .spacing import z_stride, integer_z_count
     rows, valid = [], []
     for index in audio_mapping.tolist():
         c = coverages[index]
         stride = z_stride(z_stride_beats, target_beats=c.target_beats)
         if anchor_mode == 'integer':
-            if stride != 1:
-                raise ValueError('integer D centers require stride one')
-            count, offset = c.draft_beats + 1, 0.
+            count, offset = integer_z_count(c.draft_beats, stride), 0.
         elif anchor_mode == 'block-center':
             count, offset = c.draft_beats // stride, stride/2
         else:

@@ -22,14 +22,13 @@ def prepare_p0(beats, valid, starts, mapping, coverages, *, p0_rate):
 def prepare_selection(beats, valid, groups, starts, window_valid, *, target_beats, before_beats, after_beats,
                       z_stride_beats=None, anchor_mode='block-center'):
     import math
-    from .spacing import z_stride
+    from .spacing import z_stride, integer_offsets
     stride = z_stride(z_stride_beats, target_beats=target_beats)
     # Include each block intersecting the requested context, once. Context
     # margins need not divide the stride (e.g. four beats with stride eight).
     if anchor_mode == 'integer':
-        if stride != 1:
-            raise ValueError('integer D centers require stride one')
-        desired = starts[:, None] + torch.arange(-before_beats, target_beats+after_beats+1).float()
+        offsets = integer_offsets(-before_beats, target_beats+after_beats, stride)
+        desired = starts[:, None] + torch.tensor(offsets, dtype=starts.dtype, device=starts.device)
     elif anchor_mode == 'block-center':
         before = math.ceil(before_beats/stride)
         count = before + target_beats//stride + math.ceil(after_beats/stride)

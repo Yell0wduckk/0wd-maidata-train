@@ -13,11 +13,13 @@ def select_planner_windows(z, groups, starts, valid, config, layout=None):
     from .windows import select_windows, gather_centers
     from .types import WindowLatents
     if config.get('planner_layout', 'legacy') == 'centered-overlap':
-        centers = starts[:, None] + torch.arange(-8, 25, device=starts.device)
+        from .spacing import integer_offsets
+        centers = starts[:, None] + torch.tensor(integer_offsets(-8, 24, config['draft_z_stride_beats']), device=starts.device)
         return WindowLatents(gather_centers(z, groups, centers, valid, layout=layout),
                              starts, config['target_beats'], valid)
     if config.get('planner_layout', 'legacy') == 'window-single':
-        centers = starts[:, None] + torch.arange(17, device=starts.device)
+        from .spacing import integer_offsets
+        centers = starts[:, None] + torch.tensor(integer_offsets(0, 16, config['draft_z_stride_beats']), device=starts.device)
         return WindowLatents(gather_centers(z, groups, centers, valid, layout=layout),
                              starts, config['target_beats'], valid)
     return select_windows(z, groups, starts, valid, target_beats=config['target_beats'],
@@ -26,7 +28,8 @@ def select_planner_windows(z, groups, starts, valid, config, layout=None):
 
 class PlannerHead(nn.Module):
     def __init__(self, *, latent_dim, dim, heads, mlp_dim, dropout, norm_eps,
-                 rope_base, rope_position_scale, span_beats=16, layout='legacy', stride_beats=4):
+                 rope_base, rope_position_scale, span_beats=16, layout='legacy', stride_beats=4,
+                 qk_normalization=False):
         super().__init__()
         positive_ints(latent_dim=latent_dim, dim=dim, heads=heads, mlp_dim=mlp_dim)
         numerical_config(dropout, norm_eps, rope_base, rope_position_scale)
@@ -43,7 +46,8 @@ class PlannerHead(nn.Module):
         self.layout, self.stride_beats = layout, stride_beats
         self.query = nn.Parameter(torch.zeros(dim))
         self.pool = Attention(dim, latent_dim, dim, heads, dropout,
-                              rotary=True, base=rope_base, scale=rope_position_scale)
+                              rotary=True, base=rope_base, scale=rope_position_scale,
+                              qk_normalization=qk_normalization)
         self.mlp = nn.Sequential(nn.LayerNorm(dim, eps=norm_eps), nn.Linear(dim, mlp_dim),
                                  nn.GELU(), nn.Dropout(dropout))
         self.continuous = nn.Linear(mlp_dim, 8)
@@ -73,7 +77,7 @@ class PlannerHead(nn.Module):
         return PlannerOutput(continuous, category, plan.masked_fill(~active[:, None], 0), active)
 
     def _window_single(self, windows):
-        """One window statistic reads its seventeen integer nodes, including endpoints."""
+        """One window statistic reads its integer anchor grid, including endpoints."""
         if windows.target_beats != 16:
             raise ValueError('window-single Planner requires sixteen-beat parent windows')
         memory, starts = windows.memory, windows.target_start
@@ -106,7 +110,7 @@ class PlannerHead(nn.Module):
         active = allowed.any(-1) & windows.window_valid[:, None]
         query = self.query[None, None].expand(len(starts), segments, -1)
         kv = self.pool.project_memory(memory.values, memory.beats, memory_valid)
-        q = self.pool.split(self.pool.query(query.masked_fill(~active[..., None], 0)))
+        q = self.pool.project_query(query.masked_fill(~active[..., None], 0))
         q = apply_rope(q, centers.masked_fill(~active, 0), self.pool.base, self.pool.scale)
         pooled = F.scaled_dot_product_attention(q, *kv, attn_mask=allowed[:, None],
             dropout_p=self.pool.dropout if self.training else 0.)
@@ -133,7 +137,7 @@ class PlannerHead(nn.Module):
         active = anchor_exists & windows.window_valid[:, None]
         query = self.query[None, None].expand(len(starts), 5, -1)
         kv = self.pool.project_memory(memory.values, memory.beats, memory.valid)
-        q = self.pool.split(self.pool.query(query.masked_fill(~active[..., None], 0)))
+        q = self.pool.project_query(query.masked_fill(~active[..., None], 0))
         q = apply_rope(q, centers.masked_fill(~active, 0), self.pool.base, self.pool.scale)
         pooled = F.scaled_dot_product_attention(q, *kv, attn_mask=allowed[:, None] & active[:, None, :, None],
             dropout_p=self.pool.dropout if self.training else 0.)

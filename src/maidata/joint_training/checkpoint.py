@@ -1,7 +1,7 @@
 """One complete-epoch checkpoint for the shared E/D/R/P/M graph."""
 import json
 
-from maidata.model import ENCODER_KEYS
+from maidata.model import ENCODER_KEYS, with_legacy_defaults
 from maidata.draft.route_acceptance import route_loss_recipe
 from maidata.training.checkpoint import (atomic_save, rng_state, restore_rng,
                                         source_identity, validate_cursor)
@@ -40,7 +40,7 @@ def capture(model, opt, sched, *, epoch, step, config, binding, source, steps, l
 
 def single_plan16_upgrade(payload, config, *, binding, steps):
     """Validate one explicit objective migration without rewriting saved semantics."""
-    current, saved = recipe(config), dict(payload['recipe'])
+    current, saved = with_legacy_defaults(recipe(config)), with_legacy_defaults(payload['recipe'])
     if (saved.get('planner_layout') != 'centered-overlap'
             or current.get('planner_layout') != 'window-single'
             or saved.get('planner_stride_beats') != 4 or current.get('planner_stride_beats') is not None):
@@ -89,7 +89,7 @@ def restore(payload, model, opt, sched, *, loaders, upgrade_z_normalization=Fals
             raise ValueError('single Plan16 upgrade requires current recipe, input binding and epoch schedule')
         single_plan16_upgrade(payload, _['config'], binding=_['binding'], steps=_['steps'])
     if 'config' in _:
-        current, saved = recipe(_['config']), dict(payload['recipe'])
+        current, saved = with_legacy_defaults(recipe(_['config'])), with_legacy_defaults(payload['recipe'])
         saved.setdefault('reconstruction_route_loss', 'ce')
         saved.setdefault('planner_span_beats', 16)
         saved.setdefault('planner_layout', 'legacy')

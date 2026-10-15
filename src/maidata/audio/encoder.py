@@ -19,6 +19,7 @@ class AudioEncoder(nn.Module):
         frequency_dim, frequency_queries, fpn_rates, target_beats,
         audio_before_beats, audio_after_beats, dropout, rope_base, rope_position_scale,
         fpn_p0_normalization,
+        qk_normalization=False,
     ):
         super().__init__()
         dimensions = (mel_bins, samples_per_beat, d_model, heads, ffn_dim,
@@ -61,7 +62,7 @@ class AudioEncoder(nn.Module):
             nn.ModuleList([
                 SharedConformerBlock(
                     d_model, heads, ffn_dim, temporal_kernel_size, radius,
-                    dropout, rope_base, rope_position_scale,
+                    dropout, rope_base, rope_position_scale, qk_normalization=qk_normalization,
                 ) for _ in range(depth)
             ]) for depth, radius in zip(stage_depths, stage_attention_radii)
         ])

@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from maidata.entry import CONFIG
-from maidata.model import build_model
+from maidata.model import build_model, encoder_config
 from maidata.draft.types import BeatMemory
 from maidata.draft.windows import SongCoverage
 from maidata.preparation.cache import load_grid
@@ -29,7 +29,7 @@ class LocalP0:
         self.root = Path(root)
         self.manifest = m = json.loads((self.root/'manifest.json').read_text('utf-8'))
         if (m.get('schema') != SCHEMA or m.get('complete') is not True
-                or m['audio_producer'] != source.identity or m['encoder_config'] != source.encoder_config):
+                or m['audio_producer'] != source.identity or encoder_config(m['encoder_config']) != source.encoder_config):
             raise ValueError('Decoder requires complete local-window P0 from its frozen Encoder')
         self.identity = dict(schema=SCHEMA, audio_producer=m['audio_producer'], precision=m['precision'],
                              bank_sha256={k:r['sha256'] for k,r in m['groups'].items()})

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import torch
 
 from maidata.entry import CONFIG
-from maidata.model import build_model, build_draft, build_planner, build_decoder
+from maidata.model import build_model, build_draft, build_planner, build_decoder, with_legacy_defaults
 from .input_contract import check_shared_grid_config
 
 
@@ -35,7 +35,7 @@ class JointCheckpoint:
         # its saved recipe and load_state_dict(strict=True) checks real weights.
         if plan_source not in ('predicted', 'gt', 'none'):
             raise ValueError('plan_source must be predicted, gt or none')
-        self.config = dict(CONFIG, **payload['recipe'])
+        self.config = dict(CONFIG, **with_legacy_defaults(payload['recipe']))
         for key, default in (('planner_layout', 'legacy'), ('planner_stride_beats', None),
                              ('draft_z_anchor_mode', 'block-center'), ('reconstruction_span_beats', None)):
             self.config[key] = payload['recipe'].get(key, default)
@@ -99,11 +99,11 @@ def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device, z_cross
     if producer is not None:
         # This inference path must not call the training export loader's schema
         # gate. D/P architecture and cross-model dimensions are still checked.
-        teacher = dict(CONFIG, **producer['recipe'])
+        teacher = dict(CONFIG, **with_legacy_defaults(producer['recipe']))
         teacher['fpn_p0_normalization'] = producer['recipe'].get('fpn_p0_normalization', False)
         if teacher['draft_latent_dim'] != teacher['draft_dim']:
             raise ValueError('split Drafter Z must equal the final normalized draft width')
-    config = dict(CONFIG, **consumer['recipe'])
+    config = dict(CONFIG, **with_legacy_defaults(consumer['recipe']))
     config['decoder_z_normalization'] = consumer['recipe'].get('decoder_z_normalization', False)
     config['fpn_p0_normalization'] = consumer['recipe'].get('fpn_p0_normalization', False)
     config['decoder_train_audio_scope'] = consumer['recipe'].get('decoder_train_audio_scope', 'full_song')

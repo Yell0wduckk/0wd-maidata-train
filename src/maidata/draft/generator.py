@@ -30,13 +30,14 @@ class DenseMoE(nn.Module):
 
 
 class DraftBlock(nn.Module):
-    def __init__(self, audio_dim, width, heads, experts, hidden, dropout, eps, base, scale):
+    def __init__(self, audio_dim, width, heads, experts, hidden, dropout, eps, base, scale,
+                 qk_normalization=False):
         super().__init__()
         self.norms = nn.ModuleList(nn.LayerNorm(width, eps=eps) for _ in range(3))
         self.self_attention = Attention(width, width, width, heads, dropout,
-                                        rotary=True, base=base, scale=scale)
+                                        rotary=True, base=base, scale=scale, qk_normalization=qk_normalization)
         self.cross_attention = Attention(width, audio_dim, width, heads, dropout,
-                                         rotary=True, base=base, scale=scale)
+                                         rotary=True, base=base, scale=scale, qk_normalization=qk_normalization)
         self.modulation = nn.Linear(width, 2 * width)
         self.experts = DenseMoE(width, experts, hidden, dropout)
 
@@ -53,7 +54,8 @@ class DraftBlock(nn.Module):
 class DraftGenerator(nn.Module):
     def __init__(self, *, audio_dim, layers, dim, heads, experts, expert_ffn_dim,
                  latent_dim, dropout, norm_eps, difficulty_vocab_size,
-                 level_center, level_scale, span_scale, rope_base, rope_position_scale):
+                 level_center, level_scale, span_scale, rope_base, rope_position_scale,
+                 qk_normalization=False):
         super().__init__()
         positive_ints(audio_dim=audio_dim, layers=layers, dim=dim, heads=heads,
                       experts=experts, expert_ffn_dim=expert_ffn_dim, latent_dim=latent_dim,
@@ -71,7 +73,8 @@ class DraftGenerator(nn.Module):
         self.level = nn.Sequential(nn.Linear(1, dim), nn.GELU(), nn.Linear(dim, dim))
         self.span = nn.Linear(1, dim)
         self.blocks = nn.ModuleList(DraftBlock(audio_dim, dim, heads, experts, expert_ffn_dim,
-            dropout, norm_eps, rope_base, rope_position_scale) for _ in range(layers))
+            dropout, norm_eps, rope_base, rope_position_scale,
+            qk_normalization=qk_normalization) for _ in range(layers))
         self.output_norm = nn.LayerNorm(dim, eps=norm_eps)
 
     def project_audio(self, audio) -> ProjectedAudio:

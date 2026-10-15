@@ -34,10 +34,11 @@ class WindowTarget:
     rows: tuple[TargetRow, ...]
     moment_counts: tuple[int, ...]
     owner_z_beats: tuple[float, ...] | None = None
+    onset_presence: tuple[tuple[float, int, bool], ...] | None = None
 
     @property
     def query_cost(self):
-        return len(self.rows) + len(self.moment_counts)
+        return len(self.rows) + len(self.moment_counts) + len(self.onset_presence or ())
 
 
 def reconstruction_target(chart, *, start_tick, target_beats, audio_after_beats=None,
@@ -97,7 +98,8 @@ def reconstruction_target(chart, *, start_tick, target_beats, audio_after_beats=
 
 
 def overlap_reconstruction_target(chart, *, start_tick, target_beats, coverage_end_beat,
-                                  first_beat=0, span_beats=4, validate_input=True):
+                                  first_beat=0, span_beats=4, z_stride_beats=1,
+                                  onset_presence_supervision=False, validate_input=True):
     """Assign each integer owner once, retaining each distinct owner/real-query pair.
 
     A parent owns [start,start+target_beats); the final parent additionally owns
@@ -109,7 +111,9 @@ def overlap_reconstruction_target(chart, *, start_tick, target_beats, coverage_e
     start = start_tick//96
     last_parent = start+target_beats == coverage_end_beat
     stop = start+target_beats+int(last_parent)
-    owners = tuple(float(t) for t in range(start, stop))
+    from .spacing import integer_offsets
+    owners = tuple(float(first_beat+t) for t in
+                   integer_offsets(start-first_beat, stop-1-first_beat, z_stride_beats))
     lower, upper = start-2, stop+1
     source = reconstruction_target(chart, start_tick=lower*96, target_beats=upper-lower,
                                    validate_input=validate_input)
@@ -118,10 +122,17 @@ def overlap_reconstruction_target(chart, *, start_tick, target_beats, coverage_e
         beat = int(row.query.beat//1)
         if not first_beat <= beat < coverage_end_beat:
             continue
-        for owner in range(max(start, beat-1), min(stop, beat+3)):
-            rows[float(owner)].append(replace(row, query=replace(row.query, owner_z_beat=float(owner))))
+        for owner in owners:
+            if owner-2 <= beat < owner+2:
+                rows[owner].append(replace(row, query=replace(row.query, owner_z_beat=owner)))
     counts = source.moment_counts[2:2+target_beats]
-    return WindowTarget(tuple(row for owner in owners for row in rows[owner]), tuple(counts), owners)
+    presence = None
+    if onset_presence_supervision:
+        onset_beats = {group.tick//96 for group in chart.groups}
+        presence = tuple((owner, beat, beat in onset_beats) for owner in owners
+                         for beat in range(int(owner)-2, int(owner)+2)
+                         if first_beat <= beat < coverage_end_beat)
+    return WindowTarget(tuple(row for owner in owners for row in rows[owner]), tuple(counts), owners, presence)
 
 
 def required_query_rows(target_lengths):
@@ -134,7 +145,7 @@ def required_query_rows(target_lengths):
 
 def collate_reconstruction(targets, *, target_beats, device, query_rows=None, validate_input=True):
     import torch
-    from .types import ReconstructionQueries, ReconstructionTargets
+    from .types import ReconstructionQueries, ReconstructionTargets, OnsetPresenceQueries
     if not targets:
         raise ValueError('a nonempty reconstruction batch is required')
     # One inert tensor slot makes an all-empty batch shape stable, never supervised.
@@ -184,7 +195,22 @@ def collate_reconstruction(targets, *, target_beats, device, query_rows=None, va
                 n = len(query.route_prefix)
                 q.route_ids[w, i, :n] = torch.tensor(query.route_prefix, device=device)
                 q.route_valid[w, i, :n] = True
-    return ReconstructionTargets(fields, moment, counts, valid, q)
+    presence_labels = None
+    if any(t is not None and t.onset_presence is not None for t in targets):
+        presence_width = max(1, max((len(t.onset_presence or ()) for t in targets if t), default=0))
+        pshape = (len(targets), presence_width)
+        powners = torch.zeros(pshape, device=device)
+        pbeats = torch.zeros(pshape, device=device)
+        pvalid = torch.zeros(pshape, dtype=torch.bool, device=device)
+        presence_labels = torch.zeros(pshape, dtype=torch.float32, device=device)
+        for w, target in enumerate(targets):
+            if target is None:
+                continue
+            for i, (owner, beat, present) in enumerate(target.onset_presence or ()):
+                powners[w, i], pbeats[w, i], pvalid[w, i] = owner, beat, True
+                presence_labels[w, i] = float(present)
+        q.onset_presence = OnsetPresenceQueries(powners, pbeats, pvalid)
+    return ReconstructionTargets(fields, moment, counts, valid, q, presence_labels)
 
 
 def planner_target(planner, start_tick, end_tick, *, span_beats=16, layout='legacy',

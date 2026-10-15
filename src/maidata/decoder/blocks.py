@@ -28,12 +28,12 @@ class MMoE(nn.Module):
 
 class DecoderBlock(nn.Module):
     def __init__(self, *, dim, audio_dim, heads, middle, experts, dropout, norm_eps,
-                 rope_base, rope_position_scale, condition_gate_init):
+                 rope_base, rope_position_scale, condition_gate_init, qk_normalization=False):
         super().__init__()
         args = (heads, dropout, rope_base, rope_position_scale)
-        self.self_attn = Attention(dim, dim, *args)
-        self.audio_attn = Attention(dim, audio_dim, *args)
-        self.condition_attn = Attention(dim, dim, *args)
+        self.self_attn = Attention(dim, dim, *args, qk_normalization=qk_normalization)
+        self.audio_attn = Attention(dim, audio_dim, *args, qk_normalization=qk_normalization)
+        self.condition_attn = Attention(dim, dim, *args, qk_normalization=qk_normalization)
         self.norms = nn.ModuleList(nn.LayerNorm(dim, eps=norm_eps) for _ in range(4))
         self.condition_gate = nn.Parameter(torch.tensor(float(condition_gate_init)))
         self.ffn = ffn(dim, middle, dropout) if experts is None else MMoE(dim, middle, experts, dropout)
@@ -76,7 +76,7 @@ class DecoderBlock(nn.Module):
         y, kv = packed_attention.self_attention(self.self_attn, self.norms[0](rows), positions, valid, layout['rows'])
         rows = rows + self.dropout(y)
         query_positions = cross_beats.flatten().index_select(0, indices)
-        raw = self.audio_attn.split(self.audio_attn.query(self.norms[1](rows))[None])
+        raw = self.audio_attn.project_query(self.norms[1](rows))
         q = apply_rope(raw, query_positions[None], self.audio_attn.base, self.audio_attn.scale)
         rows = rows + self.dropout(self.audio_attn.mapped(q, valid, audio, packed=True))
         rows = rows + self.condition_gate * packed_attention.condition_attention(

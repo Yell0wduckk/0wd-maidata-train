@@ -4,6 +4,7 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 
 from maidata.draft.types import BeatMemory
+from maidata.draft.spacing import integer_offsets
 from maidata.decoder.types import Memory
 from .gt_plan_cache import select_plan_window
 
@@ -63,8 +64,9 @@ def collate_conditions(items, windows, config, *, audio, audio_keys=None):
         indices.append(unique[identity])
     if not use_z:
         integer_context = config.get('planner_layout', 'legacy') in ('centered-overlap', 'window-single')
-        offsets = (torch.arange(-3, 20) if integer_context else torch.tensor((-2, 2, 6, 10, 14, 18)))
-        slots = 23 if integer_context else (6 if config.get('planner_span_beats', 16) == 4 else 0)
+        offsets = (torch.tensor(integer_offsets(-3, config['target_beats']+3, config['draft_z_stride_beats']))
+                   if integer_context else torch.tensor((-2, 2, 6, 10, 14, 18)))
+        slots = len(offsets) if integer_context else (6 if config.get('planner_span_beats', 16) == 4 else 0)
         beats = torch.tensor(starts, dtype=torch.float32)[:, None] + offsets
         z = Memory(torch.zeros((len(starts), slots, config['draft_latent_dim'])),
                    beats[:, :slots], torch.zeros((len(starts), slots), dtype=torch.bool))

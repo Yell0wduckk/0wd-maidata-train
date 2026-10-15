@@ -15,9 +15,15 @@ LOSS_WEIGHT_KEYS = {
     'count': 'reconstruction_count_weight',
     'empty': 'reconstruction_empty_weight',
     'positive_count': 'reconstruction_positive_count_weight',
+    'onset_presence': 'reconstruction_onset_presence_weight',
     'planner_continuous': 'planner_continuous_weight',
     'planner_category': 'planner_category_weight',
 }
+
+
+def loss_weight(config, key):
+    # Historical recipes do not define a head or weight for this optional loss.
+    return config.get(key, 1.0) if key == 'reconstruction_onset_presence_weight' else config[key]
 
 
 def weighted_loss(terms, config, *, denominators=None):
@@ -34,7 +40,7 @@ def weighted_loss(terms, config, *, denominators=None):
                         for name, count in counts.items())
     result = None
     for key in LOSS_WEIGHT_KEYS.values():
-        weight = config[key]
+        weight = loss_weight(config, key)
         if not math.isfinite(weight) or weight < 0:
             raise ValueError('loss weights must be finite and nonnegative')
     for name, term in terms.items():
@@ -43,7 +49,7 @@ def weighted_loss(terms, config, *, denominators=None):
         field = name.startswith(FIELD_PREFIX)
         key = LOSS_WEIGHT_KEYS['classification' if field else name]
         divisor = max(1, counts[name]) * (max(1, active_fields) if field else 1)
-        value = term.total / divisor * config[key]
+        value = term.total / divisor * loss_weight(config, key)
         result = value if result is None else result + value
     if result is None and terms:
         # A disabled COUNT-only selection must not retain its autograd graph.

@@ -9,6 +9,7 @@ from maidata.model import ENCODER_KEYS, encoder_config
 from maidata.audio.layout import prepare_encoder_layout
 from maidata.draft.conditions import ChartCondition, make_draft_inputs
 from maidata.draft.types import BeatMemory
+from maidata.draft.spacing import integer_offsets
 from maidata.draft.planner import select_planner_windows
 from maidata.draft.windows import song_coverage, audio_windows, assemble_full_p0, select_windows
 from .input_contract import check_shared_grid_config
@@ -66,9 +67,10 @@ def empty_plan_geometry(starts, coverage, config, device):
     """Keep Plan4 coordinates even when M does not consume any Z values."""
     count, width = len(starts), config['draft_latent_dim']
     if config.get('planner_layout', 'legacy') in ('centered-overlap', 'window-single'):
-        beats = torch.as_tensor(starts, dtype=torch.float32, device=device)[:, None]+torch.arange(-3, 20, device=device)
-        z = BeatMemory(torch.zeros((count, 23, width), device=device), beats,
-                       torch.zeros((count, 23), dtype=torch.bool, device=device))
+        offsets = integer_offsets(-3, config['target_beats']+3, config['draft_z_stride_beats'])
+        beats = torch.as_tensor(starts, dtype=torch.float32, device=device)[:, None]+torch.tensor(offsets, device=device)
+        z = BeatMemory(torch.zeros((count, len(offsets), width), device=device), beats,
+                       torch.zeros((count, len(offsets)), dtype=torch.bool, device=device))
         if config['planner_layout'] == 'window-single':
             return z, torch.zeros((count, 12), device=device), torch.zeros(count, dtype=torch.bool, device=device)
         return z, torch.zeros((count, 5, 12), device=device), torch.zeros((count, 5), dtype=torch.bool, device=device)
@@ -90,7 +92,8 @@ def decoder_z_window(conditions, index, config, device):
         if not config['decoder_z_cross_attention']:
             return empty_plan_geometry((start,), conditions.coverage, config, device)[0]
         from maidata.draft.windows import gather_centers
-        centers = torch.arange(-3, 20, dtype=torch.float32, device=device)[None]+start
+        offsets = integer_offsets(-3, config['target_beats']+3, config['draft_z_stride_beats'])
+        centers = torch.tensor(offsets, dtype=torch.float32, device=device)[None]+start
         return gather_centers(conditions.z, torch.tensor([0], device=device), centers,
                               torch.tensor([True], device=device))
     if config['decoder_z_cross_attention']:

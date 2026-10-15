@@ -7,7 +7,7 @@ import random
 import numpy as np
 import torch
 
-from maidata.model import ENCODER_KEYS
+from maidata.model import ENCODER_KEYS, with_legacy_defaults
 from maidata.draft.route_acceptance import route_loss_recipe
 from .data import read_json
 
@@ -136,7 +136,7 @@ def capture(model, optimizer, scheduler, *, completed_epochs, step, config, bind
 def restore(payload, model, optimizer, scheduler, *, config, binding, source, steps, loaders):
     if payload.get('schema') != SCHEMA:
         raise ValueError('resume architecture, recipe or scheduler steps changed: split Drafter requires v3 checkpoint')
-    current, saved = recipe(config), dict(payload['recipe'])
+    current, saved = with_legacy_defaults(recipe(config)), with_legacy_defaults(payload['recipe'])
     current.setdefault('reconstruction_route_vocabulary', 'route71')
     saved.setdefault('reconstruction_route_vocabulary', 'route71')
     saved.setdefault('reconstruction_route_loss', 'ce')

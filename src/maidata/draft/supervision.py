@@ -1,6 +1,7 @@
 """Composition for R/P supervision; no Encoder or Decoder instance is owned."""
 from .windows import select_windows
-from .losses import reconstruction_loss, planner_loss, count_supervision_enabled
+from .losses import (reconstruction_loss, planner_loss, count_supervision_enabled,
+                     onset_presence_supervision_enabled)
 
 
 def prepare_auxiliary(items, config, ownership, draft):
@@ -21,8 +22,10 @@ def prepare_auxiliary(items, config, ownership, draft):
         p_layout = prepare_centers(draft.query_beats, draft.draft_valid, groups,
                                   starts[:, None]+torch.arange(-8, 25).float(), valid)
     elif config.get('planner_layout', 'legacy') == 'window-single':
+        from .spacing import integer_offsets
+        offsets = torch.tensor(integer_offsets(0, 16, config['draft_z_stride_beats'])).float()
         p_layout = prepare_centers(draft.query_beats, draft.draft_valid, groups,
-                                  starts[:, None]+torch.arange(17).float(), valid)
+                                  starts[:, None]+offsets, valid)
     else:
         p_layout = prepare_selection(draft.query_beats, draft.draft_valid, groups, starts, valid,
             target_beats=config['target_beats'], before_beats=0, after_beats=0,
@@ -54,5 +57,6 @@ def auxiliary_losses(reconstruction, planner, reconstruction_targets, planner_ta
     return {**reconstruction_loss(reconstruction, reconstruction_targets,
         label_smoothing=config['reconstruction_label_smoothing'], prepared=prepared,
         route_loss=config.get('reconstruction_route_loss', 'ce'),
-        count_supervision=count_supervision_enabled(config)),
+        count_supervision=count_supervision_enabled(config),
+        onset_presence_supervision=onset_presence_supervision_enabled(config)),
         **planner_loss(planner, planner_targets, prepared=prepared)}
