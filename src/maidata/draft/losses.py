@@ -20,10 +20,19 @@ def count_supervision_enabled(config):
     return enabled
 
 
+def onset_presence_supervision_enabled(config):
+    enabled = config.get('reconstruction_onset_presence_supervision', False)
+    if type(enabled) is not bool:
+        raise ValueError('reconstruction_onset_presence_supervision must be boolean')
+    return enabled
+
+
 @dataclass
 class LossTerm:
     total: Tensor
     count: Tensor
+    positive_count: Tensor | None = None
+    negative_count: Tensor | None = None
 
     @property
     def mean(self):
@@ -43,10 +52,15 @@ def prepare_supervision(target, planner_target):
     masks.update(moment96=active & (target.moment_tick != -100), count=beats, empty=beats,
                  positive_count=beats & (target.moment_counts > 0))
     indices = {name: mask.flatten().nonzero().flatten() for name, mask in masks.items()}
-    return dict(readout=dict(query_indices=active.flatten().nonzero().flatten(),
-                             count_indices=beats.flatten().nonzero().flatten()),
+    readout = dict(query_indices=active.flatten().nonzero().flatten(),
+                   count_indices=beats.flatten().nonzero().flatten())
+    if getattr(target.queries, 'onset_presence', None) is not None:
+        presence = target.valid[:, None] & target.queries.onset_presence.valid
+        indices['onset_presence'] = presence.flatten().nonzero().flatten()
+        readout['onset_presence_indices'] = indices['onset_presence']
+    return dict(readout=readout,
                 indices=indices, counts={name: len(rows) for name, rows in indices.items()},
-                planner_indices=planner_target.valid.nonzero().flatten(),
+                planner_indices=planner_target.valid.flatten().nonzero().flatten(),
                 planner_count=int(planner_target.valid.sum()))
 
 
@@ -69,7 +83,7 @@ def _categorical(logits, labels, active, smoothing, indices=None, *, acceptance=
 
 
 def reconstruction_loss(output, target, *, label_smoothing, prepared=None, count_supervision=True,
-                        route_loss='ce'):
+                        route_loss='ce', onset_presence_supervision=False):
     if type(count_supervision) is not bool:
         raise ValueError('count_supervision must be boolean')
     if not 0 <= label_smoothing <= 1:
@@ -90,6 +104,26 @@ def reconstruction_loss(output, target, *, label_smoothing, prepared=None, count
                 selected(FIELD_PREFIX + name), acceptance=name == 'route_id' and route_loss == 'acceptance37')
         terms['moment96'] = _categorical(output.moment_logits, target.moment_tick,
                                         query_valid & (target.moment_tick != -100), 0., selected('moment96'))
+        if onset_presence_supervision:
+            if (output.onset_presence_logits is None or output.onset_presence_valid is None
+                    or target.onset_presence_labels is None or target.queries.onset_presence is None):
+                raise ValueError('onset presence loss requires independent logits, labels and geometry')
+            presence_valid = (target.valid[:, None] & target.queries.onset_presence.valid
+                              & output.onset_presence_valid)
+            # Prepared selectors do not override a genuinely missing owner/mask.
+            index = selected('onset_presence')
+            if index is None:
+                prediction = output.onset_presence_logits.float()[presence_valid]
+                truth = target.onset_presence_labels.float()[presence_valid]
+            else:
+                enabled = presence_valid.flatten().index_select(0, index)
+                prediction = output.onset_presence_logits.float().flatten().index_select(0, index)
+                truth = target.onset_presence_labels.float().flatten().index_select(0, index)
+            weights = torch.ones_like(truth, dtype=torch.bool) if index is None else enabled
+            total = (F.binary_cross_entropy_with_logits(prediction, truth, reduction='none')*weights).sum()
+            positive = ((truth > 0) & weights).sum()
+            count = weights.sum()
+            terms['onset_presence'] = LossTerm(total, count, positive, count-positive)
         if not count_supervision:
             return terms
         beat_valid = target.valid[:, None] & output.count_valid
@@ -116,7 +150,7 @@ def reconstruction_loss(output, target, *, label_smoothing, prepared=None, count
 
 
 def planner_loss(output, target, *, prepared=None):
-    valid = target.valid
+    valid = target.valid & output.valid
     with torch.autocast(device_type=output.plan_values.device.type, enabled=False):
         if prepared is None:
             predicted = output.continuous_logits.float()[valid].sigmoid()
@@ -125,13 +159,18 @@ def planner_loss(output, target, *, prepared=None):
             count = valid.sum()
         else:
             index = prepared['planner_indices']
-            predicted = output.continuous_logits.float().index_select(0, index).sigmoid()
-            truth = target.continuous.float().index_select(0, index)
-            category_logits = output.config_logits.float().index_select(0, index)
-            category = target.category.index_select(0, index)
-            count = valid.new_tensor(len(index), dtype=torch.long)
-        mse = (predicted - truth).square().mean(-1).sum()
-        ce = (F.cross_entropy(category_logits, category, reduction='sum') if len(category_logits)
-              else output.config_logits.float().sum() * 0)
+            predicted = output.continuous_logits.float().reshape(-1, 8).index_select(0, index).sigmoid()
+            truth = target.continuous.float().reshape(-1, 8).index_select(0, index)
+            category_logits = output.config_logits.float().reshape(-1, 4).index_select(0, index)
+            category = target.category.flatten().index_select(0, index)
+            selected_valid = valid.flatten().index_select(0, index)
+            count = selected_valid.sum()
+        mse_rows = (predicted - truth).square().mean(-1)
+        ce_rows = (F.cross_entropy(category_logits, category, reduction='none') if len(category_logits)
+                   else category_logits.sum(-1) * 0)
+        if prepared is not None:
+            mse_rows = mse_rows * selected_valid
+            ce_rows = ce_rows * selected_valid
+        mse, ce = mse_rows.sum(), ce_rows.sum()
     return {'planner_continuous': LossTerm(mse, count),
             'planner_category': LossTerm(ce, count)}

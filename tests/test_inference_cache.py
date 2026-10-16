@@ -236,8 +236,8 @@ def test_plan_disabled_generation_keeps_predicted_draft_cache(joint_config, tmp_
     assert {path: path.read_bytes() for path in paths} == before
 
 
-@pytest.mark.parametrize('mode', ['identity', 'shape', 'truncated', 'incomplete'])
-def test_corrupt_cache_is_reported_and_not_overwritten(joint_config, tmp_path, capsys, mode):
+@pytest.mark.parametrize('mode', ['identity', 'shape', 'truncated', 'incomplete', 'schema', 'nan'])
+def test_corrupt_audio_cache_is_rebuilt_once_and_reported(joint_config, tmp_path, capsys, mode):
     checkpoint, _ = inputs(joint_config, tmp_path)
     args = audio_args(checkpoint, tmp_path)
     preencode(args)
@@ -249,14 +249,31 @@ def test_corrupt_cache_is_reported_and_not_overwritten(joint_config, tmp_path, c
         payload['local']['values'] = payload['local']['values'][:, :1]
     elif mode == 'incomplete':
         payload['complete'] = False
+    elif mode == 'schema':
+        payload['schema'] = 'obsolete-audio-cache'
+    elif mode == 'nan':
+        payload['centers']['values'][0, 0, 0] = float('nan')
     if mode == 'truncated':
         path.write_bytes(b'partial')
     else:
         torch.save(payload, path)
-    original = path.read_bytes()
-    with pytest.raises(ValueError, match='invalid inference cache'):
+    unrelated = path.with_name('unrelated.pt')
+    unrelated.write_bytes(b'unrelated cache must stay untouched')
+    with ExitStack() as stack:
+        calls = spies(stack, forbid=('draft', 'planner', 'decoder'))
         preencode(args)
-    assert path.read_bytes() == original
+        assert calls['encoder'].call_count == 1
+    report = json.loads(capsys.readouterr().out)['audio_cache']
+    assert report['path'] == str(path) and report['hit'] is False
+    assert report['invalidated'] is True and 'invalid inference cache' in report['error']
+    load_audio(path, joint_config, device='cpu')
+    repaired = path.read_bytes()
+    with ExitStack() as stack:
+        spies(stack, forbid=('encoder', 'draft', 'planner', 'decoder'))
+        preencode(args)
+    assert json.loads(capsys.readouterr().out)['audio_cache']['hit'] is True
+    assert path.read_bytes() == repaired
+    assert unrelated.read_bytes() == b'unrelated cache must stay untouched'
 
 
 @pytest.mark.parametrize('failures', [0, 2, 101])
@@ -315,7 +332,8 @@ def test_failed_draft_keeps_audio_cache_and_can_resume(joint_config, tmp_path, g
     assert json.loads((tmp_path/'result/generation.json').read_text('utf-8'))['cache']['audio']['hit']
 
 
-def test_draft_cache_corruption_and_checkpoint_binding(joint_config, tmp_path, capsys):
+@pytest.mark.parametrize('mode', ['shape', 'z-length', 'truncated', 'schema', 'nan'])
+def test_draft_cache_recovery_and_checkpoint_binding(joint_config, tmp_path, capsys, mode):
     checkpoint, _ = inputs(joint_config, tmp_path)
     preencode(audio_args(checkpoint, tmp_path))
     audio_path = json.loads(capsys.readouterr().out)['audio_cache']['path']
@@ -324,12 +342,36 @@ def test_draft_cache_corruption_and_checkpoint_binding(joint_config, tmp_path, c
     predraft(args)
     draft_path = Path(json.loads(capsys.readouterr().out)['draft_cache']['path'])
     payload = torch.load(draft_path, weights_only=True)
-    payload['plans'] = torch.zeros((1, 12))
-    torch.save(payload, draft_path)
-    original = draft_path.read_bytes()
-    with pytest.raises(ValueError, match='invalid inference cache'):
+    if mode == 'shape':
+        payload['plans'] = torch.zeros((1, 12))
+    elif mode == 'z-length':
+        payload['z'] = {key: value[:, :-1] for key, value in payload['z'].items()}
+    elif mode == 'schema':
+        payload['schema'] = 'obsolete-draft-cache'
+    elif mode == 'nan':
+        payload['plans'][0, 0] = float('nan')
+    if mode == 'truncated':
+        draft_path.write_bytes(b'partial')
+    else:
+        torch.save(payload, draft_path)
+    original_audio = Path(audio_path).read_bytes()
+    unrelated = draft_path.with_name('unrelated.pt')
+    unrelated.write_bytes(b'unrelated draft must stay untouched')
+    with ExitStack() as stack:
+        calls = spies(stack, forbid=('encoder', 'decoder'))
         predraft(args)
-    assert draft_path.read_bytes() == original
+        assert calls['draft'].call_count == calls['planner'].call_count == 1
+    report = json.loads(capsys.readouterr().out)['draft_cache']
+    assert report['path'] == str(draft_path) and report['hit'] is False
+    assert report['invalidated'] is True and 'invalid inference cache' in report['error']
+    assert Path(audio_path).read_bytes() == original_audio
+    repaired = draft_path.read_bytes()
+    with ExitStack() as stack:
+        spies(stack, forbid=('encoder', 'draft', 'planner', 'decoder'))
+        predraft(args)
+    assert json.loads(capsys.readouterr().out)['draft_cache']['hit'] is True
+    assert draft_path.read_bytes() == repaired
+    assert unrelated.read_bytes() == b'unrelated draft must stay untouched'
     with pytest.raises(ValueError, match='precision differs'):
         predraft([*args, '--precision', 'bf16'])
     checkpoint_stat = checkpoint.stat()

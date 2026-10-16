@@ -118,13 +118,20 @@ class PhysicalState:
             basic = self._basic(candidate)
             if basic:
                 return Decision(basic)
-            return Decision(physical=reasons(self.actions, materialize(candidate, self.timing, self.geometry)), deferred=True)
+            physical = reasons(self.actions, materialize(candidate, self.timing, self.geometry))
+            if token.kind == 'slide':
+                from .conflicts import slide_launch_capacity
+                capacity, _ = slide_launch_capacity(self.actions, s, self.timing)
+                physical |= {c.category for c in capacity}
+            return Decision(physical=physical, deferred=True)
         if isinstance(token, Route):
             old = self.grammar.state
             if old.phase == 'track_done' and (old.track_count >= 2 or token.route_id == 70
                     or any(a.track and a.owner == old.owner and a.wifi for a in self.actions)):
                 return Decision(physical=frozenset({'multitouch'}))
-            return Decision(deferred=True)
+            from .conflicts import slide_launch_capacity
+            capacity, _ = slide_launch_capacity(self.actions, s, self.timing, wifi=s.routes == (70,))
+            return Decision(physical=frozenset(c.category for c in capacity), deferred=True)
         return Decision()
 
     def query_types(self):

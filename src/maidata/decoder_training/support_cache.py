@@ -63,6 +63,7 @@ class ChartSupports:
         self.record = record
         self.stages = supports['stages']
         self.route_coverage_attribution = supports.get('route_coverage_attribution')
+        self.slide_launch_attribution = supports.get('slide_launch_attribution')
         self.actions = {r['token_index']: action_from_record(r['action']) for r in record['actions']}
         self.state = AttributionState(PhysicalState(self.timing, geometry,
             audio_end_seconds=record['source']['audio_end_seconds']))

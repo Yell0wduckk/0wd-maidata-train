@@ -203,6 +203,10 @@ def test_both_migration_entries_resume_and_preserve_source_bytes(monkeypatch,tmp
     args = (field_root,physical,new_physical,'geometry','slide-data')
     report = pm.migrate(*args)
     assert pm.migrate(*args)==report
+    with monkeypatch.context() as rules:
+        rules.setattr(pm,'SLIDE_LAUNCH','different-rule')
+        with pytest.raises(ValueError,match='different Physical migration'):
+            pm.migrate(*args)
     assert report['results'][0]['migration']['changed_target_indices']
     with pytest.raises(ValueError):
         pm.migrate(field_root,physical,physical/'nested','geometry','slide-data')

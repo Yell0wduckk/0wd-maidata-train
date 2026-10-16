@@ -86,7 +86,7 @@ python -m maidata.inference.predraft \
 
 来源只比较绝对路径、文件大小、纳秒修改时间及配方元数据；引用 Mel 的 grid 还读取小型侧车 JSON 并记录引用文件元数据。不扫描目录、不计算音频/权重/源码内容哈希；KEY 仅是小型身份文档的摘要。同路径替换文件须更新文件元数据。历史联合配方未记录 P0 归一化时沿用 False，不继承新训练默认值。
 
-不同身份使用不同缓存项，每项通过同目录唯一临时文件原子替换，Windows 占用最多重试约一秒；未发布的临时文件不会命中。损坏、截断或身份/张量形状不一致的已有项明确报错，不静默重算覆盖。某层失败时保留已成功发布的其他层，下次调用可继续复用；不把预计算成功当成整曲生成成功。
+不同身份使用不同缓存项，每项通过同目录唯一临时文件原子替换，Windows 占用最多重试约一秒；未发布的临时文件不会命中。当前请求对应的音频或 Draft/Plan 项若损坏、截断，或身份/张量形状、数值、坐标不一致，会记录原因，只清理该文件，并按原请求重建一次。坏 Draft/Plan 复用有效音频，只运行 D/P；坏音频在预编码、普通推理或交互会话中使用原音频参数重跑 E。报告记录 `hit=false`、`invalidated=true` 和 `error`；修复后再次调用正常命中。权限、内存/显存、模型加载/计算和保存失败照常报错，不触发清理或循环重试。显式 `predraft --audio-cache` 只读指定音频文件，不能删除任意传入路径；该音频文件无效时需用原参数执行预编码，checkpoint/device/precision 不匹配也不删除。某层失败时保留已成功发布的其他层，下次调用可继续复用；不把预计算成功当成整曲生成成功。
 
 Python 在线与缓存入口共用 `encode_joint_audio(...) -> (local_conditions, center_p0)` 和 `decode_joint_draft(..., local_conditions, center_p0, difficulty=..., level=...) -> Conditions`。`JointCheckpoint.models(device=..., components=...)` 严格恢复所选模块；原 `load_joint_models(...)` 默认仍加载 E/D/P/M。缓存不包含 R、IR 或可变生成状态。
 
@@ -108,7 +108,7 @@ Python 在线与缓存入口共用 `encode_joint_audio(...) -> (local_conditions
 | `--max-tokens-per-moment` | 20；不含MOMENT本身；达到阈值后停止扩展，只补齐当前动作必需的ROUTE/时值，再推进MOMENT或合法窗末终端；必要收束字段允许超出阈值 |
 | `--max-backtracks-per-window` | 128；合法补全搜索的回退次数上限 |
 | `--rollback-tokens` | 16；保留的搜索回退深度，不限制音符链表示或模型输入历史长度 |
-| `--physical-hard-mask` | 开启；使用原始 Physical 拒绝位，完整动作提交时再次判定 |
+| `--physical-hard-mask` | 开启；完整动作提交时再次判定；多押在关闭及预算兜底时仍始终拦截 |
 | `--trace` | 默认关闭；显式开启才记录逐token选择/回退 |
 | `--progress / --no-progress` | 默认开启；向stderr打印阶段、窗口与节流后的token进度；不启用详细trace |
 | `--progress-interval` | 2秒；Encoder分块与窗内token进度的最短输出间隔，阶段和窗口起止立即输出 |
@@ -123,13 +123,15 @@ Python 在线与缓存入口共用 `encode_joint_audio(...) -> (local_conditions
 
 M使用独立CONT输入；续接锁定时间类型，每次CONT执行主干并追加KV，不调用Physical接受、不产生新起音。最终短值合成完整时间后提交一次真实动作。温度0逐步取合法argmax，正温度逐步采样；窗口报告记录time_sampling。Hold/Slide按NOTE written BPM换算秒并反算绝对拍，Slide首次仅调整后段音频/Z查询坐标。
 
-默认先使用Physical hard mask；窗口回退预算耗尽后，从当前因果前缀仅放宽Physical拒绝，继续强制补齐和生成。每窗`physical_fallback`记录触发点与原因，实际接受的违规逐条记录在`physical_bypass`；下一窗重新开启请求的hard mask。语法、音频范围和基本时值支持始终生效。显式`--no-physical-hard-mask`则从开始放宽Physical。放宽后仍无合法语法补全、非有限预测或超过生成上限时报错并写`generation-error.json`，不将截断谱面标为成功。
+默认先使用Physical hard mask；窗口回退预算耗尽后，从当前因果前缀仅放宽非多押Physical拒绝，继续强制补齐和生成。每窗`physical_fallback`记录触发点与原因，实际接受的违规逐条记录在`physical_bypass`；下一窗重新开启请求的hard mask。语法、音频范围和基本时值支持始终生效。显式`--no-physical-hard-mask`则从开始放宽非多押Physical。无法完成动作时恢复完整前缀并推进合法MOMENT，预算耗尽本身不直接导致失败。放宽后仍无合法语法补全、非有限预测或超过生成上限时报错并写`generation-error.json`，不将截断谱面标为成功。
 
-经过判定区后的撞尾（`path_guard`）例外采用 NOTE 采样后的修复，不在 type / kind / pad / flags 选择时硬屏蔽。间隔按 Slide 实际进入该判定区至 NOTE 起音的秒数计算：`150 <= gap <= 200 ms` 自动设置 `ex=1`，保留 kind、pad、其他 flags 及后续 Hold / Slide 内容；`0 < gap < 150 ms` 放弃这个 NOTE，强制回到 MOMENT 并重新选择时间，不在原起音改选 Touch。已有 EX 也不能跳过150 ms以内的回退。多个路径同时命中时任一严重撞尾即回退，初次重试时间至少到所有命中路径的150 ms边界；不是将其他音符或未来窗口整体向后移动。Slide 起点 `launch_guard`、占手、重叠和其他 Physical 规则不变。
+经过判定区后的撞尾（`path_guard`）例外采用 NOTE 采样后的修复，不在 type / kind / pad / flags 选择时硬屏蔽。发生撞尾后优先在原 pad 头经重复惩罚和 top-k / top-p 筛选的支持内无放回重采样其他合法、无撞尾的 pad，固定 kind 和原 flags；所有替代位置无法完成时才回退到原来的 EX / MOMENT 处理。间隔按 Slide 实际进入该判定区至 NOTE 起音的秒数计算：`150 <= gap <= 200 ms` 自动设置 `ex=1`，保留 kind、pad、其他 flags 及后续 Hold / Slide 内容；`0 < gap < 150 ms` 放弃这个 NOTE，强制回到 MOMENT 并重新选择时间，不在原起音改选 Touch。已有 EX 也不能跳过150 ms以内的回退。pad 重采样失败后，多个路径同时命中时任一严重撞尾即回退，初次重试时间至少到所有命中路径的150 ms边界；不是将其他音符或未来窗口整体向后移动。Slide 起点 `launch_guard`、占手、重叠和其他 Physical 规则不变。
 
-若撞尾发生于 MOMENT 后的第一个 NOTE，撤回尚未落音的 MOMENT 再重采样，避免连续 MOMENT 或遗留空起音；若同一起音已有完成音符，则保留它们并选择下一 MOMENT。前缀、规则、K/V、流式文本和 IR 同步回退。每窗生成报告及交互结果的 `tail_repairs` 记录加 EX / MOMENT 修复，搜索撤回也撤销对应修复记录；这些有意修复不计为 Physical bypass。整曲、续写和范围生成共用该流程。
+Hold / Touch Hold 与 Slide 最终 route 的最后判定区另有推理时概率修复：duration 完成后比较位置字段和时长的合法原概率；换 route 排除同终点并重推 duration，换 pad 保留 duration。判定、CONT 概率与状态合同见 [最终判定区修复](inference-hold-slide-final-area.md)。
 
-加 EX 不增加模型前向，只修改尚未送回模型的 NOTE。MOMENT 回退复用原前缀和 Router 前半层输出，但重新执行时间类型对应的后半层；延后起音的 NOTE 也需重新预测，长时值可能增加 CONT 步骤。不重跑 Encoder、Drafter / Planner 或整段前缀，不能将其计算量描述为完全不变。CPU 小模型测试核对了实际 begin / complete 调用次数及重算后 K/V 与接受序列的一致性。
+若需回退 MOMENT 且撞尾发生于 MOMENT 后的第一个 NOTE，撤回尚未落音的 MOMENT 再重采样，避免连续 MOMENT 或遗留空起音；若同一起音已有完成音符，则保留它们并选择下一 MOMENT。前缀、规则、K/V、流式文本和 IR 同步回退。每窗生成报告及交互结果的 `tail_repairs` 记录 pad / EX / MOMENT 修复，搜索撤回也撤销对应修复记录；这些有意修复不计为 Physical bypass。整曲、续写和范围生成共用该流程。
+
+重采样 pad 复用已有小头概率，仅增加候选合法性查询；如果替代 Hold / Slide 后续搜索失败仍会有回退开销。加 EX 不增加模型前向，只修改尚未送回模型的 NOTE。MOMENT 回退复用原前缀和 Router 前半层输出，但重新执行时间类型对应的后半层；延后起音的 NOTE 也需重新预测，长时值可能增加 CONT 步骤。不重跑 Encoder、Drafter / Planner 或整段前缀，不能将其计算量描述为完全不变。CPU 小模型测试核对了实际 begin / complete 调用次数及重算后 K/V 与接受序列的一致性。
 
 ## Physical 推理查询与复用
 
@@ -240,3 +242,5 @@ Python接口`generate(..., stream=None)`与`decode_window(..., stream=None)`可�
 
 推理CLI、Python生成选项和常驻交互默认温度统一为0.4；位置和形状惩罚分别默认
 32个结构token、力度1，均开启，显式力度0仍可分别关闭。
+
+推理多押约束始终开启，包括 Physical 预算兜底；无合法动作时恢复完整前缀并推进 MOMENT。Slide NOTE 提前检查一拍后的必然占手。见 [启动占手规则](slide-launch-physical.md)。

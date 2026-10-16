@@ -15,7 +15,8 @@ from .recipe import PATH_KEYS, restore_optimizer
 SCHEMA = 'maidata.decoder-training.v4'
 ARCHITECTURE = 'maidata.decoder-causal-cont-tick384.v2'
 PLANNER_KEYS = ('planner_dim','planner_heads','planner_mlp_dim','planner_dropout','planner_norm_eps',
-                'planner_span_beats', 'planner_qk_normalization')
+                'planner_span_beats','planner_stride_beats','planner_layout','reconstruction_span_beats',
+                'planner_qk_normalization')
 
 
 def recipe(config):
@@ -109,6 +110,10 @@ def _validate_producer(payload, config, binding):
     saved.setdefault('fpn_p0_normalization', False)
     saved.setdefault('draft_z_stride_beats', 1)
     saved.setdefault('planner_span_beats', 16)
+    saved.setdefault('planner_stride_beats', None)
+    saved.setdefault('planner_layout', 'legacy')
+    saved.setdefault('draft_z_anchor_mode', 'block-center')
+    saved.setdefault('reconstruction_span_beats', None)
     if current != {k:saved.get(k) for k in keys}:
         raise ValueError('frozen producer architecture/representation differs')
     # Current v3 training records selected paths, not input-content receipts.
@@ -143,8 +148,10 @@ def restore(payload, model, opt, sched, *, config, binding, source, producer, st
         raise ValueError('joint/cached optimizer ownership differs; use weight initialization for adaptation')
     if payload['recipe'].get('planner_span_beats', 16) != config.get('planner_span_beats', 16):
         raise ValueError('Decoder resume Plan span differs')
-    for key in QK_KEYS:
-        if payload['recipe'].get(key, False) != config.get(key, False):
+    for key, default in (('planner_layout', 'legacy'), ('planner_stride_beats', None),
+                         ('draft_z_anchor_mode', 'block-center'), ('reconstruction_span_beats', None),
+                         ('draft_z_stride_beats', 1), *[(key, False) for key in QK_KEYS]):
+        if payload['recipe'].get(key, default) != config.get(key, default):
             raise ValueError(f'Decoder resume representation {key} differs')
     if model.cached and (payload.get('audio_producer') != model.audio_producer or payload['producer'] != producer):
         raise ValueError('adaptation resume requires the same frozen P0 and Z producers')

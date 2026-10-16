@@ -10,7 +10,7 @@ from maidata.chart.types import (KINDS, BUTTON_PADS, TOUCH_PADS, Completion,
                                 Moment, Note, Route, HoldDuration, SlideDuration)
 from .actions import materialize
 from .conflicts import (Conflict, action_conflicts, branch_conflicts, capacity_conflicts,
-                        first_route_coverage)
+                        first_route_coverage, slide_launch_capacity)
 from .state import Decision, PhysicalState
 from .support import CATEGORIES, duration_support, moment_support
 from maidata.time import duration_end, advance_ticks
@@ -166,9 +166,15 @@ class AttributionState:
         if isinstance(token, Note):
             held = token.kind in ('hold', 'touch_hold')
             proxy = token if held else Note.make('tap', token.pad)
-            return self._action(Completion(s.owner, s.moment, s.cursor, proxy,
+            value = self._action(Completion(s.owner, s.moment, s.cursor, proxy,
                                           duration_tick=2 if held else None),
                                 touch_repeat=touch_repeat, deferred=True)
+            if token.kind == 'slide' and not value.raw.basic:
+                conflicts, inherited = slide_launch_capacity(p.actions, s, p.timing)
+                launch = self._leaf(conflicts=conflicts, inherited=inherited, deferred=True)
+                value = Evaluation(Evidence(conflicts=value.raw.conflicts | launch.raw.conflicts, deferred=True),
+                    Evidence(conflicts=value.penalty.conflicts | launch.penalty.conflicts, deferred=True))
+            return value
         if isinstance(token, Route):
             prior = p.grammar.state
             branch = branch_conflicts(p.actions, prior.owner, prior.track_count, prior.cursor,
@@ -176,8 +182,9 @@ class AttributionState:
             if branch:
                 return self._leaf(conflicts=branch)
             coverage = first_route_coverage(p.actions, s, p.timing, p.geometry)
-            if coverage:
-                return self._leaf(conflicts=coverage)
+            capacity, inherited = slide_launch_capacity(p.actions, s, p.timing, wifi=s.routes == (70,))
+            if coverage or capacity:
+                return self._leaf(conflicts=coverage | capacity, inherited=inherited, deferred=not coverage)
             if s.routes == (70,):
                 # WiFi cannot be extended; all basic durations are now known.
                 return self._fork(grammar)._duration_projection()

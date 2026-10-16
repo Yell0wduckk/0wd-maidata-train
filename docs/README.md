@@ -9,6 +9,8 @@
 | [draft-route37](draft-route37.md) | Draft的71→37镜像合并、固定接受度损失及旧CE配方兼容 |
 | [decoder-route-soft-label-future](decoder-route-soft-label-future.md) | 尚未实施的Decoder ROUTE软标签、方向衰减与分类别ε讨论 |
 | [joint-training](joint-training.md) | 从头共享E/D/R/P/M、Z4、GT plan、90/150轮及独立CUDA成本诊断 |
+| [z2-qknorm-onset](z2-qknorm-onset.md) | Z2、全层Q/K RMSNorm、单窗Plan16与逐拍起音监督 |
+| [integer-draft-plan16](integer-draft-plan16.md) | 整数锚点、四拍重建及历史重叠Plan16的几何与兼容合同 |
 | [joint-training-implementation](joint-training-implementation.md) | 联合图CPU验收、完整轮恢复、原batch CUDA正确性及分段成本证据 |
 | [main320-capacity](main320-capacity.md) | E/D/M扩宽320、M后段加深、3曲/80000组批统计与CUDA长尾容量实测 |
 | [drafter-split-implementation](drafter-split-implementation.md) | 拆分实施范围、CPU结果及checkpoint/缓存兼容性边界 |

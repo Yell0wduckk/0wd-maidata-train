@@ -136,14 +136,19 @@ class Attention(nn.Module):
 
 class ConditionAdapter(nn.Module):
     def __init__(self, latent_dim, dim, z_cross_attention, norm_eps, z_normalization=False,
-                 plan_span_beats=16):
+                 plan_span_beats=16, planner_layout='legacy'):
         super().__init__()
         if type(plan_span_beats) is not int or plan_span_beats != 16:
             raise ValueError('plan_span_beats must be 16')
+        if planner_layout not in ('legacy', 'centered-overlap', 'window-single'):
+            raise ValueError('unsupported planner_layout')
+        if planner_layout in ('centered-overlap', 'window-single') and plan_span_beats != 16:
+            raise ValueError(planner_layout+' requires Plan16')
         self.validate_inputs = True
         self.latent_dim = latent_dim
         self.z_cross_attention = z_cross_attention
         self.plan_span_beats = plan_span_beats
+        self.planner_layout = planner_layout
         self.z = nn.Linear(latent_dim, dim)
         self.plan = nn.Sequential(nn.Linear(12, dim), nn.GELU(), nn.Linear(dim, dim))
         self.source = nn.Embedding(2, dim)
@@ -153,7 +158,11 @@ class ConditionAdapter(nn.Module):
         self.z_norm = (nn.LayerNorm(dim, eps=norm_eps, elementwise_affine=False)
                        if z_normalization else nn.Identity())
 
-    def forward(self, z, plan, plan_valid):
+    def forward(self, z, plan, plan_valid, plan_beats=None):
+        if self.planner_layout == 'centered-overlap':
+            return self.positioned_plan(z, plan, plan_valid, plan_beats)
+        if self.plan_span_beats == 4:
+            return self.aligned_plan(z, plan, plan_valid)
         if self.validate_inputs and self.z_cross_attention:
             validate_memory(z, self.latent_dim)
         if (self.validate_inputs and (plan.shape != (len(z.values), 12) or plan_valid.shape != plan.shape[:1]
@@ -171,3 +180,57 @@ class ConditionAdapter(nn.Module):
         return Memory(torch.cat((a, b[:, None]), 1),
                       torch.cat((beats, beats.new_zeros((len(plan), 1))), 1),
                       torch.cat((valid, plan_valid[:, None]), 1))
+
+    def aligned_plan(self, z, plan, plan_valid):
+        """Each Plan4 slot owns the same absolute center as its corresponding Z4.
+
+        Validity remains independent: an absent Plan never removes a valid Z,
+        and a valid empty-segment Plan can survive a masked Z slot.
+        """
+        if self.validate_inputs and self.z_cross_attention:
+            validate_memory(z, self.latent_dim)
+        if (z.values.ndim != 3
+                or z.beats.shape != z.values.shape[:2] or z.valid.shape != z.beats.shape
+                or z.valid.dtype != torch.bool or plan.shape != (*z.values.shape[:2], 12)
+                or plan_valid.shape != z.valid.shape or plan_valid.dtype != torch.bool
+                or plan.device != z.values.device or plan_valid.device != z.values.device):
+            raise ValueError('Plan4 requires [B,L,12] and validity [B,L] aligned with Z slots')
+        if self.validate_inputs:
+            require((torch.isfinite(plan) | ~plan_valid[..., None]).all()
+                    & (torch.isfinite(z.beats) | ~plan_valid).all(),
+                    'valid Plan4 values and aligned centers must be finite')
+        b = self.plan_norm(self.plan(plan.masked_fill(~plan_valid[..., None], 0)) + self.source.weight[1])
+        if self.z_cross_attention:
+            a = self.z_norm(self.z(z.values.masked_fill(~z.valid[..., None], 0)) + self.source.weight[0])
+            beats, valid = z.beats, z.valid
+        else:
+            a = b.new_zeros((*z.valid.shape, b.shape[-1]))
+            beats, valid = torch.zeros_like(z.beats), torch.zeros_like(z.valid)
+        return Memory(torch.cat((a, b), 1), torch.cat((beats, z.beats), 1),
+                      torch.cat((valid, plan_valid), 1))
+
+    def positioned_plan(self, z, plan, plan_valid, plan_beats):
+        """Independent Plan centers share the rotary attention space with Z."""
+        if self.validate_inputs and self.z_cross_attention:
+            validate_memory(z, self.latent_dim)
+        if (z.values.ndim != 3 or z.beats.shape != z.values.shape[:2]
+                or z.valid.shape != z.beats.shape or z.valid.dtype != torch.bool
+                or plan.ndim != 3 or plan.shape[0] != len(z.values) or plan.shape[-1] != 12
+                or plan_valid.shape != plan.shape[:2] or plan_valid.dtype != torch.bool
+                or plan_beats is None or plan_beats.shape != plan_valid.shape
+                or not plan_beats.is_floating_point()
+                or any(t.device != z.values.device for t in (plan, plan_valid, plan_beats))):
+            raise ValueError('positioned Plan requires [B,P,12], validity and independent plan_beats [B,P]')
+        if self.validate_inputs:
+            require((torch.isfinite(plan) | ~plan_valid[..., None]).all()
+                    & (torch.isfinite(plan_beats) | ~plan_valid).all(),
+                    'valid Plan values and centers must be finite')
+        b = self.plan_norm(self.plan(plan.masked_fill(~plan_valid[..., None], 0)) + self.source.weight[1])
+        if self.z_cross_attention:
+            a = self.z_norm(self.z(z.values.masked_fill(~z.valid[..., None], 0)) + self.source.weight[0])
+            beats, valid = z.beats, z.valid
+        else:
+            a = b.new_zeros((*z.valid.shape, b.shape[-1]))
+            beats, valid = torch.zeros_like(z.beats), torch.zeros_like(z.valid)
+        return Memory(torch.cat((a, b), 1), torch.cat((beats, plan_beats), 1),
+                      torch.cat((valid, plan_valid), 1))

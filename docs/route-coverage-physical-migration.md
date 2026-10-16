@@ -1,4 +1,6 @@
-# ROUTE 首段覆盖归责修复与缓存迁移
+# ROUTE 首段覆盖与 Slide 启动占手归责迁移
+
+本入口现同时合并 [Slide 一拍后启动占手修复](slide-launch-physical.md)。从零生产与两级迁移均覆盖两项规则；Hold／Slide 末判定区仍仅推理。
 
 训练 `AttributionState` 现在与推理共享首段 `path_coverage` 查询。第一段的出现时间、启动时间和路径在 ROUTE 选定时已经确定；无论追加多少段或改变总 duration，都不能消除的覆盖冲突在该 ROUTE 候选处计罚。
 
@@ -22,7 +24,7 @@ python -m maidata.chart_cache.migrate_route_coverage --fields <original-v2-field
 
 可重复传 `--chart-id ID:difficulty` 只迁移所选成功谱面；不传则处理旧 Physical 成功清单。相同命令可以续跑，已完成谱面从各自 status 恢复。失败直接报错，已完成的新文件保留，源目录只读。
 
-脚本从现有动作与语法前缀定位受影响的 ROUTE，复用其他 stage。从首个受影响 stage 开始重新计算各字段的首次归责，直到包含下一个重置归责的真实 MOMENT；末组同时更新终端 stage。已有精确 duration 区间作为 raw 冲突来源复用，仅缺少的反事实查询按规则计算，不重建几何资产，也不逐 tick 穷举。迁移记录包含 `changed_target_indices`、重算和复用 stage 数。
+脚本从现有动作与语法前缀定位受影响的类型、NOTE 和 ROUTE，按真实 type→kind→pad/route 顺序比较归责，复用其他 stage。从首个受影响 stage 开始重新计算各字段的首次归责，直到包含下一个重置归责的真实 MOMENT；末组同时更新终端 stage。已有精确 duration 区间作为 raw 冲突来源复用，仅缺少的反事实查询按规则计算，不重建几何资产，也不逐 tick 穷举。迁移记录包含 `changed_target_indices`、重算和复用 stage 数。
 
 新 catalog/summary 保留字段源身份并记录此次 Physical 生产者。来源 SHA 使用已有元数据；每个新 Physical 文件保存时验收一次。不会预扫描或重新计算旧载荷的哈希。原谱、时间和动作文件不改写。
 

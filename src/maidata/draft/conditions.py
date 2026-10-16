@@ -44,7 +44,8 @@ def read_condition(source, *, numeric_level=None, validate_input=True):
     return ChartCondition(str(source['audio_variant']), int(difficulty), float(level), raw)
 
 
-def make_draft_inputs(conditions, audio_variants, coverages, *, device, validate_input=True, z_stride_beats=None):
+def make_draft_inputs(conditions, audio_variants, coverages, *, device, validate_input=True, z_stride_beats=None,
+                      anchor_mode='block-center'):
     """Deduplicate condition groups; return DraftInputs and chart-to-group mapping."""
     import torch
     from .types import DraftInputs
@@ -61,7 +62,7 @@ def make_draft_inputs(conditions, audio_variants, coverages, *, device, validate
             unique.append(condition)
         chart_groups.append(group_index[condition.key])
     mapping = torch.tensor([audio_index[c.audio_variant] for c in unique], device=device, dtype=torch.long)
-    beats, valid = draft_queries(coverages, mapping, z_stride_beats=z_stride_beats)
+    beats, valid = draft_queries(coverages, mapping, z_stride_beats=z_stride_beats, anchor_mode=anchor_mode)
     inputs = DraftInputs(beats, valid, mapping,
         torch.tensor([c.difficulty_id for c in unique], device=device, dtype=torch.long),
         torch.tensor([c.level for c in unique], device=device, dtype=torch.float32),

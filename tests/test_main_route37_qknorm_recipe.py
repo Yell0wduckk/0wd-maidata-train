@@ -81,14 +81,19 @@ def test_cli_recipe_preserves_route37_optimizer_batch_and_scheduler_contract(cap
     assert c['reconstruction_route_loss'] == 'acceptance37'
     assert c['reconstruction_count_supervision'] is False and c['reconstruction_count_loss'] == 'mse'
     assert c['planner_continuous_weight'] == 1. and c['planner_category_weight'] == .25
-    # This main merge contains neither integer/overlap geometry nor onset supervision.
-    assert not {'planner_layout', 'planner_stride_beats', 'draft_z_anchor_mode',
-                'reconstruction_span_beats', 'reconstruction_onset_presence_supervision'} & c.keys()
+    # Legacy Z4 recipes keep their original semantics after Z2 joins the runtime.
+    assert c['planner_layout'] == 'legacy' and c['planner_stride_beats'] is None
+    assert c['draft_z_anchor_mode'] == 'block-center' and c['reconstruction_span_beats'] is None
+    assert c['reconstruction_onset_presence_supervision'] is False
 
 
 def test_only_authorized_values_differ_from_saved_full_route37_metadata():
     old = json.loads(REFERENCE.read_text(encoding='utf-8'))
     old.setdefault('planner_span_beats', 16)
+    for key in ('planner_layout', 'planner_stride_beats', 'draft_z_anchor_mode',
+                'reconstruction_span_beats', 'reconstruction_onset_presence_supervision',
+                'reconstruction_onset_presence_weight'):
+        old.setdefault(key, CONFIG[key])
     for key in QK_FLAGS:
         old.setdefault(key, False)
     current = configuration()

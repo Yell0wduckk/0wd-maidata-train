@@ -1,7 +1,7 @@
 """python -m maidata.inference.interactive: a resident joint decoder for editor requests.
 
-The process loads only M and reuses the audio and Draft/Plan caches written by
-``preencode`` / ``predraft`` (it never runs E, D or P). It then answers JSON-line
+The process normally loads only M and reuses audio and Draft/Plan caches written
+by ``preencode`` / ``predraft``; invalid entries are rebuilt once. It answers JSON-line
 requests on stdin with JSON-line events on stdout:
 
 - ``{"op": "chart", "revision": r, "ir": <maimai.chart_ir.v1>}`` replaces the
@@ -184,14 +184,19 @@ class Interactive:
         from maidata.model import decoder_time_distributions
         from .cache import JointCache, draft_identity, identity_key
         from .checkpoint import JointCheckpoint
-        from .precompute import read_timing, requested_audio_identity
+        from .precompute import read_features, read_timing, requested_audio_identity
         self.emit = emit
         self.device = torch.device(args.device)
         self.precision = args.precision
         self.timing_data, self.timing = read_timing(args)
         checkpoint = JointCheckpoint(args.joint_checkpoint)
         cache = JointCache(args.cache_dir, checkpoint, device=self.device, precision=args.precision)
-        encoded = cache.find_audio(requested_audio_identity(checkpoint, args, self.timing, self.device))
+        identity = requested_audio_identity(checkpoint, args, self.timing, self.device)
+        with self.autocast():
+            encoded = cache.find_audio(identity)
+            if encoded is None and cache.report['audio'].get('invalidated'):
+                grid, duration = read_features(args, self.timing_data, checkpoint.config)
+                encoded = cache.encode(identity, grid, self.timing, duration)
         if encoded is None:
             raise FileNotFoundError('No matching audio cache; run audio preencoding for this audio/timing/checkpoint first')
         draft = cache.root/'draft'/(identity_key(draft_identity(checkpoint, encoded.key, difficulty=args.difficulty,
@@ -239,17 +244,15 @@ class Interactive:
         c, conditions = self.config, self.conditions
         start = conditions.starts[index]
         with self.autocast():
-            selected = select_windows(conditions.z, torch.tensor([0], device=self.device),
-                torch.tensor([start], device=self.device, dtype=torch.float32), torch.tensor([True], device=self.device),
-                target_beats=c['target_beats'], before_beats=c['decoder_z_before_beats'],
-                after_beats=c['decoder_z_after_beats'], z_stride_beats=c['draft_z_stride_beats']
-                ).memory if c['decoder_z_cross_attention'] else conditions.z
+            from .conditioning import decoder_z_window
+            selected = decoder_z_window(conditions, index, c, self.device)
             audio_index = index if conditions.audio_scope == 'window' else 0
             plans, valid = conditions.plans[index:index+1], conditions.plan_valid[index:index+1]
             if plan_source == 'none':
                 plans, valid = torch.zeros_like(plans), torch.zeros_like(valid)
             memory = self.decoder.prepare_memory(self.audio_kv, torch.tensor([audio_index], device=self.device),
-                selected, plans, valid)
+                selected, plans, valid,
+                **({} if conditions.plan_beats is None else {'plan_beats': conditions.plan_beats[index:index+1]}))
         # Self K/V depends on Plan as well as chart rows. Never reuse it after
         # changing the conditioning, and retain the predicted Draft cache intact.
         context = self.contexts[index] = WindowContext(memory, plan_source=plan_source)
@@ -329,6 +332,7 @@ class Interactive:
         repeat_prefix = repetition_history(groups, options.repetition_history_limit)
         generated, produced, reused, computed, bypass, repairs = [], 0, 0, 0, 0, []
         stop_reason = limit_reason
+        hold_repairs = []
         floor = start
         while floor < end:
             index = floor // self.window_ticks
@@ -365,6 +369,7 @@ class Interactive:
             reused, computed = reused + kept, computed + fresh
             bypass += len(report['physical_bypass'])
             repairs.extend(report['tail_repairs'])
+            hold_repairs.extend(report.get('hold_slide_tail_repairs', ()))
             if new:
                 cursor, more = origin, []
                 for token in new:
@@ -414,6 +419,7 @@ class Interactive:
             tokens=produced, reused_rows=reused, computed_rows=computed,
             skipped_notes=self.skipped, physical_bypass=bypass, seed=options.seed,
             limit_tick=end, stop_reason=stop_reason, plan_source=plan_source, tail_repairs=repairs,
+            hold_slide_tail_repairs=hold_repairs,
             max_slide_judge_areas=options.max_slide_judge_areas,
             **options.repetition_settings)
 

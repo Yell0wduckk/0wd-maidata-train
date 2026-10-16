@@ -45,6 +45,11 @@ def workload(batches):
         coverage_encoder_windows=sum(len(batch.coverage_audio_indices) for batch in batches),
         valid_audio_input_samples=sum(int(batch.audio_windows.valid.sum()) for batch in batches),
         actual_reconstruction_queries=sum(query_cost(batch) for batch in batches),
+        event_reconstruction_queries=sum(int(batch.reconstruction.queries.valid.sum()) for batch in batches),
+        numeric_count_queries=sum(int(batch.reconstruction.valid.sum())*batch.reconstruction.moment_counts.shape[1]
+                                  for batch in batches),
+        onset_presence_queries=sum(int(batch.reconstruction.queries.onset_presence.valid.sum())
+            if batch.reconstruction.queries.onset_presence is not None else 0 for batch in batches),
         valid_m_rows=sum(int(chunk.tokens.valid.sum()) for batch in batches for chunk in batch.chunks),
         padded_m_rows=sum(chunk.tokens.valid.numel() for batch in batches for chunk in batch.chunks),
         m_chunks=sum(len(batch.chunks) for batch in batches),

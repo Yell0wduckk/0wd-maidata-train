@@ -31,6 +31,15 @@ def prepare(config, resume=None):
                     k.startswith('decoder_') and not k.startswith('decoder_train_')}
     architecture.pop('decoder_z_cross_attention', None)
     architecture['planner_span_beats'] = saved.get('planner_span_beats', 16)
+    architecture['planner_layout'] = saved.get('planner_layout', 'legacy')
+    architecture['planner_stride_beats'] = saved.get('planner_stride_beats')
+    if architecture['planner_layout'] in ('centered-overlap', 'window-single'):
+        # These coordinates determine M's 23-Z layout even though the
+        # adaptation does not execute R. Preserve the source representation
+        # before FrozenCache checks it; its Z width remains consumer-selected.
+        architecture.update(draft_z_anchor_mode=saved.get('draft_z_anchor_mode', 'block-center'),
+            draft_z_stride_beats=saved.get('draft_z_stride_beats', 1),
+            reconstruction_span_beats=saved.get('reconstruction_span_beats'))
     architecture.update(encoder)
     return dict(config, **architecture), payload
 

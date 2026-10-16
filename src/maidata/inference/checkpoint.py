@@ -36,6 +36,9 @@ class JointCheckpoint:
         if plan_source not in ('predicted', 'gt', 'none'):
             raise ValueError('plan_source must be predicted, gt or none')
         self.config = dict(CONFIG, **with_legacy_defaults(payload['recipe']))
+        for key, default in (('planner_layout', 'legacy'), ('planner_stride_beats', None),
+                             ('draft_z_anchor_mode', 'block-center'), ('reconstruction_span_beats', None)):
+            self.config[key] = payload['recipe'].get(key, default)
         self.config['decoder_z_normalization'] = payload['recipe'].get('decoder_z_normalization', False)
         # Historical recipes must not inherit the new P0 normalization default.
         self.config['fpn_p0_normalization'] = payload['recipe'].get('fpn_p0_normalization', False)
@@ -110,6 +113,10 @@ def load_models(encoder_draft_checkpoint, decoder_checkpoint, *, device, z_cross
             raise ValueError('teacher Planner and M target-window spans differ')
         if teacher.get('planner_span_beats', 16) != config.get('planner_span_beats', 16):
             raise ValueError('teacher Planner and M Plan spans differ')
+        if (teacher.get('planner_layout', 'legacy') != config.get('planner_layout', 'legacy')
+                or teacher.get('planner_stride_beats') != config.get('planner_stride_beats')
+                or teacher.get('draft_z_anchor_mode', 'block-center') != config.get('draft_z_anchor_mode', 'block-center')):
+            raise ValueError('teacher Planner and M coordinate/layout semantics differ')
         if actual_z and teacher['draft_latent_dim'] != config['draft_latent_dim']:
             raise ValueError('teacher Z width differs from the trained M input projection; old Z cannot be expanded')
         if actual_z and teacher['draft_z_stride_beats'] != config['draft_z_stride_beats']:

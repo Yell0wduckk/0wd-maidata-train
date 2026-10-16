@@ -13,15 +13,16 @@ from torch.utils.data import DataLoader, Dataset
 
 from maidata.decoder.types import Memory
 from maidata.decoder_training.conditioning import Conditions
-from maidata.decoder_training.gt_plan_cache import GTPlanCache
+from maidata.decoder_training.gt_plan_cache import GTPlanCache, select_plan_conditions
 from maidata.decoder_training.ordering import history_dropped
 from maidata.decoder_training.plan import DecoderPlan
 from maidata.decoder_training.preparation import prepare_batch
 from maidata.decoder_training.transport import pack
 from maidata.decoder_training.window_cache import WindowCache, select_window
 from maidata.draft.conditions import make_draft_inputs
-from maidata.draft.layout import prepare_p0, prepare_selection
-from maidata.draft.targets import collate_planner, collate_reconstruction
+from maidata.draft.layout import prepare_p0, prepare_selection, prepare_centers
+from maidata.draft.spacing import integer_offsets
+from maidata.draft.supervision import prepare_auxiliary
 from maidata.preparation.cache import song_inputs, window_inputs
 from maidata.training.data import (AudioBatchSampler, AudioDataset, AudioPlan,
                                    epoch_iterator, map_tensors, worker_init)
@@ -44,7 +45,7 @@ class JointDataset(Dataset):
         self.windows = windows if windows is not None else WindowCache(
             [plan.decoder_plan], config, {})
         self.gt_plan = gt_plan if gt_plan is not None else GTPlanCache(
-            config['decoder_train_gt_plan_cache'])
+            config['decoder_train_gt_plan_cache'], config)
 
     def __len__(self):
         return len(self.plan.groups)
@@ -145,18 +146,15 @@ def collate_audio(items, *, config, packed=False):
     conditions = {key: value for item in items for key, value in item['conditions'].items()}
     draft, chart_groups = make_draft_inputs(list(conditions.values()), variants,
         coverages, device='cpu', validate_input=False,
-        z_stride_beats=config['draft_z_stride_beats'])
+        z_stride_beats=config['draft_z_stride_beats'],
+        anchor_mode=config.get('draft_z_anchor_mode', 'block-center'))
     ownership = dict(zip(conditions, chart_groups.tolist()))
     draft.valid_indices = draft.draft_valid.flatten().nonzero().flatten()
 
-    auxiliary = [window for item in items for window in item['windows']]
-    groups = torch.tensor([ownership[window[1]] for window in auxiliary], dtype=torch.long)
-    starts = torch.tensor([window[2] for window in auxiliary], dtype=torch.float32)
-    valid = torch.ones(len(auxiliary), dtype=torch.bool)
-    layouts = {name: prepare_selection(draft.query_beats, draft.draft_valid,
-        groups, starts, valid, target_beats=config['target_beats'], before_beats=0,
-        after_beats=0, z_stride_beats=config['draft_z_stride_beats'])
-        for name in ('reconstruction', 'planner')}
+    auxiliary = prepare_auxiliary(items, config, ownership, draft)
+    groups, starts, valid = (auxiliary[key] for key in ('groups', 'starts', 'valid'))
+    layouts = auxiliary['layouts']
+    centered = config.get('planner_layout', 'legacy') == 'centered-overlap'
 
     songs, audio_windows, audio_keys, coverage_indices, layouts['p0'], audio = _audio_union(items, config)
     audio_lookup = {key: index for index, key in enumerate(audio_keys)}
@@ -165,16 +163,17 @@ def collate_audio(items, *, config, packed=False):
     item_lookup = {item['variant']: item for item in items}
     chart_variant = {key: item['variant'] for item in items for key in item['conditions']}
     unique, occurrence, decoder_groups, decoder_starts = {}, [], [], []
-    plans, plan_valid, audio_mapping = [], [], []
+    plans, plan_valid, plan_beats, audio_mapping = [], [], [], []
     for window in m_windows:
         identity = window['identity'][0]
         if identity not in unique:
             unique[identity] = len(unique)
             variant = chart_variant[window['chart_id']]
             gt = item_lookup[variant]['gt_plan']
-            index = gt['window_index'][identity]
-            plans.append(gt['plan_values'][index])
-            plan_valid.append(gt['valid'][index])
+            plan, mask, centers = select_plan_conditions(gt, identity, window['chart_id'], window['start'], config)
+            plans.append(plan)
+            plan_valid.append(mask)
+            plan_beats.append(centers)
             decoder_groups.append(ownership[window['chart_id']])
             decoder_starts.append(window['start'])
             audio_mapping.append(audio_lookup[(variant, window['start'])])
@@ -185,18 +184,21 @@ def collate_audio(items, *, config, packed=False):
     layouts['decoder'] = prepare_selection(draft.query_beats, draft.draft_valid,
         decoder_groups, decoder_starts, decoder_valid, target_beats=config['target_beats'],
         before_beats=config['decoder_z_before_beats'], after_beats=config['decoder_z_after_beats'],
-        z_stride_beats=config['draft_z_stride_beats'])
+        z_stride_beats=config['draft_z_stride_beats'],
+        anchor_mode=config.get('draft_z_anchor_mode', 'block-center'))
+    if config.get('planner_layout', 'legacy') in ('centered-overlap', 'window-single'):
+        offsets = integer_offsets(-3, config['target_beats']+3, config['draft_z_stride_beats'])
+        layouts['decoder'] = prepare_centers(draft.query_beats, draft.draft_valid,
+            decoder_groups, decoder_starts[:, None]+torch.tensor(offsets).float(), decoder_valid)
     z_layout = layouts['decoder']
     z = Memory(torch.zeros((*z_layout['beats'].shape, config['draft_latent_dim'])),
                z_layout['beats'], z_layout['valid'])
     decoder_conditions = Conditions(audio, z, torch.stack(plans), torch.stack(plan_valid),
         torch.tensor(occurrence, dtype=torch.long), torch.tensor(audio_mapping, dtype=torch.long),
-        audio.valid.flatten().nonzero().flatten())
+        audio.valid.flatten().nonzero().flatten(),
+        plan_beats=torch.stack(plan_beats) if centered else None)
     batch = Batch(songs, audio_windows, coverages, draft, groups, starts, valid,
-        collate_reconstruction([window[3] for window in auxiliary], target_beats=config['target_beats'],
-                               device='cpu', validate_input=False),
-        collate_planner([window[4] for window in auxiliary], device='cpu', validate_input=False),
-        [window[0] for window in auxiliary], variants, coverage_indices,
+        auxiliary['reconstruction'], auxiliary['planner'], auxiliary['window_ids'], variants, coverage_indices,
         decoder_groups, decoder_starts, decoder_valid, decoder_conditions, layouts, m_windows,
         [sum(key[0] == variant for key in audio_keys)*audio.valid.shape[1] for variant in variants])
     from maidata.draft.losses import prepare_supervision

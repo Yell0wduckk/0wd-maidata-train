@@ -8,7 +8,7 @@ grammar/actions prefix is cached; changing or restoring it drops the cache.
 from maidata.chart.types import (KINDS, BUTTON_PADS, TOUCH_PADS, Completion,
                                 Moment, Note, Route, HoldDuration, SlideDuration)
 from .actions import materialize
-from .conflicts import branch_conflicts
+from .conflicts import branch_conflicts, slide_launch_capacity
 from .rules import CATEGORIES, prune_history
 from .inference_context import InferenceIntervalContext
 from .state import Decision, PhysicalState
@@ -191,9 +191,13 @@ class InferencePhysicalState(PhysicalState):
         if isinstance(token, Note):
             held = token.kind in ('hold', 'touch_hold')
             proxy = token if held else Note.make('tap', token.pad)
-            return self._action(Completion(s.owner, s.moment, s.cursor, proxy,
+            value = self._action(Completion(s.owner, s.moment, s.cursor, proxy,
                                            duration_tick=2 if held else None),
                                 touch_repeat=touch_repeat, deferred=True)
+            if token.kind == 'slide' and not value.basic_errors:
+                conflicts, _ = slide_launch_capacity(self.actions, s, self.timing)
+                value = Decision(physical=value.physical | {c.category for c in conflicts}, deferred=True)
+            return value
         if isinstance(token, Route):
             prior = self.grammar.state
             branch = branch_conflicts(self.actions, prior.owner, prior.track_count, prior.cursor,
@@ -201,8 +205,9 @@ class InferencePhysicalState(PhysicalState):
             if branch:
                 return Decision(physical=frozenset(c.category for c in branch))
             coverage = self._first_route_coverage(s)
-            if coverage:
-                return Decision(physical=coverage)
+            capacity, _ = slide_launch_capacity(self.actions, s, self.timing, wifi=s.routes == (70,))
+            if coverage or capacity:
+                return Decision(physical=coverage | {c.category for c in capacity}, deferred=not coverage)
             if s.routes == (70,):
                 # WiFi cannot be extended. Remaining ordinary-chain checks
                 # stay deferred when extension can repair their completion.

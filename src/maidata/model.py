@@ -13,10 +13,12 @@ QK_KEYS = ('qk_normalization', 'draft_qk_normalization',
 
 
 def with_legacy_defaults(saved):
-    """Parameter-free Q/K changes still require explicit historical semantics."""
+    """Parameter-free changes still need explicit historical recipe semantics."""
     result = dict(saved)
     for key in QK_KEYS:
         result.setdefault(key, False)
+    result.setdefault('reconstruction_onset_presence_supervision', False)
+    result.setdefault('reconstruction_onset_presence_weight', 1.0)
     return result
 
 
@@ -49,6 +51,7 @@ def build_planner(config):
     keys = ('dim', 'heads', 'mlp_dim', 'dropout', 'norm_eps')
     return PlannerHead(latent_dim=config['draft_latent_dim'], span_beats=plan_span(config),
         qk_normalization=config.get('planner_qk_normalization', False),
+        layout=config.get('planner_layout', 'legacy'), stride_beats=config.get('planner_stride_beats') or 4,
         **{key: config['planner_' + key] for key in keys},
         rope_base=config['rope_base'], rope_position_scale=config['rope_position_scale'])
 
@@ -58,6 +61,19 @@ def plan_span(config):
     span = config.get('planner_span_beats', 16)
     if type(span) is not int or span != 16:
         raise ValueError('planner_span_beats must be 16')
+    layout = config.get('planner_layout', 'legacy')
+    if layout not in ('legacy', 'centered-overlap', 'window-single'):
+        raise ValueError('unsupported planner_layout')
+    if layout in ('centered-overlap', 'window-single'):
+        expected_stride = 4 if layout == 'centered-overlap' else None
+        if (span != 16 or config.get('planner_stride_beats') != expected_stride
+                or config.get('draft_z_anchor_mode') != 'integer'
+                or config['draft_z_stride_beats'] not in (1, 2)
+                or config.get('reconstruction_span_beats') != 4
+                or config['target_beats'] != 16
+                or config['decoder_z_before_beats'] != 4 or config['decoder_z_after_beats'] != 4):
+            raise ValueError(layout+' requires integer Z1/Z2, four-beat reconstruction, Plan16 and target16/context4 with its own Plan spacing')
+        return span
     return span
 
 
@@ -67,7 +83,10 @@ def build_reconstruction(config):
             'position_base', 'position_scale')
     return ReconstructionHead(latent_dim=config['draft_latent_dim'], target_beats=config['target_beats'],
                                z_stride_beats=config['draft_z_stride_beats'],
+                               anchor_mode=config.get('draft_z_anchor_mode', 'block-center'),
+                               span_beats=config.get('reconstruction_span_beats'),
                                count_loss=config.get('reconstruction_count_loss', 'ce'),
+                               onset_presence_supervision=config.get('reconstruction_onset_presence_supervision', False),
                                route_vocabulary=config.get('reconstruction_route_vocabulary', 'route71'),
                                **{key: config['reconstruction_' + key] for key in keys})
 
@@ -86,5 +105,6 @@ def build_decoder(config):
                     qk_normalization=config.get('decoder_qk_normalization', False),
                     z_normalization=config.get('decoder_z_normalization', False),
                     plan_span_beats=plan_span(config),
+                    planner_layout=config.get('planner_layout', 'legacy'),
                     **{key: config['decoder_' + key] for key in keys})
     return model

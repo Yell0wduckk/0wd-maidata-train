@@ -52,7 +52,8 @@ def test_unified_wifi_and_route_masks(geometry):
     s.accept(Route(70,0));s.accept(SlideDuration(96))
     assert s.actions[-1].wifi and s.grammar.allowed_types() == ('ROUTE','NOTE','MOMENT')
     with pytest.raises(ChartError): Note.make('wifi','A1')
-    s.accept(Note.make('slide','A3'));s.accept(Route(0,0))
+    assert s.query(Note.make('slide','A3')).physical == {'multitouch'}
+    s.accept_source(Note.make('slide','A3'));s.accept_source(Route(0,0))
     assert not s.query(Route(70)).allowed
     s.accept_source(SlideDuration(96))
     assert not s.query(Route(70,0)).basic_errors

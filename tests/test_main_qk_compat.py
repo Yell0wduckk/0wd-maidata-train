@@ -35,8 +35,10 @@ def test_disabled_and_missing_flags_preserve_original_cache_identity():
         enabled = draft_identity(SimpleNamespace(config=dict(disabled, **{key: True}), identity=metadata),
                                  'same-audio', **arguments)
         assert identity_key(enabled) != identity_key(legacy)
-    assert not any('anchor_mode' in key or 'onset_presence' in key or key == 'planner_layout'
-                   for key in with_legacy_defaults({}))
+    historical = with_legacy_defaults({})
+    assert historical['reconstruction_onset_presence_supervision'] is False
+    assert historical['reconstruction_onset_presence_weight'] == 1.0
+    assert not any('anchor_mode' in key or key == 'planner_layout' for key in historical)
 
 
 def test_teacher_missing_flags_keep_old_math_even_if_live_defaults_change(monkeypatch):

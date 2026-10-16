@@ -53,4 +53,5 @@ class DecoderTrainer(nn.Module):
         z = conditions.decoder_z
         return self.decoder.prepare_memory(audio_kv, conditions.audio_mapping[unique],
             Memory(z.values[unique], z.beats[unique], z.valid[unique]), conditions.plan[unique],
-            conditions.plan_valid[unique], audio_layout=audio_layout)
+            conditions.plan_valid[unique], audio_layout=audio_layout,
+            plan_beats=None if conditions.plan_beats is None else conditions.plan_beats[unique])

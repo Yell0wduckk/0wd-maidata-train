@@ -14,6 +14,8 @@ from .sampling import Sampler, OnsetLimit
 from .options import GenerationOptions
 from .progress import emit, stage
 from .tail_collision import GenerationPhysicalState, TailRepair, generation_rules
+from .hold_tail import FieldAnchor, ActionRepair, contacts, fork as hold_tail_fork, repairs as hold_tail_choices
+from maidata.chart.types import Note, Route, HoldDuration, SlideDuration
 
 
 class GenerationError(RuntimeError):
@@ -32,6 +34,9 @@ class SearchFrame:
     repair_event: dict | None = None
     recovery: object = None
     force_moment: bool = False
+    position_anchor: object = None
+    hold_repair_count: int = 0
+    replayed_tail_repairs: tuple = ()
 
 
 def repetition_history(groups, limit):
@@ -73,6 +78,8 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
     backtracks = 0
     physical_fallback = None
     complete_prefix = None
+    position_anchor = None
+    hold_repairs = []
     session.rules = generation_rules(session.rules)
 
     def frame(token, *, routed=None, moment_floor=None, repair_event=None, force_moment=False):
@@ -97,7 +104,8 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
             moment_remaining=options.max_tokens_per_moment-count,
             history=tuple(repetition_prefix) + tuple(accepted[-options.repetition_history_limit:]),
             onset_end_tick=onset_end_tick, **extra), token, routed, repair_event,
-            recovery=complete_prefix, force_moment=force_moment)
+            recovery=complete_prefix, force_moment=force_moment,
+            position_anchor=position_anchor, hold_repair_count=len(hold_repairs))
         if oracle.grammar.state.phase in ('boundary', 'done', 'track_done'):
             result.recovery = None  # No chain of old KV snapshots is retained.
             complete_prefix = result
@@ -109,6 +117,8 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
         current = frames[-1]
         count, choices = current.count, current.choices
         session.restore(current.snapshot)
+        position_anchor = current.position_anchor
+        del hold_repairs[current.hold_repair_count:]
         complete_prefix = current if session.rules.grammar.state.phase in ('boundary', 'done', 'track_done') else current.recovery
         rolled_back = len(accepted) > count
         del accepted[count:]
@@ -117,6 +127,8 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
         if rolled_back:
             emit(stream, 'rollback', window=window, token_count=count)
         try:
+            if hasattr(sampler, 'field_choice'):
+                sampler.field_choice = sampler.duration_choice = None
             token, cache = next(choices)
         except StopIteration:
             frames.pop()
@@ -127,12 +139,12 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
                 trace.append(dict(event='backtrack', tokens=count))
             if backtracks > options.max_backtracks_per_window:
                 if sampler.physical_hard_mask:
-                    # Retry this exact causal prefix with only raw Physical
-                    # rejection relaxed. Grammar/audio-domain validity stays.
+                    # Retry this prefix with only non-multitouch Physical
+                    # relaxed. Grammar/audio and hand capacity stay mandatory.
                     sampler.physical_hard_mask = False
                     physical_fallback = dict(reason='backtracking_budget_exhausted',
                         token_index=count,tick=session.rules.grammar.state.cursor,
-                        phase=session.rules.grammar.state.phase,backtracks=backtracks)
+                        phase=session.rules.grammar.state.phase,backtracks=backtracks, mandatory_physical=['multitouch'])
                     frames.append(frame(current.input_token, routed=current.routed,
                         moment_floor=(current.repair_event or {}).get('minimum_tick'), repair_event=current.repair_event))
                     continue
@@ -148,11 +160,14 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
                         (current.repair_event or {}).get('minimum_tick', 0))
                     physical_fallback = physical_fallback or dict(reason='backtracking_budget_exhausted',
                         token_index=count, tick=session.rules.grammar.state.cursor,
-                        phase=session.rules.grammar.state.phase, backtracks=backtracks)
+                        phase=session.rules.grammar.state.phase, backtracks=backtracks, mandatory_physical=['multitouch'])
                     physical_fallback.setdefault('recoveries', []).append(dict(
                         token_index=source.count, discarded_tokens=len(accepted)-source.count,
-                        minimum_tick=minimum_tick))
+                        minimum_tick=minimum_tick, reason='no_legal_completion',
+                        phase=current.snapshot.rules.grammar.phase))
                     session.restore(source.snapshot)
+                    position_anchor = source.position_anchor
+                    del hold_repairs[source.hold_repair_count:]
                     del accepted[source.count:]
                     del bypass[source.bypass_count:]
                     del repairs[source.repair_count:]
@@ -178,6 +193,8 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
                         raise GenerationError('tail collision cannot restore the unfilled MOMENT prefix')
                 source = frames[source_index]
                 session.restore(source.snapshot)
+                position_anchor = source.position_anchor
+                del hold_repairs[source.hold_repair_count:]
                 complete_prefix = source if session.rules.grammar.state.phase in ('boundary', 'done', 'track_done') else source.recovery
                 if len(accepted) > source.count:
                     del accepted[source.count:]
@@ -193,7 +210,7 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
             # Do not commit the sampled out-of-range time, its CONT rows, or a
             # fabricated terminal into the rule state / reusable prefix cache.
             return tuple(accepted), dict(terminal_tick=None, stopped=True, stop_reason='onset_limit',
-                backtracks=backtracks, physical_bypass=bypass, physical_fallback=physical_fallback, tail_repairs=repairs,
+                backtracks=backtracks, physical_bypass=bypass, physical_fallback=physical_fallback, tail_repairs=repairs, hold_slide_tail_repairs=hold_repairs,
                 **({'trace': trace} if options.trace else {}))
         if isinstance(token, TimeTarget):
             if repair_event is not None:
@@ -203,10 +220,67 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
             return tuple(accepted), dict(terminal_tick=token.absolute_tick, censored=token.censored,
                 closed_by_continue=token.closed_by_continue, terminal_lower_bound_tick=token.lower_bound_tick,
                 terminal_query_tick=token.query_tick,
-                backtracks=backtracks, physical_bypass=bypass,physical_fallback=physical_fallback, tail_repairs=repairs,
+                backtracks=backtracks, physical_bypass=bypass,physical_fallback=physical_fallback, tail_repairs=repairs, hold_slide_tail_repairs=hold_repairs,
                 **({'trace': trace} if options.trace else {}))
+        if isinstance(token, (HoldDuration, SlideDuration)):
+            witnesses = contacts(session.rules, token)
+            if witnesses:
+                distribution = getattr(sampler, 'duration_choice', None)
+                if position_anchor is not None and distribution is not None:
+                    source_index = next((i for i in range(len(frames)-2, -1, -1)
+                        if frames[i].count == position_anchor.count), -1)
+                    if source_index < 0:
+                        raise GenerationError('Hold/final-area repair lost its position snapshot')
+                    source = frames[source_index]
+                    alternatives = hold_tail_choices(sampler, decoder, position_anchor, hold_tail_fork(session.rules),
+                        token, distribution, witnesses, end_tick=end_tick, cap_tick=cap_tick)
+                    # The repair iterator owns immutable rule forks and original
+                    # filtered probabilities. Subsequent retries restore this
+                    # position prefix, never a stale duration/CONT cache.
+                    def paired(iterator):
+                        for alternative in iterator:
+                            yield alternative, None
+                    frames[source_index+1:] = [replace(source, choices=paired(alternatives),
+                        position_anchor=None, replayed_tail_repairs=tuple(repairs[source.repair_count:]))]
+                # No legal pair: exhaust this retained frontier normally.
+                # The budget fallback advances MOMENT rather than accepting
+                # a new-rule violation even when old Physical is relaxed.
+                continue
+        if isinstance(token, ActionRepair):
+            if len(accepted) + len(token.tokens) > options.max_tokens_per_window:
+                raise GenerationError(f'window {start_tick/96:g}: token limit {options.max_tokens_per_window}; generation incomplete')
+            for replacement, replacement_cache in zip(token.tokens, token.caches):
+                decision = session.rules.query(replacement)
+                if decision.basic_errors or (decision.physical and (sampler.physical_hard_mask or 'multitouch' in decision.physical)) or contacts(session.rules, replacement):
+                    raise GenerationError('Hold/final-area repair replay disagrees with its validated action')
+                if sampler.physical_hard_mask:
+                    session.rules.accept(replacement)
+                else:
+                    session.rules.accept_source(replacement)
+                    if decision.physical:
+                        bypass.append(dict(token_index=len(accepted), token=token_to_dict(replacement), reasons=sorted(decision.physical)))
+                session.cache = replacement_cache
+                accepted.append(replacement)
+                emit(stream, 'token', window=window, token=replacement, token_count=len(accepted),
+                     complete=session.rules.grammar.state.phase in ('done', 'track_done'))
+            # Preserve an existing EX repair only when its NOTE survives unchanged.
+            for previous in current.replayed_tail_repairs:
+                if previous.get('replacement') == token_to_dict(token.tokens[0]):
+                    repairs.append(previous)
+            hold_repairs.append(dict(token.record, token_index=len(accepted)-1))
+            position_anchor = None
+            emit(progress, 'window_progress', window=window, tokens=len(accepted), backtracks=backtracks,
+                 cursor_beat=session.rules.grammar.state.cursor / 96)
+            if stop is not None and stop(accepted, session.rules):
+                return tuple(accepted), dict(terminal_tick=None, stopped=True, backtracks=backtracks,
+                    physical_bypass=bypass, physical_fallback=physical_fallback, tail_repairs=repairs,
+                    hold_slide_tail_repairs=hold_repairs, **({'trace': trace} if options.trace else {}))
+            frames.append(frame(token.tokens[-1]))
+            if len(frames) > options.rollback_tokens + 1:
+                del frames[0]
+            continue
         decision = session.rules.query(token)
-        if decision.basic_errors or (sampler.physical_hard_mask and decision.physical):
+        if decision.basic_errors or (decision.physical and (sampler.physical_hard_mask or 'multitouch' in decision.physical)):
             # A complete action is authoritative even after a deferred field query.
             continue
         if len(accepted) >= options.max_tokens_per_window:
@@ -220,6 +294,12 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
         session.cache = cache
         if repair_event is not None:
             repairs.append(dict(repair_event, token_index=len(accepted), replacement=token_to_dict(token)))
+        metadata = getattr(sampler, 'field_choice', None)
+        if isinstance(token, (Note, Route)):
+            position_anchor = (FieldAnchor(current.snapshot, count, token, metadata, cache)
+                               if metadata is not None else None)
+        elif isinstance(token, (Moment, HoldDuration, SlideDuration)):
+            position_anchor = None
         accepted.append(token)
         emit(stream, 'token', window=window, token=token, token_count=len(accepted),
              complete=session.rules.grammar.state.phase in ('done', 'track_done'))
@@ -229,7 +309,7 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
             trace.append(dict(event='accept', token=token_to_dict(token), tick=session.rules.grammar.state.cursor))
         if stop is not None and stop(accepted, session.rules):
             return tuple(accepted), dict(terminal_tick=None, stopped=True, backtracks=backtracks,
-                physical_bypass=bypass, physical_fallback=physical_fallback, tail_repairs=repairs,
+                physical_bypass=bypass, physical_fallback=physical_fallback, tail_repairs=repairs, hold_slide_tail_repairs=hold_repairs,
                 **({'trace': trace} if options.trace else {}))
         frames.append(frame(token))
         if len(frames) > options.rollback_tokens + 1:
@@ -272,14 +352,12 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
         emit(progress, 'window_start', window=i+1, windows=len(conditions.starts),
              start_beat=start, end_beat=end_tick/96)
         cap_tick = end_tick + config['audio_after_beats']*96
-        selected = select_windows(conditions.z, torch.tensor([0], device=device),
-            torch.tensor([start], device=device, dtype=torch.float32), torch.tensor([True], device=device),
-            target_beats=config['target_beats'], before_beats=config['decoder_z_before_beats'],
-            after_beats=config['decoder_z_after_beats'],
-            z_stride_beats=config['draft_z_stride_beats']).memory if config['decoder_z_cross_attention'] else conditions.z
+        from .conditioning import decoder_z_window
+        selected = decoder_z_window(conditions, i, config, device)
         audio_index = i if conditions.audio_scope == 'window' else 0
         memory = decoder.prepare_memory(audio_kv, torch.tensor([audio_index], device=device), selected,
-                                        conditions.plans[i:i+1], conditions.plan_valid[i:i+1])
+            conditions.plans[i:i+1], conditions.plan_valid[i:i+1],
+            **({} if conditions.plan_beats is None else {'plan_beats': conditions.plan_beats[i:i+1]}))
         session.reset_attention()
         boundary, session.cache, history_count = prefill(decoder, memory, groups, timing, start_tick,
                                                         config['chart_history_beats'], device=device)
@@ -307,7 +385,9 @@ def generate(decoder, conditions, timing, geometry, config, metadata, duration, 
         windows.append(dict(start_beat=start, end_beat=end_tick/96, history_tokens=history_count,
             boundary_delta_ms=boundary.delta_ms, generated_tokens=len(tokens), onsets=len(new),
             plan12=conditions.plans[i].float().cpu().tolist(),
-            plan_valid=bool(conditions.plan_valid[i]),
+            plan_valid=conditions.plan_valid[i].cpu().tolist(),
+            plan_beats=None if conditions.plan_beats is None else conditions.plan_beats[i].cpu().tolist(),
+            plan_span_beats=config.get('planner_span_beats', 16),
             time_sampling='tick384-continue-substep-greedy' if options.temperature == 0 else 'tick384-continue-substep-sampling', **report))
         emit(progress, 'window_done', window=i+1, windows=len(conditions.starts), tokens=len(tokens),
              backtracks=report['backtracks'], cursor_beat=session.rules.grammar.state.cursor/96,

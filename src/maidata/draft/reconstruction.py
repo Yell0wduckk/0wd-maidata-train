@@ -12,7 +12,8 @@ from .route_vocabulary import route_class_count
 class ReconstructionHead(nn.Module):
     def __init__(self, *, latent_dim, ffn_dim, dropout, norm_eps,
                  target_beats, position_base, position_scale, z_stride_beats, count_loss,
-                 route_vocabulary='route71'):
+                 route_vocabulary='route71', anchor_mode='block-center', span_beats=None,
+                 onset_presence_supervision=False):
         super().__init__()
         positive_ints(latent_dim=latent_dim, ffn_dim=ffn_dim, target_beats=target_beats)
         numerical_config(dropout, norm_eps, position_base, position_scale)
@@ -20,6 +21,15 @@ class ReconstructionHead(nn.Module):
         self.target_beats = target_beats
         from .spacing import z_stride
         self.z_stride_beats = z_stride(z_stride_beats, target_beats=target_beats)
+        self.anchor_mode = anchor_mode
+        self.span_beats = self.z_stride_beats if span_beats is None else span_beats
+        if type(self.span_beats) is not int or self.span_beats < 1:
+            raise ValueError('reconstruction span must be a positive integer')
+        if anchor_mode == 'integer':
+            if self.z_stride_beats not in (1, 2) or self.span_beats != 4:
+                raise ValueError('integer reconstruction requires stride one or two and span four')
+        elif anchor_mode != 'block-center' or self.span_beats != self.z_stride_beats:
+            raise ValueError('legacy reconstruction span must equal its block stride')
         self.base, self.scale = position_base, position_scale
         self.role = nn.Embedding(len(QUERY_ROLES), latent_dim)
         self.note_kind = nn.Embedding(len(KINDS)+1, latent_dim)
@@ -44,6 +54,11 @@ class ReconstructionHead(nn.Module):
         else:  # Explicit legacy checkpoint/recipe support.
             self.empty_head = nn.Linear(latent_dim, 2)
             self.positive_count_head = nn.Linear(latent_dim, POSITIVE_COUNT_CLASSES)
+        if type(onset_presence_supervision) is not bool:
+            raise ValueError('onset presence supervision must be boolean')
+        self.onset_presence_supervision = onset_presence_supervision
+        if onset_presence_supervision:
+            self.onset_presence_head = nn.Linear(latent_dim, 1)
 
     def _positions(self, values, mask, reference):
         encoded = sinusoidal(values.masked_fill(~mask, 0).float(), self.dim,
@@ -85,7 +100,13 @@ class ReconstructionHead(nn.Module):
         active = windows.window_valid & m.valid.any(-1)
         # Use safe desired coordinates for inert padding, including NaN placeholders.
         desired = q.beats.masked_fill(~q.valid, 0)
-        centers, offset = self._block_coordinates(desired, windows.target_start)
+        if self.anchor_mode == 'integer':
+            if q.owner_z_beats is None:
+                raise ValueError('integer reconstruction requires explicit owner_z_beats')
+            centers = q.owner_z_beats.masked_fill(~q.valid, 0)
+            offset = desired.floor()-(centers-self.span_beats/2)
+        else:
+            centers, offset = self._block_coordinates(desired, windows.target_start)
         owned, valid = self._owners(m, centers, q.valid & active[:, None])
         roles = q.roles.masked_fill(~valid, 0)
         moment = (roles == QUERY_ROLES.index('MOMENT')) & valid
@@ -102,7 +123,7 @@ class ReconstructionHead(nn.Module):
                                (moment & q.last_real_valid).float()), -1)
         scalars = scalars.sign()*scalars.abs().log1p()
         x = owned + self.role(roles) + self.condition(scalars.to(owned))
-        if self.z_stride_beats > 1:
+        if self.span_beats > 1:
             x = x + self._beat_position(offset, valid, owned)
         for encoder, values, mask in zip(self.ordinal_encoders,
                 (q.ordinals, q.note_ordinals, q.tracks, q.segments),
@@ -120,14 +141,35 @@ class ReconstructionHead(nn.Module):
         x = x + prefix.masked_fill(~prefix_valid[..., None], 0).sum(-2)
         hidden = self._hidden(x, valid, None if layout is None else layout['query_indices'])
         count_beats = windows.target_start[:, None] + torch.arange(self.target_beats, device=owned.device)+.5
-        centers, offset = self._block_coordinates(count_beats, windows.target_start)
+        if self.anchor_mode == 'integer':
+            # COUNT remains an independent per-real-beat head; the new recipe
+            # keeps its supervision disabled, without changing head inventory.
+            centers = (windows.target_start[:, None]
+                       + ((count_beats.floor()-windows.target_start[:, None])/self.z_stride_beats).floor()
+                       * self.z_stride_beats)
+            offset = count_beats.floor()-(centers-self.span_beats/2)
+        else:
+            centers, offset = self._block_coordinates(count_beats, windows.target_start)
         count_z, count_valid = self._owners(m, centers, active[:, None].expand(-1, self.target_beats))
         count_x = count_z+self.role.weight[QUERY_ROLES.index('COUNT')]
-        if self.z_stride_beats > 1:
+        if self.span_beats > 1:
             count_x = count_x + self._beat_position(offset, count_valid, count_z)
         count_hidden = self._hidden(count_x, count_valid, None if layout is None else layout['count_indices'])
         def predict(head, h, mask):
             return head(h).masked_fill(~mask[..., None], 0)
+        presence_logits = presence_valid = None
+        if self.onset_presence_supervision:
+            presence = q.onset_presence
+            if presence is None:
+                raise ValueError('onset presence readout requires independent geometry queries')
+            presence_z, presence_valid = self._owners(m, presence.owner_z_beats,
+                presence.valid & active[:, None])
+            offset = presence.beats-(presence.owner_z_beats-self.span_beats/2)
+            presence_x = (presence_z + self.role.weight[QUERY_ROLES.index('COUNT')]
+                          + self._beat_position(offset, presence_valid, presence_z))
+            presence_hidden = self._hidden(presence_x, presence_valid,
+                None if layout is None else layout['onset_presence_indices'])
+            presence_logits = predict(self.onset_presence_head, presence_hidden, presence_valid).squeeze(-1)
         return ReconstructionOutput(
             {name.removeprefix('field_'): predict(head, hidden, valid)
              for name, head in self.field_heads.items()},
@@ -135,4 +177,5 @@ class ReconstructionHead(nn.Module):
             predict(self.empty_head, count_hidden, count_valid) if self.count_loss == 'ce' else None,
             predict(self.positive_count_head, count_hidden, count_valid) if self.count_loss == 'ce' else None,
             active, valid, count_valid,
-            predict(self.count_head, count_hidden, count_valid).squeeze(-1) if self.count_loss == 'mse' else None)
+            predict(self.count_head, count_hidden, count_valid).squeeze(-1) if self.count_loss == 'mse' else None,
+            presence_logits, presence_valid)

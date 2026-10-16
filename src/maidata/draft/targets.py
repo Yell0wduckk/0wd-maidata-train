@@ -1,5 +1,5 @@
 """Independent owning-beat queries from exact source onsets; duration is not supervised."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from maidata.chart.types import Note, Route, SlideDuration, APPLICABLE
 from .schema import KINDS, FIELD_SIZES, QUERY_ROLES
@@ -18,6 +18,7 @@ class FieldQuery:
     route_prefix: tuple = ()
     current_route_id: int = -1
     last_real_tick: int | None = None
+    owner_z_beat: float | None = None
 
 
 @dataclass(frozen=True)
@@ -32,10 +33,12 @@ class TargetRow:
 class WindowTarget:
     rows: tuple[TargetRow, ...]
     moment_counts: tuple[int, ...]
+    owner_z_beats: tuple[float, ...] | None = None
+    onset_presence: tuple[tuple[float, int, bool], ...] | None = None
 
     @property
     def query_cost(self):
-        return len(self.rows) + len(self.moment_counts)
+        return len(self.rows) + len(self.moment_counts) + len(self.onset_presence or ())
 
 
 def reconstruction_target(chart, *, start_tick, target_beats, audio_after_beats=None,
@@ -94,6 +97,44 @@ def reconstruction_target(chart, *, start_tick, target_beats, audio_after_beats=
     return WindowTarget(tuple(rows), tuple(counts))
 
 
+def overlap_reconstruction_target(chart, *, start_tick, target_beats, coverage_end_beat,
+                                  first_beat=0, span_beats=4, z_stride_beats=1,
+                                  onset_presence_supervision=False, validate_input=True):
+    """Assign each integer owner once, retaining each distinct owner/real-query pair.
+
+    A parent owns [start,start+target_beats); the final parent additionally owns
+    the coverage endpoint. Labels come from the whole chart, including across
+    parent boundaries, while each owner's responsibility is [owner-2,owner+2).
+    """
+    if span_beats != 4 or start_tick % 96:
+        raise ValueError('overlapping integer reconstruction requires four complete beats')
+    start = start_tick//96
+    last_parent = start+target_beats == coverage_end_beat
+    stop = start+target_beats+int(last_parent)
+    from .spacing import integer_offsets
+    owners = tuple(float(first_beat+t) for t in
+                   integer_offsets(start-first_beat, stop-1-first_beat, z_stride_beats))
+    lower, upper = start-2, stop+1
+    source = reconstruction_target(chart, start_tick=lower*96, target_beats=upper-lower,
+                                   validate_input=validate_input)
+    rows = {owner: [] for owner in owners}
+    for row in source.rows:
+        beat = int(row.query.beat//1)
+        if not first_beat <= beat < coverage_end_beat:
+            continue
+        for owner in owners:
+            if owner-2 <= beat < owner+2:
+                rows[owner].append(replace(row, query=replace(row.query, owner_z_beat=owner)))
+    counts = source.moment_counts[2:2+target_beats]
+    presence = None
+    if onset_presence_supervision:
+        onset_beats = {group.tick//96 for group in chart.groups}
+        presence = tuple((owner, beat, beat in onset_beats) for owner in owners
+                         for beat in range(int(owner)-2, int(owner)+2)
+                         if first_beat <= beat < coverage_end_beat)
+    return WindowTarget(tuple(row for owner in owners for row in rows[owner]), tuple(counts), owners, presence)
+
+
 def required_query_rows(target_lengths):
     """Inspect real query cost; an empty window legitimately has zero queries."""
     lengths = tuple(target_lengths)
@@ -104,7 +145,7 @@ def required_query_rows(target_lengths):
 
 def collate_reconstruction(targets, *, target_beats, device, query_rows=None, validate_input=True):
     import torch
-    from .types import ReconstructionQueries, ReconstructionTargets
+    from .types import ReconstructionQueries, ReconstructionTargets, OnsetPresenceQueries
     if not targets:
         raise ValueError('a nonempty reconstruction batch is required')
     # One inert tensor slot makes an all-empty batch shape stable, never supervised.
@@ -124,6 +165,9 @@ def collate_reconstruction(targets, *, target_beats, device, query_rows=None, va
         torch.zeros((*shape, max_chain), dtype=torch.bool, device=device),
         boolean(), real(), boolean(), integer(), integer(),
         torch.full(shape, -1, dtype=torch.long, device=device))
+    overlapping = any(t is not None and t.owner_z_beats is not None for t in targets)
+    if overlapping:
+        q.owner_z_beats = real()
     for w, target in enumerate(targets):
         if target is None:
             continue
@@ -140,6 +184,10 @@ def collate_reconstruction(targets, *, target_beats, device, query_rows=None, va
             q.tracks[w, i], q.segments[w, i] = query.track, query.segment
             q.note_kinds[w, i], q.current_route_ids[w, i] = query.note_kind, query.current_route_id
             q.valid[w, i] = True
+            if overlapping:
+                if query.owner_z_beat is None:
+                    raise ValueError('overlap reconstruction rows require an explicit Z owner')
+                q.owner_z_beats[w, i] = query.owner_z_beat
             # Signed previous-onset position relative to this beat's start.
             q.history_gaps[w, i] = 0 if query.last_real_tick is None else (query.last_real_tick-query.origin_tick)/96
             q.last_real_valid[w, i] = query.last_real_tick is not None
@@ -147,7 +195,45 @@ def collate_reconstruction(targets, *, target_beats, device, query_rows=None, va
                 n = len(query.route_prefix)
                 q.route_ids[w, i, :n] = torch.tensor(query.route_prefix, device=device)
                 q.route_valid[w, i, :n] = True
-    return ReconstructionTargets(fields, moment, counts, valid, q)
+    presence_labels = None
+    if any(t is not None and t.onset_presence is not None for t in targets):
+        presence_width = max(1, max((len(t.onset_presence or ()) for t in targets if t), default=0))
+        pshape = (len(targets), presence_width)
+        powners = torch.zeros(pshape, device=device)
+        pbeats = torch.zeros(pshape, device=device)
+        pvalid = torch.zeros(pshape, dtype=torch.bool, device=device)
+        presence_labels = torch.zeros(pshape, dtype=torch.float32, device=device)
+        for w, target in enumerate(targets):
+            if target is None:
+                continue
+            for i, (owner, beat, present) in enumerate(target.onset_presence or ()):
+                powners[w, i], pbeats[w, i], pvalid[w, i] = owner, beat, True
+                presence_labels[w, i] = float(present)
+        q.onset_presence = OnsetPresenceQueries(powners, pbeats, pvalid)
+    return ReconstructionTargets(fields, moment, counts, valid, q, presence_labels)
+
+
+def planner_target(planner, start_tick, end_tick, *, span_beats=16, layout='legacy',
+                   last_parent=False, stride_beats=4):
+    """Keep the original scalar target or recompute each exact four-beat target."""
+    if type(span_beats) is not int or span_beats not in (4, 16):
+        raise ValueError('Planner span must be 4 or 16 beats')
+    if layout == 'centered-overlap':
+        if span_beats != 16 or stride_beats != 4 or end_tick-start_tick != 16*96:
+            raise ValueError('centered-overlap Planner requires span16, stride4 and a sixteen-beat parent')
+        return [planner.window(center-8*96, center+8*96) if index < 4 or last_parent else None
+                for index, center in enumerate(range(start_tick, end_tick+1, stride_beats*96))]
+    if layout == 'window-single':
+        if span_beats != 16 or end_tick-start_tick != 16*96:
+            raise ValueError('window-single Planner requires one sixteen-beat window statistic')
+        return planner.window(start_tick, end_tick)
+    if layout != 'legacy':
+        raise ValueError('unsupported Planner layout')
+    if span_beats == 16:
+        return planner.window(start_tick, end_tick)
+    if end_tick <= start_tick or (end_tick - start_tick) % (4 * 96):
+        raise ValueError('Four-beat Planner target interval must contain whole four-beat segments')
+    return [planner.window(start, start + 4 * 96) for start in range(start_tick, end_tick, 4 * 96)]
 
 
 def collate_planner(targets, *, device, validate_input=True):
@@ -155,6 +241,18 @@ def collate_planner(targets, *, device, validate_input=True):
     from .types import PlannerTargets
     if validate_input and not targets:
         raise ValueError('empty Planner target batch')
+    segmented = [t for t in targets if isinstance(t, (list, tuple))]
+    if segmented:
+        width = len(segmented[0])
+        if width < 1 or any(t is not None and (not isinstance(t, (list, tuple)) or len(t) != width) for t in targets):
+            raise ValueError('Planner target segments must have a common positive length')
+        rows = [list(t) if t is not None else [None] * width for t in targets]
+        return PlannerTargets(
+            torch.tensor([[t.continuous if t is not None else (0.,) * 8 for t in row] for row in rows],
+                         device=device, dtype=torch.float32),
+            torch.tensor([[t.category if t is not None else 0 for t in row] for row in rows],
+                         device=device, dtype=torch.long),
+            torch.tensor([[t is not None for t in row] for row in rows], device=device, dtype=torch.bool))
     return PlannerTargets(
         torch.tensor([t.continuous if t is not None else (0.,) * 8 for t in targets], device=device, dtype=torch.float32),
         torch.tensor([t.category if t is not None else 0 for t in targets], device=device, dtype=torch.long),

@@ -71,13 +71,16 @@ def condition_multiples(valid, layout, masks):
 def condition_attention(module, x, beats, valid, kv, plan_index, layout):
     raw = module.normalize_qk(module.query(x).reshape(len(x), module.heads, module.dim//module.heads))
     if plan_index is None:
-        raise ValueError('condition attention requires the unpositioned Plan16 key boundary')
-    query = torch.cat((rotate(module, raw, beats), raw), -1)
-    z, plan = kv.key[:, :, :plan_index], kv.key[:, :, plan_index:]
-    key = torch.cat((torch.cat((z, torch.zeros_like(z)), -1),
-                     torch.cat((torch.zeros_like(plan), plan), -1)), 2)
-    value = F.pad(kv.value, (0, module.dim//module.heads))
-    head_width = 2*module.dim//module.heads
+        # Plan4 and Z4 share absolute-beat RoPE and one ordinary softmax.
+        query, key, value = rotate(module, raw, beats), kv.key, kv.value
+        head_width = module.dim//module.heads
+    else:
+        query = torch.cat((rotate(module, raw, beats), raw), -1)
+        z, plan = kv.key[:, :, :plan_index], kv.key[:, :, plan_index:]
+        key = torch.cat((torch.cat((z, torch.zeros_like(z)), -1),
+                         torch.cat((torch.zeros_like(plan), plan), -1)), 2)
+        value = F.pad(kv.value, (0, module.dim//module.heads))
+        head_width = 2*module.dim//module.heads
     groups = layout['groups']
     queries = query.index_select(0, layout['gather']).split([c*w for c, w, _ in groups])
     if 'key_gather' in layout:

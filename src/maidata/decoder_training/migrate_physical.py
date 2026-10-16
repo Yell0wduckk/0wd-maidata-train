@@ -7,7 +7,7 @@ import shutil
 import torch
 
 from maidata.chart_cache.cache import digest, load_chart, read_json, write_json
-from maidata.chart_cache.training import ROUTE_COVERAGE, load_supports
+from maidata.chart_cache.training import ROUTE_COVERAGE, SLIDE_LAUNCH, load_supports
 from maidata.decoder.windows import real_onsets
 from maidata.physical import Geometry
 from .export_windows import compile_window
@@ -43,12 +43,12 @@ def replace_physical(old, compiled):
             raise ValueError(f'Physical migration changes non-Physical labels: {key}')
         changed |= not equal(group['penalty'],new['penalty'])
         groups[key] = dict(group, penalty=new['penalty'])
-    ignored = {'support_reuse', 'route_coverage_attribution'}
+    ignored = {'support_reuse', 'route_coverage_attribution', 'slide_launch_attribution'}
     if not equal({k:v for k,v in old['metadata'].items() if k not in ignored},
                  {k:v for k,v in compiled['metadata'].items() if k not in ignored}):
         raise ValueError('Physical migration changes window metadata')
     return dict(old, labels=dict(before, groups=groups), metadata=dict(old['metadata'],
-        route_coverage_attribution=ROUTE_COVERAGE)), changed
+        route_coverage_attribution=ROUTE_COVERAGE, slide_launch_attribution=SLIDE_LAUNCH)), changed
 
 
 def initialize(config, source, output):
@@ -69,7 +69,8 @@ def migrate_chart(task):
         raise ValueError('window migration Physical/source identity differs')
     # This explicit migration needs the new attribution. Ordinary old-cache
     # readers deliberately have no such check and continue to work unchanged.
-    if supports.get('route_coverage_attribution') != ROUTE_COVERAGE:
+    if (supports.get('route_coverage_attribution') != ROUTE_COVERAGE
+            or supports.get('slide_launch_attribution') != SLIDE_LAUNCH):
         raise ValueError('migrate Physical supports before migrating windows')
     chart = ChartSupports(record, supports, GEOMETRY)
     onsets = real_onsets(chart.tokens,chart.timing,sequence_start_tick=chart.start_tick)
@@ -136,7 +137,7 @@ def migrate(config, source, output, *, workers=12, window_ids=None):
     inputs_binding = dict(prior['contract']['inputs'],physical={
         name:digest_file(physical/name) for name in ('catalog.json','production-summary.json')})
     manifest = dict(prior, complete=False, windows={}, sequences={},
-        source_windows=str(source), route_coverage_attribution=ROUTE_COVERAGE,
+        source_windows=str(source), route_coverage_attribution=ROUTE_COVERAGE, slide_launch_attribution=SLIDE_LAUNCH,
         contract=dict(prior['contract'],inputs=inputs_binding), changed_windows=0)
     write_json(output/'manifest.json',manifest)
     tasks = [(k,rows[k]['path'],v,successful[k]['source_sha256']) for k,v in grouped.items()]

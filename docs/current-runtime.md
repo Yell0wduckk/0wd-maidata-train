@@ -1,5 +1,7 @@
 # 当前源码状态与实现边界
 
+main已合入[Z2、全层Q/K RMSNorm与逐拍起音存在监督](z2-qknorm-onset.md)：每两拍一枚整数锚点Z，每枚仍重建四拍；P读取9枚Z，M读取11枚Z及单枚无位置Plan16。新配方为`configs/joint-main320-z2-single-plan16-qknorm-onset-gt.json`，保持320维、3曲/80000、峰值LR6e-4、M chunk32768、BF16、workers12，停止150/调度150。起音存在头独立于关闭的数量监督。普通、预缓存、交互及增量推理均按checkpoint配方选择Z/Plan几何、Q/K数学和起音头；旧Z4及历史整数Z1权重保持原语义。已合并invalid缓存自动清理重建及最新Hold/Slide推理修复。
+
 main另提供[扩容＋全层Q/K归一化、保持Route37原配方](main320-route37-qknorm.md)的两份配置：320维/M8层、Z4＋单无位置Plan16；24705使用峰值LR4e-4、2曲/45056，37012使用6e-4、3曲/80000。两者M chunk32768、停止90/调度150，保留M侧Plan输入开关。新配方启用逐头无仿射Q/K RMSNorm，旧checkpoint缺开关时保持原数学。
 
 当前主 Decoder 变更以 [独立 CONT 序列合同](decoder-cont-token-plan.md) 为准：删除 FieldReader，CONT 写入主 KV，窗口升级 v5。

@@ -32,7 +32,8 @@ def test_main320_legacy_recipe_is_accepted_with_fixed_training_contract(capsys):
     assert c['draft_expert_ffn_dim'] == c['decoder_expert_ffn_dim'] == 640
     assert c['draft_z_stride_beats'] == c['joint_train_z_stride_beats'] == 4
     assert c['planner_span_beats'] == 16 and c['joint_train_plan_source'] == 'gt'
-    assert 'planner_layout' not in c and 'draft_z_anchor_mode' not in c
+    assert c.get('planner_layout', 'legacy') == 'legacy'
+    assert c.get('draft_z_anchor_mode', 'block-center') == 'block-center'
     assert c['pretrain_audio_groups_per_batch'] == 3 and c['pretrain_token_budget'] == 80000
     assert c['decoder_train_chunk_token_budget'] == 32768
     assert c['joint_train_learning_rate'] == 6e-4

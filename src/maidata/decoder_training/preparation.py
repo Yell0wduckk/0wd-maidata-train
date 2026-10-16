@@ -38,7 +38,13 @@ def prepare_batch(batch, config):
         index = torch.tensor(indices, dtype=torch.long)
         audio = conditions.audio_mapping[conditions.occurrence_mapping[index]]
         unique = conditions.occurrence_mapping[index]
-        condition_valid = torch.cat((conditions.decoder_z.valid[unique], conditions.plan_valid[unique, None]), -1)
+        plan_valid = conditions.plan_valid[unique]
+        if plan_valid.ndim == 1:
+            plan_valid = plan_valid[:, None]
+        z_valid = conditions.decoder_z.valid[unique]
+        if not config['decoder_z_cross_attention']:
+            z_valid = torch.zeros_like(z_valid)
+        condition_valid = torch.cat((z_valid, plan_valid), -1)
         batch.chunks.append(Chunk(index, tokens, types, labels,
             audio_query_layout(tokens.valid, audio, len(conditions.audio.values), spans=spans,
                                condition_valid=condition_valid, validate=False), tokens.valid.numel()))

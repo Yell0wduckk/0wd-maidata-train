@@ -5,7 +5,7 @@ from contextlib import nullcontext
 import torch
 
 from maidata.draft.losses import FIELD_PREFIX, COUNT_TERMS, count_supervision_enabled
-from maidata.training.pretrain import weighted_loss, autocast
+from maidata.training.pretrain import weighted_loss, autocast, loss_weight
 from maidata.training.runner import supports
 from maidata.decoder_training.runner import Metrics as DecoderMetrics, chunk_loss
 from maidata.decoder_training.supervision import KEYS, objective
@@ -25,6 +25,7 @@ class AuxiliaryMetrics:
         self.names = None
         self.totals = None
         self.counts = {}
+        self.presence_positive = self.presence_negative = 0
 
     def add(self, terms, counts=None):
         names = tuple(terms)
@@ -35,6 +36,12 @@ class AuxiliaryMetrics:
         self.totals = values if self.totals is None else self.totals + values
         for key in self.names:
             self.counts[key] += int(terms[key].count) if counts is None else counts[key]
+        if 'onset_presence' in terms:
+            term = terms['onset_presence']
+            self.presence_positive += (int(term.positive_count) if counts is None
+                                       else counts['onset_presence_positive'])
+            self.presence_negative += (int(term.negative_count) if counts is None
+                                       else counts['onset_presence_negative'])
 
     def merge(self, other):
         if other.names is None:
@@ -44,12 +51,18 @@ class AuxiliaryMetrics:
         self.totals = other.totals if self.totals is None else self.totals + other.totals
         for key in self.names:
             self.counts[key] += other.counts[key]
+        self.presence_positive += other.presence_positive
+        self.presence_negative += other.presence_negative
 
     def report(self, config):
         if self.names is None:
             return dict(loss=0., reconstruction=0., planner=0., terms={}, classification=dict(mean=0., active_fields=0))
         terms = {key: dict(total=total, count=self.counts[key], mean=total/max(1, self.counts[key]))
                  for key, total in zip(self.names, self.totals.cpu().tolist())}
+        if 'onset_presence' in terms:
+            terms['onset_presence'].update(positive_count=self.presence_positive,
+                                          negative_count=self.presence_negative,
+                                          unit='owner_z_beat')
         fields = [value['mean'] for key, value in terms.items()
                   if key.startswith(FIELD_PREFIX) and value['count']]
         classification = sum(fields)/max(1, len(fields))
@@ -58,6 +71,8 @@ class AuxiliaryMetrics:
             ('moment96', 'reconstruction_moment_weight'), ('count', 'reconstruction_count_weight'),
             ('empty', 'reconstruction_empty_weight'), ('positive_count', 'reconstruction_positive_count_weight'))
             if key in terms and (key not in COUNT_TERMS or count_supervision_enabled(config)))
+        reconstruction += (terms.get('onset_presence', {}).get('mean', 0.)
+                           * loss_weight(config, 'reconstruction_onset_presence_weight'))
         planner = sum(terms[key]['mean'] * config[key+'_weight']
                       for key in ('planner_continuous', 'planner_category'))
         return dict(loss=reconstruction+planner, reconstruction=reconstruction, planner=planner,
@@ -91,6 +106,7 @@ class JointMetrics:
         r_weight = config['joint_train_reconstruction_weight']
         parts = dict(fields=auxiliary['classification']['mean'] * config['reconstruction_classification_weight'] * r_weight,
             moment=mean('moment96') * config['reconstruction_moment_weight'] * r_weight,
+            onset_presence=mean('onset_presence') * loss_weight(config, 'reconstruction_onset_presence_weight') * r_weight,
             count=(mean('count') * config['reconstruction_count_weight']
                    + mean('empty') * config['reconstruction_empty_weight']
                    + mean('positive_count') * config['reconstruction_positive_count_weight']) * r_weight
@@ -98,12 +114,14 @@ class JointMetrics:
         losses = dict(main_decoder=weighted['decoder'],
             drafter=weighted['reconstruction'] + weighted['planner'],
             drafter_fields=parts['fields'], drafter_moment=parts['moment'], drafter_count=parts['count'],
+            drafter_onset_presence=parts['onset_presence'],
             planner=weighted['planner'])
         return dict(loss=sum(weighted.values()), losses=losses,
                     weighted=weighted, auxiliary=auxiliary, decoder=decoder)
 
 
-def update(model, batches, opt, sched, config, geometry, *, audit=False, mode='joint', recorder=None, fixed_z=None):
+def update(model, batches, opt, sched, config, geometry, *, audit=False, mode='joint', recorder=None, fixed_z=None,
+           diagnostics=None):
     """Common supports across all physical batches and all M chunks."""
     if mode not in ('joint', 'detach_z', 'auxiliary', 'decoder'):
         raise ValueError('unsupported joint update comparison mode')
@@ -131,6 +149,8 @@ def update(model, batches, opt, sched, config, geometry, *, audit=False, mode='j
         finite = finite_auxiliary if finite is None else finite & finite_auxiliary
         if mode != 'decoder':
             metrics.add_auxiliary(terms, batch_supports)
+            if diagnostics is not None:
+                diagnostics.add(outputs[0], batch.reconstruction)
         del terms, outputs
         if mode == 'auxiliary':
             with section('shared_backward'):

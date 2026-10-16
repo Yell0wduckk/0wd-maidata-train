@@ -73,10 +73,12 @@ def select_check_step(plan, config, steps, requested):
 
 
 def run(config, *, resume=None, cuda_check=False, cost_check=False, check_step=None,
-        upgrade_z_normalization=False):
+        upgrade_z_normalization=False, upgrade_single_plan16=False):
     config = recipe.resolve(config)
     if upgrade_z_normalization and not resume:
         raise ValueError('Z normalization upgrade requires a complete joint resume checkpoint')
+    if upgrade_single_plan16 and (not resume or upgrade_z_normalization):
+        raise ValueError('single Plan16 upgrade requires its own complete joint resume without another upgrade')
     recipe.validate(config)
     device = torch.device(config['joint_train_device'])
     if device.type == 'cuda' and (not torch.cuda.is_available() or
@@ -100,10 +102,18 @@ def run(config, *, resume=None, cuda_check=False, cost_check=False, check_step=N
     opt = recipe.optimizer(model.parameters(), config)
     sched = recipe.scheduler(opt, steps, config)
     completed, step, best, restored = 0, 0, None, [None, None]
+    plan_upgrade = None
     if resume:
         payload = torch.load(resume, map_location='cpu', weights_only=False)
         completed, step, best = checkpoint.restore(payload, model, opt, sched,
-            config=config, loaders=loaders, upgrade_z_normalization=upgrade_z_normalization)
+            config=config, loaders=loaders, upgrade_z_normalization=upgrade_z_normalization,
+            upgrade_single_plan16=upgrade_single_plan16, binding=binding, steps=steps)
+        if upgrade_single_plan16:
+            plan_upgrade = dict(from_layout=payload['recipe']['planner_layout'],
+                to_layout=config['planner_layout'],
+                from_gt_plan_cache=payload['binding']['paths']['decoder_train_gt_plan_cache'],
+                to_gt_plan_cache=binding['paths']['decoder_train_gt_plan_cache'],
+                source_checkpoint=payload.get('source'))
         restored = [state if started else None for state, started in
                     zip(payload['loader_rng'], payload['loader_started'])]
         del payload
@@ -136,8 +146,16 @@ def run(config, *, resume=None, cuda_check=False, cost_check=False, check_step=N
             change='parameter-free LayerNorm after M Z projection plus source embedding',
             inherited='all E/D/R/P/M parameters, optimizer, scheduler, complete-epoch cursor and all RNG',
             source=source))
+    if plan_upgrade is not None:
+        write_json(output / 'single-plan16-upgrade.json', dict(plan_upgrade,
+            resume=str(resume), completed_epochs=completed, step=step,
+            inherited='all E/D/R/P/M parameters, optimizer, scheduler, complete-epoch cursor and all RNG',
+            source=source))
     for epoch in range(completed + 1, config['joint_train_stop_after_epochs'] + 1):
         epoch_start = time.perf_counter()
+        final = epoch == config['joint_train_stop_after_epochs']
+        training_diagnostics = (Diagnostics() if final and
+            config.get('reconstruction_onset_presence_supervision', False) else None)
         loaders[0].batch_sampler.epoch = epoch
         iterator = epoch_iterator(loaders[0], restored[0])
         restored[0] = None
@@ -149,7 +167,8 @@ def run(config, *, resume=None, cuda_check=False, cost_check=False, check_step=N
             if not batches:
                 break
             update_start = time.perf_counter()
-            current, audit = update(model, batches, opt, sched, config, geometry)
+            current, audit = update(model, batches, opt, sched, config, geometry,
+                **({'diagnostics': training_diagnostics} if training_diagnostics is not None else {}))
             update_seconds = time.perf_counter() - update_start
             metrics.merge(current)
             updates += 1
@@ -162,10 +181,13 @@ def run(config, *, resume=None, cuda_check=False, cost_check=False, check_step=N
                 loss=report['loss'], losses=report['losses'], lr=opt.param_groups[0]['lr'],
                 data_wait_seconds=data_seconds, update_seconds=update_seconds,
                 chunks=audit['chunks'], batch_costs=audit['batch_costs']), allow_nan=False), flush=True)
-        final = epoch == config['joint_train_stop_after_epochs']
         result = dict(epoch=epoch, step=step, train=metrics.report(config),
                       seconds=time.perf_counter() - epoch_start, audio_groups=len(audio_groups),
                       decoder_occurrences=windows, auxiliary_base_windows=auxiliary_windows)
+        if training_diagnostics is not None:
+            result['train']['diagnostics'] = dict(auxiliary=training_diagnostics.report(),
+                population='final training epoch, teacher-conditioned reconstruction',
+                numeric_count_supervision=config.get('reconstruction_count_supervision', True))
         improved = False
         if plans[1].groups and (epoch % 5 == 0 or final):
             loaders[1].batch_sampler.epoch = epoch

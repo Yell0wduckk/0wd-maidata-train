@@ -54,6 +54,7 @@ class PlannerOutput:
     config_logits: Tensor
     plan_values: Tensor
     valid: Tensor
+    plan_beats: Tensor | None = None
 
 
 @dataclass
@@ -66,6 +67,8 @@ class ReconstructionOutput:
     query_valid: Tensor
     count_valid: Tensor
     count_values: Tensor | None = None
+    onset_presence_logits: Tensor | None = None
+    onset_presence_valid: Tensor | None = None
 
     @property
     def route_vocabulary(self):
@@ -77,7 +80,6 @@ class ReconstructionOutput:
             return 'route71'
         raise ValueError('unsupported Draft route readout width')
 
-
 @dataclass
 class ReconstructionTargets:
     fields: dict[str, Tensor]
@@ -85,6 +87,15 @@ class ReconstructionTargets:
     moment_counts: Tensor
     valid: Tensor
     queries: object = None
+    onset_presence_labels: Tensor | None = None
+
+
+@dataclass
+class OnsetPresenceQueries:
+    """Geometry only: one beat in one owner's four-beat responsibility."""
+    owner_z_beats: Tensor
+    beats: Tensor
+    valid: Tensor
 
 
 @dataclass
@@ -104,6 +115,8 @@ class ReconstructionQueries:
     note_ordinals: Tensor
     segments: Tensor
     current_route_ids: Tensor
+    owner_z_beats: Tensor | None = None
+    onset_presence: OnsetPresenceQueries | None = None
 
 
 @dataclass

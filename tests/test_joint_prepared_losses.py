@@ -49,6 +49,9 @@ def test_prepared_auxiliary_sparse_empty_padding_values_gradients_and_no_nonzero
     # Dummy windows and unused query padding can contain arbitrary sentinels.
     poison = {}
     for name in target.queries.__dataclass_fields__:
+        if getattr(target.queries, name) is None:
+            poison[name] = None
+            continue
         value = getattr(target.queries, name).clone()
         if name != 'valid':
             invalid = ~target.queries.valid

@@ -117,7 +117,7 @@ def run(c, geometry, *, gap=18, kind='tap', initial_moment=False, sampler=None, 
         memory = model.prepare_memory(model.prepare_audio(prepared.audio),torch.tensor([0]),prepared.z,
                                       prepared.plans[:1],prepared.plan_valid[:1])
     session = DecodeSession(s)
-    sampler = sampler or Sampler(temperature=0,repetition_penalty=0)
+    sampler = sampler or Sampler(temperature=0,repetition_penalty=0,top_k=1)
     events=[]
     original = sampler.choices
     def choose(*args, **kwargs):
@@ -215,3 +215,160 @@ def test_stream_snapshot_text_and_ir_share_repaired_ex_and_rolled_back_time(conf
     assert len(notes)==1 and notes[0]['pad']=='A3' and 'ex' in notes[0]['flags']
     position=snapshot['ir']['moments'][0]['position_beats']
     assert Fraction(position['num'],position['den'])==Fraction(160,96)
+
+
+@pytest.mark.parametrize('gap', [8, 18])
+@pytest.mark.parametrize('kind', ['tap', 'hold', 'slide'])
+def test_pad_resampling_precedes_ex_and_moment_without_extra_forward(config, geometry, gap, kind):
+    _, session, _, tokens, report, events, calls = run(config, geometry, gap=gap, kind=kind,
+        sampler=Sampler(temperature=0, repetition_penalty=0, top_k=2))
+    assert isinstance(tokens[0], Note)
+    assert tokens[0].kind == kind and tokens[0].pad == 'A2' and not tokens[0].ex
+    assert not any(isinstance(t, Moment) for t in tokens)
+    assert report['physical_bypass'] == [] and report['backtracks'] == 0
+    assert len(report['tail_repairs']) == 1 and report['tail_repairs'][0]['strategy'] == 'pad'
+    assert report['tail_repairs'][0]['original']['pad'] == 'A3'
+    assert report['tail_repairs'][0]['replacement']['pad'] == 'A2'
+    assert calls['begin'] == calls['complete'] == len(tokens)
+    assert session.rules.grammar.state.note == tokens[0]
+    assert not any(e['event'] == 'rollback' for e in events)
+
+
+def note_candidates(config, geometry, sampler, *, gap=18, edit=None, history=()):
+    oracle = state(geometry, gap)
+    model = model_for(config)
+    if edit is not None:
+        edit(oracle, model)
+    h = torch.zeros(model.heads.kind.in_features)
+    return oracle, sampler.contents(model, h, 'NOTE', oracle, oracle.timing,
+        decoder_time_distributions(config), end_tick=384, cap_tick=768, history=history)
+
+
+@pytest.mark.parametrize('gap,strategy', [(8, 'moment'), (18, 'ex')])
+def test_exhausted_pad_support_keeps_original_fallback(config, geometry, gap, strategy):
+    _, choices = note_candidates(config, geometry,
+        Sampler(temperature=0, repetition_penalty=0, top_k=1), gap=gap)
+    repair = next(choices)
+    assert repair.record(0)['strategy'] == strategy and repair.original.pad == 'A3'
+
+
+def test_alternative_flags_fixed_and_illegal_or_colliding_pads_excluded(config, geometry):
+    from maidata.chart.types import FLAGS
+    def edit(oracle, model):
+        # A2 is highest alternative but collides too; A4 overlaps a press.
+        old = oracle.actions[0]
+        motion = replace(old.motions[0], entries=((oracle.timing.second(144), (1 << 1) | (1 << 2)),))
+        oracle.actions = (replace(old, motions=(motion,)),)
+        original_query = oracle.query
+        def query(note, **kwargs):
+            decision = original_query(note, **kwargs)
+            return (replace(decision, physical=decision.physical | {'overlap'})
+                    if isinstance(note, Note) and note.pad == 'A4' else decision)
+        oracle.query = query
+        with torch.no_grad():
+            model.heads.button.bias[3] = 40
+            model.heads.button.bias[4] = 30
+            model.heads.flags[FLAGS.index('break_')].bias.copy_(torch.tensor([-10., 10.]))
+    _, choices = note_candidates(config, geometry,
+        Sampler(temperature=0, repetition_penalty=0, top_k=4), edit=edit)
+    repair = next(choices)
+    assert repair.record(0)['strategy'] == 'pad' and repair.replacement.pad == 'A5'
+    assert repair.replacement == replace(repair.original, pad='A5')
+    assert repair.replacement.break_ == 1 and repair.replacement.ex == 0
+
+
+@pytest.mark.parametrize('temperature,top_p', [(0, .9), (.4, .01)])
+def test_pad_retry_never_widens_nucleus_support(config, geometry, temperature, top_p):
+    _, choices = note_candidates(config, geometry,
+        Sampler(temperature=temperature, repetition_penalty=0, top_p=top_p), gap=18)
+    assert next(choices).record(0)['strategy'] == 'ex'
+
+
+def test_all_alternative_positions_colliding_use_time_fallback(config, geometry):
+    def edit(oracle, model):
+        old = oracle.actions[0]
+        motion = replace(old.motions[0], entries=((oracle.timing.second(144), 255),))
+        oracle.actions = (replace(old, motions=(motion,)),)
+    _, choices = note_candidates(config, geometry,
+        Sampler(temperature=0, repetition_penalty=0), gap=8, edit=edit)
+    repair = next(choices)
+    assert repair.record(0)['strategy'] == 'moment'
+    assert repair.minimum_tick == 159
+
+
+def test_pad_retry_snapshot_text_ir_and_cache_use_only_replacement(config, geometry, tmp_path):
+    import json
+    from test_inference_materialize import write_audio
+    from maidata.inference.__main__ import ir_metadata
+    from maidata.inference.render import SimaiWriter
+    from maidata.inference.streaming import StreamingPreview
+    model, session, memory, tokens, report, events, _ = run(config, geometry, gap=8, initial_moment=True,
+        sampler=Sampler(temperature=0, repetition_penalty=0, top_k=2))
+    assert tokens[-1] == Note.make('tap', 'A2') and report['tail_repairs'][0]['strategy'] == 'pad'
+    batch = pack_tokens([[Moment(0), tokens[0]]], [[132/96, 152/96]], device='cpu')
+    with torch.inference_mode():
+        expected = model(batch, torch.tensor([[0, 1]]), memory).cache
+    for got, want in zip(session.cache.layers, expected.layers):
+        torch.testing.assert_close(got.key, want.key, atol=2e-5, rtol=2e-4)
+        torch.testing.assert_close(got.value, want.value, atol=2e-5, rtol=2e-4)
+    write_audio(tmp_path/'audio.wav')
+    meta = ir_metadata(session.rules.timing, 10.)
+    end = meta['render_end_beat']
+    live = StreamingPreview(SimaiWriter(meta['controls'], Fraction(end['num'], end['den'])),
+        session.rules.timing, tmp_path/'audio.wav', tmp_path/'output', ir_geometry=geometry,
+        ir_metadata=meta, difficulty=5, level=13.4)
+    for event in events:
+        live(event)
+    live.write(live.writer.preview(live.active_groups), force=True)
+    snapshot = json.loads(live.snapshot_path.read_text('utf-8'))
+    notes = [n for m in snapshot['ir']['moments'] for g in m['groups'] for n in g['notes']]
+    assert len(notes) == 1 and notes[0]['pad'] == 'A2' and 'ex' not in notes[0]['flags']
+    assert '2' in snapshot['chart'] and '3x' not in snapshot['chart']
+
+
+@pytest.mark.parametrize('kind', ['hold', 'slide'])
+def test_failed_pad_completion_rolls_back_before_original_ex_fallback(config, geometry, kind):
+    sampler = Sampler(temperature=0, repetition_penalty=0, top_k=2)
+    original = sampler.choices
+    def choose(model, routed, oracle, *args, **kwargs):
+        note = oracle.grammar.state.note
+        if note is not None and note.pad == 'A2' and oracle.grammar.state.phase in ('hold', 'route'):
+            return  # No legal continuation for this alternative position.
+        yield from original(model, routed, oracle, *args, **kwargs)
+    with patch.object(sampler, 'choices', side_effect=choose):
+        _, session, _, tokens, report, events, _ = run(config, geometry, kind=kind, sampler=sampler)
+    assert tokens[0] == Note.make(kind, 'A3', ex=1)
+    assert report['backtracks'] == 1 and report['physical_bypass'] == []
+    assert len(report['tail_repairs']) == 1 and report['tail_repairs'][0]['strategy'] == 'ex'
+    active = []
+    for event in events:
+        if event['event'] == 'token':
+            active.append(event['token'])
+        elif event['event'] == 'rollback':
+            del active[event['token_count']:]
+    assert tuple(active) == tokens and session.rules.grammar.state.note == tokens[0]
+
+
+def test_pad_retry_reuses_repetition_adjusted_distribution(config, geometry):
+    def edit(oracle, model):
+        with torch.no_grad():
+            model.heads.button.bias[3] = 40
+    _, choices = note_candidates(config, geometry,
+        Sampler(temperature=0, pad_repetition_penalty=100, top_k=3), edit=edit,
+        history=(Note.make('tap', 'A2'),))
+    repair = next(choices)
+    assert repair.replacement.pad == 'A4' and repair.record(0)['strategy'] == 'pad'
+
+
+def test_positive_temperature_pad_retry_is_seeded(config, geometry):
+    def edit(oracle, model):
+        with torch.no_grad():
+            model.heads.button.bias[1] = 99
+            model.heads.button.bias[3] = 98
+    results = []
+    for _ in range(2):
+        _, choices = note_candidates(config, geometry,
+            Sampler(temperature=.4, repetition_penalty=0, top_k=3, seed=8), edit=edit)
+        results.append(next(choices))
+    assert isinstance(results[0], TailRepair) and results[0].record(0)['strategy'] == 'pad'
+    assert results[0] == results[1]
