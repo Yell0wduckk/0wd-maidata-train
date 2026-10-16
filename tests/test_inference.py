@@ -254,7 +254,7 @@ def test_soft_token_limit_finishes_the_pending_second_slide_branch(config,geomet
     class BranchSampler(Sampler):
         def choices(self,decoder,routed,oracle,clock,specs,**kwargs):
             token=sequence[len(kwargs['history'])]
-            out=decoder.complete(routed,torch.full_like(routed.valid,GENERATED_TYPES.index(token.type),dtype=torch.long))
+            out=decoder.complete(routed,torch.full_like(routed.valid,GENERATED_TYPES.index('MOMENT' if isinstance(token,TimeTarget) else token.type),dtype=torch.long))
             yield token,out.cache
     stop=lambda accepted,rules: len(accepted)>=4 and rules.grammar.state.phase in ('done','track_done')
     with torch.inference_mode():
@@ -385,7 +385,7 @@ def test_generation_caps_repeated_notes_at_one_onset(config, geometry):
                                               physical_hard_mask=False))
     groups = real_onsets(result.tokens,timing,sequence_start_tick=result.start_tick)
     assert groups and all(len(g.content) <= 3 for g in groups)
-    assert any(len(g.content) == 3 for g in groups)
+    assert all(len(g.content) <= 2 for g in groups)  # Multitouch remains hard even with other Physical relaxed.
 
 
 @pytest.mark.parametrize('basic_error',[False,True])
@@ -466,7 +466,50 @@ def test_budget_recovery_discards_incomplete_action_and_advances_complete_prefix
             stream=events.append)
     assert tokens==(Note.make('tap','A1'),)
     assert session.rules.grammar.state.phase=='closed' and len(session.rules.actions)==1
-    assert report['physical_fallback']['recoveries']==[dict(token_index=1,discarded_tokens=(1 if partial=='hold' else 9)+int(delayed),minimum_tick=97 if delayed else 1)]
+    assert report['physical_fallback']['recoveries']==[dict(token_index=1,discarded_tokens=(1 if partial=='hold' else 9)+int(delayed),minimum_tick=97 if delayed else 1,reason='no_legal_completion',phase='hold' if partial=='hold' else 'chain')]
     assert dict(event='rollback',window=1,token_count=1) in events
     assert report['physical_bypass']==[]
+
+
+@pytest.mark.parametrize('hard_mask',[True,False])
+def test_budget_multitouch_recovers_and_continues_user_fragment(config,hard_mask):
+    from dataclasses import replace
+    from test_slide_launch_capacity import prefix
+    from maidata.chart.routes import route_for
+    rules=prefix()
+    timing=rules.timing
+    rules.grammar.state=replace(rules.grammar.state,phase='boundary',window_end=288)
+    c=dict(config,draft_architecture='split-v3')
+    model=build_decoder(c).eval()
+    prepared=conditions(c,timing,5)
+    memory=model.prepare_memory(model.prepare_audio(prepared.audio),torch.tensor([0]),prepared.z,
+        prepared.plans[:1],prepared.plan_valid[:1])
+    session=DecodeSession(rules)
+    boundary=Moment(0)
+    events=[]
+    class Search:
+        physical_hard_mask=hard_mask
+        def choices(self,decoder,routed,oracle,clock,specs,**kwargs):
+            state=oracle.grammar.state
+            if kwargs.get('force_moment'):
+                assert kwargs['moment_floor']==49
+                token=Moment(clock.delta_ms(state.cursor,70))
+            elif state.phase in ('boundary','note'):
+                token=Note.make('slide','A1')
+            elif state.phase=='route':token=Route(route_for('1-6'),0)
+            elif state.phase=='chain' and len(state.routes)==1:token=Route(route_for('6-2'))
+            elif state.phase=='chain':token=SlideDuration(144)
+            else:token=TimeTarget(clock.delta_ms(state.cursor,288),288,False,True)
+            output=decoder.complete(routed,torch.full_like(routed.valid,GENERATED_TYPES.index('MOMENT' if isinstance(token,TimeTarget) else token.type),dtype=torch.long))
+            yield token,output.cache
+    with torch.inference_mode():
+        tokens,report=decode_window(model,memory,session,boundary,Search(),decoder_time_distributions(c),timing,
+            start_tick=48,end_tick=288,cap_tick=1536,device='cpu',
+            options=GenerationOptions(max_backtracks_per_window=0,physical_hard_mask=hard_mask),stream=events.append)
+    assert tokens[0]==Moment(timing.delta_ms(48,70))
+    assert tokens[-1]==SlideDuration(144)
+    assert session.rules.grammar.state.phase=='closed'
+    assert report['physical_fallback']['recoveries'][0]['minimum_tick']==49
+    assert all('multitouch' not in row['reasons'] for row in report['physical_bypass'])
+    assert any(row['event']=='rollback' for row in events)
 

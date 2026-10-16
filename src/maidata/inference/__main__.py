@@ -63,7 +63,8 @@ def parser():
                    help='Stop onset expansion at threshold; append required completion fields, then advance MOMENT')
     p.add_argument('--max-backtracks-per-window', type=int, default=defaults.max_backtracks_per_window)
     p.add_argument('--rollback-tokens', type=int, default=defaults.rollback_tokens, help='Search frontier, never a history token limit')
-    p.add_argument('--physical-hard-mask', action=argparse.BooleanOptionalAction, default=defaults.physical_hard_mask)
+    p.add_argument('--physical-hard-mask', action=argparse.BooleanOptionalAction, default=defaults.physical_hard_mask,
+                   help='Mask other Physical categories; multitouch is always rejected.')
     p.add_argument('--trace', action='store_true', default=defaults.trace, help='Explicit opt-in detailed generation trace')
     p.add_argument('--progress', action=argparse.BooleanOptionalAction, default=True, help='Stage/window progress on stderr; stdout remains final JSON')
     p.add_argument('--progress-interval', type=float, default=DEFAULT_INTERVAL, help='Minimum seconds between encoder/token progress updates')

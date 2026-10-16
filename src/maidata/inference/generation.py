@@ -139,12 +139,12 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
                 trace.append(dict(event='backtrack', tokens=count))
             if backtracks > options.max_backtracks_per_window:
                 if sampler.physical_hard_mask:
-                    # Retry this exact causal prefix with only raw Physical
-                    # rejection relaxed. Grammar/audio-domain validity stays.
+                    # Retry this prefix with only non-multitouch Physical
+                    # relaxed. Grammar/audio and hand capacity stay mandatory.
                     sampler.physical_hard_mask = False
                     physical_fallback = dict(reason='backtracking_budget_exhausted',
                         token_index=count,tick=session.rules.grammar.state.cursor,
-                        phase=session.rules.grammar.state.phase,backtracks=backtracks)
+                        phase=session.rules.grammar.state.phase,backtracks=backtracks, mandatory_physical=['multitouch'])
                     frames.append(frame(current.input_token, routed=current.routed,
                         moment_floor=(current.repair_event or {}).get('minimum_tick'), repair_event=current.repair_event))
                     continue
@@ -160,10 +160,11 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
                         (current.repair_event or {}).get('minimum_tick', 0))
                     physical_fallback = physical_fallback or dict(reason='backtracking_budget_exhausted',
                         token_index=count, tick=session.rules.grammar.state.cursor,
-                        phase=session.rules.grammar.state.phase, backtracks=backtracks)
+                        phase=session.rules.grammar.state.phase, backtracks=backtracks, mandatory_physical=['multitouch'])
                     physical_fallback.setdefault('recoveries', []).append(dict(
                         token_index=source.count, discarded_tokens=len(accepted)-source.count,
-                        minimum_tick=minimum_tick))
+                        minimum_tick=minimum_tick, reason='no_legal_completion',
+                        phase=current.snapshot.rules.grammar.phase))
                     session.restore(source.snapshot)
                     position_anchor = source.position_anchor
                     del hold_repairs[source.hold_repair_count:]
@@ -250,7 +251,7 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
                 raise GenerationError(f'window {start_tick/96:g}: token limit {options.max_tokens_per_window}; generation incomplete')
             for replacement, replacement_cache in zip(token.tokens, token.caches):
                 decision = session.rules.query(replacement)
-                if decision.basic_errors or (sampler.physical_hard_mask and decision.physical) or contacts(session.rules, replacement):
+                if decision.basic_errors or (decision.physical and (sampler.physical_hard_mask or 'multitouch' in decision.physical)) or contacts(session.rules, replacement):
                     raise GenerationError('Hold/final-area repair replay disagrees with its validated action')
                 if sampler.physical_hard_mask:
                     session.rules.accept(replacement)
@@ -279,7 +280,7 @@ def decode_window(decoder, memory, session, boundary, sampler, distributions, ti
                 del frames[0]
             continue
         decision = session.rules.query(token)
-        if decision.basic_errors or (sampler.physical_hard_mask and decision.physical):
+        if decision.basic_errors or (decision.physical and (sampler.physical_hard_mask or 'multitouch' in decision.physical)):
             # A complete action is authoritative even after a deferred field query.
             continue
         if len(accepted) >= options.max_tokens_per_window:

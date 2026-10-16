@@ -18,7 +18,7 @@ from maidata.physical.geometry import pad_bit
 from maidata.physical.rules import EPS
 from maidata.physical.support import _partition, decision_record
 from maidata.time import advance_ticks
-from maidata.time.discrete import CONTINUE, TIME_BLOCK, compile_support_tree
+from maidata.time.discrete import CONTINUE, TIME_BLOCK
 
 
 def contacts(state, token):
@@ -155,7 +155,7 @@ class DurationDistribution:
             self.outputs.append(following)
             self.extra_forwards += 1
         if depth not in self.values:
-            masks = self.tree.hard if self.sampler.physical_hard_mask else self.tree.basic
+            masks = self.tree.hard
             self.values[depth] = self.sampler.filtered_scores(
                 self.decoder.heads.time_logits(self.outputs[depth].hidden[0, -1], self.tree.kind), masks[depth])
         return self.outputs[depth], self.values[depth]
@@ -216,7 +216,7 @@ def repairs(sampler, decoder, anchor, state, duration, distribution, witnesses, 
                 continue
             support = strict_support(trial)
             if not any(not r['basic'] and not r.get('hold_slide_final_area')
-                       and (not sampler.physical_hard_mask or not r['physical'])
+                       and not (r['physical'] & (15 if sampler.physical_hard_mask else 1))
                        for _, _, r in support['intervals']):
                 continue
         elif (not legal(trial, duration, sampler)
@@ -231,7 +231,7 @@ def repairs(sampler, decoder, anchor, state, duration, distribution, witnesses, 
         record = intervals[index][2] if index < len(intervals) and intervals[index][0] <= leaf.token.ticks else None
         if (leaf.token != duration and record is not None and not record['basic']
                 and not record.get('hold_slide_final_area')
-                and (not sampler.physical_hard_mask or not record['physical'])):
+                and not (record['physical'] & (15 if sampler.physical_hard_mask else 1))):
             pool.append((leaf.log_probability, anchor.token, current, leaf))
     if not pool:
         return
@@ -253,7 +253,7 @@ def repairs(sampler, decoder, anchor, state, duration, distribution, witnesses, 
             routed = decoder.begin(batch, anchor.cache.memory, cache=anchor.cache)
             kind = 'SLIDE_DURATION' if slide else 'HOLD_DURATION'
             output = decoder.complete(routed, torch.full_like(batch.types, GENERATED_TYPES.index(kind)))
-            tree = compile_support_tree(dict(cursor_tick=trial.grammar.state.cursor, duration=strict_support(trial)),
+            tree = sampler.support_tree(dict(cursor_tick=trial.grammar.state.cursor, duration=strict_support(trial)),
                 trial.timing, kind=kind, window_end=end_tick, cap_tick=cap_tick)
             changed = DurationDistribution(sampler, decoder, output, tree, trial.timing)
             if slide:

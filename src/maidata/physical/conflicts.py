@@ -62,6 +62,29 @@ def first_route_coverage(actions, grammar, timing, geometry):
             and old.start <= launch + EPS and old.end >= appearance - EPS))
 
 
+def slide_launch_capacity(actions, grammar, timing, *, wifi=False):
+    """Mandatory occupancy only; no guessed route or future teacher duration.
+
+    One written tick plus the global 22-tick release is a subset of every
+    possible track. Unknown endpoints cannot grant outgoing handoff credits.
+    Incoming handoffs depend only on the known start pad and launch time.
+    """
+    from .actions import Action, Motion
+    from maidata.time import advance_ticks
+    launch = timing.second(grammar.cursor + 96)
+    end = launch + timing.written_tick_seconds(grammar.cursor)
+    release = advance_ticks(timing, end, 22)
+    start = timing.second(grammar.cursor)
+    head = grammar.track_count == 0
+    candidate = Action(grammar.owner, grammar.moment, grammar.cursor,
+        'wifi' if wifi else 'slide', grammar.note.pad, head, start,
+        timing.second(grammar.cursor + 2) if head else start,
+        launch, end, release, motions=(Motion(grammar.note.pad[-1]+'-'+grammar.note.pad[-1],
+        launch, end, (), False),), track_index=grammar.track_count, handoff_outgoing=True)
+    spans = [(launch, release)]
+    return (capacity_conflicts((*actions, candidate), spans), capacity_conflicts(actions, spans))
+
+
 def _demand(resources):
     presses = [r for r in resources if r[0][0] != 'track']
     tracks = [r for r in resources if r[0][0] == 'track']

@@ -52,3 +52,5 @@ python -m maidata.chart_cache.rebuild_supports --source <v2-fields-root> --outpu
 可重复指定 `--chart-id ID:difficulty` 只处理受影响谱面。默认只处理源清单中实际成功的原谱，保留源范围与隔离结果，不把不可表示谱计入成功训练索引。输入字段文件只读；来源SHA复用已有生产记录，新的Physical文件写入后按本次合同读回一次。输出记录字段原生产者与本次支持生产者，不重建音频或几何，不修改字段/owner/track/segment映射。运行命令是入口说明，不代表已启动重建。
 
 验证覆盖类型归责、WiFi分支、链的继续/关闭选择、重复hold违规、新增同类冲突、既有GT过载、窗口终端、快照与回退、GT未来类型/时长独立、缓存读回及只重建支持时字段字节保持不变。
+
+Slide 在 NOTE 阶段还检查一拍后最短滑动＋22 tick 后缀的必然占手；分支/WiFi 的额外需求在 ROUTE 检查。与完整 duration 使用相同 capacity 见证，首次归责消重。见 [启动占手与合并迁移](slide-launch-physical.md)。

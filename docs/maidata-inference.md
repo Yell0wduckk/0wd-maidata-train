@@ -108,7 +108,7 @@ Python 在线与缓存入口共用 `encode_joint_audio(...) -> (local_conditions
 | `--max-tokens-per-moment` | 20；不含MOMENT本身；达到阈值后停止扩展，只补齐当前动作必需的ROUTE/时值，再推进MOMENT或合法窗末终端；必要收束字段允许超出阈值 |
 | `--max-backtracks-per-window` | 128；合法补全搜索的回退次数上限 |
 | `--rollback-tokens` | 16；保留的搜索回退深度，不限制音符链表示或模型输入历史长度 |
-| `--physical-hard-mask` | 开启；使用原始 Physical 拒绝位，完整动作提交时再次判定 |
+| `--physical-hard-mask` | 开启；完整动作提交时再次判定；多押在关闭及预算兜底时仍始终拦截 |
 | `--trace` | 默认关闭；显式开启才记录逐token选择/回退 |
 | `--progress / --no-progress` | 默认开启；向stderr打印阶段、窗口与节流后的token进度；不启用详细trace |
 | `--progress-interval` | 2秒；Encoder分块与窗内token进度的最短输出间隔，阶段和窗口起止立即输出 |
@@ -123,7 +123,7 @@ Python 在线与缓存入口共用 `encode_joint_audio(...) -> (local_conditions
 
 M使用独立CONT输入；续接锁定时间类型，每次CONT执行主干并追加KV，不调用Physical接受、不产生新起音。最终短值合成完整时间后提交一次真实动作。温度0逐步取合法argmax，正温度逐步采样；窗口报告记录time_sampling。Hold/Slide按NOTE written BPM换算秒并反算绝对拍，Slide首次仅调整后段音频/Z查询坐标。
 
-默认先使用Physical hard mask；窗口回退预算耗尽后，从当前因果前缀仅放宽Physical拒绝，继续强制补齐和生成。每窗`physical_fallback`记录触发点与原因，实际接受的违规逐条记录在`physical_bypass`；下一窗重新开启请求的hard mask。语法、音频范围和基本时值支持始终生效。显式`--no-physical-hard-mask`则从开始放宽Physical。放宽后仍无合法语法补全、非有限预测或超过生成上限时报错并写`generation-error.json`，不将截断谱面标为成功。
+默认先使用Physical hard mask；窗口回退预算耗尽后，从当前因果前缀仅放宽非多押Physical拒绝，继续强制补齐和生成。每窗`physical_fallback`记录触发点与原因，实际接受的违规逐条记录在`physical_bypass`；下一窗重新开启请求的hard mask。语法、音频范围和基本时值支持始终生效。显式`--no-physical-hard-mask`则从开始放宽非多押Physical。无法完成动作时恢复完整前缀并推进合法MOMENT，预算耗尽本身不直接导致失败。放宽后仍无合法语法补全、非有限预测或超过生成上限时报错并写`generation-error.json`，不将截断谱面标为成功。
 
 经过判定区后的撞尾（`path_guard`）例外采用 NOTE 采样后的修复，不在 type / kind / pad / flags 选择时硬屏蔽。间隔按 Slide 实际进入该判定区至 NOTE 起音的秒数计算：`150 <= gap <= 200 ms` 自动设置 `ex=1`，保留 kind、pad、其他 flags 及后续 Hold / Slide 内容；`0 < gap < 150 ms` 放弃这个 NOTE，强制回到 MOMENT 并重新选择时间，不在原起音改选 Touch。已有 EX 也不能跳过150 ms以内的回退。多个路径同时命中时任一严重撞尾即回退，初次重试时间至少到所有命中路径的150 ms边界；不是将其他音符或未来窗口整体向后移动。Slide 起点 `launch_guard`、占手、重叠和其他 Physical 规则不变。
 
@@ -242,3 +242,5 @@ Python接口`generate(..., stream=None)`与`decode_window(..., stream=None)`可�
 
 推理CLI、Python生成选项和常驻交互默认温度统一为0.4；位置和形状惩罚分别默认
 32个结构token、力度1，均开启，显式力度0仍可分别关闭。
+
+推理多押约束始终开启，包括 Physical 预算兜底；无合法动作时恢复完整前缀并推进 MOMENT。Slide NOTE 提前检查一拍后的必然占手。见 [启动占手规则](slide-launch-physical.md)。

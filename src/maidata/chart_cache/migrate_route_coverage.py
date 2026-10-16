@@ -5,17 +5,52 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
-from maidata.chart.types import Moment, Route
+from maidata.chart.types import Moment, Route, Note
 from maidata.physical import Geometry
-from maidata.physical.conflicts import first_route_coverage
+from maidata.physical.attribution import project
+from maidata.physical.conflicts import Conflict, first_route_coverage, slide_launch_capacity
 from .cache import digest, load_chart, read_json, write_json
-from .training import SCHEMA, ROUTE_COVERAGE, load_supports, save_supports
+from .training import SCHEMA, ROUTE_COVERAGE, SLIDE_LAUNCH, load_supports, save_supports
+
+
+def changed_heads(state, token, old):
+    """Discover early changes without searching unaffected duration prefixes."""
+    charged = state.charged
+    try:
+        # Complete-action raw duration rules did not change. Only NOTE type
+        # projection and the NOTE/ROUTE heads can introduce new early blame.
+        if 'NOTE' in old['types']:
+            if project(state.query_kinds().values()).record() != old['types']['NOTE']:
+                return True
+        state.charged |= frozenset(Conflict.from_record(c) for c in old['attribution'].get('type', ()))
+        if isinstance(token, Note):
+            kinds = state.query_kinds()
+            if {k: v.record() for k, v in kinds.items()} != old['kind']:
+                return True
+            state._choose(kinds[token.kind])
+            return {k: v.record() for k, v in state.query_positions(token.kind).items()} != old['pad']
+        if isinstance(token, Route):
+            p, s = state.physical, state.physical.grammar.state
+            first = s.phase in ('route', 'track_done')
+            for r in range(71):
+                candidate = Route(r, 0 if first else None)
+                try:
+                    grammar, _ = p._trial(candidate)
+                except ValueError:
+                    continue
+                coverage = first_route_coverage(p.actions, grammar.state, p.timing, p.geometry)
+                capacity, _ = slide_launch_capacity(p.actions, grammar.state, p.timing, wifi=r == 70)
+                if (coverage or capacity) and state.query(candidate).record() != old['route'][r]:
+                    return True
+        return False
+    finally:
+        state.charged = charged
 
 
 def migrate_supports(record, supports, geometry):
     """Reuse unchanged stages/actions and exact raw duration partitions.
 
-    After a changed ROUTE stage, replay through the next MOMENT (which resets
+    After a changed NOTE/type/ROUTE stage, replay through the next MOMENT (which resets
     the ledger), including all intervening type and time projections. Merely
     OR-ing a route mask would leave later fields charging the same witness.
     """
@@ -32,19 +67,8 @@ def migrate_supports(record, supports, geometry):
     stages, changed, replayed, dirty = [], [], 0, False
     for i, token in enumerate(chart.tokens[1:], 1):
         old = chart.stages[i-1]
-        if isinstance(token, Route) and not dirty:
-            p, s = state.physical, state.physical.grammar.state
-            for route in range(71):
-                candidate = Route(route, 0 if s.phase in ('route', 'track_done') else None)
-                try:
-                    grammar, _ = p._trial(candidate)
-                except ValueError:
-                    continue
-                # No duration search is needed to discover affected prefixes.
-                if (first_route_coverage(p.actions, grammar.state, p.timing, geometry)
-                        and state.query(candidate).record() != old['route'][route]):
-                    dirty = True
-                    break
+        if not dirty:
+            dirty = changed_heads(state, token, old)
         if dirty:
             stage = dict(state.stage_and_accept(token), target_token_index=i)
             replayed += 1
@@ -61,7 +85,7 @@ def migrate_supports(record, supports, geometry):
     if terminal != chart.stages[-1]:
         changed.append(len(chart.tokens))
     stages.append(terminal)
-    result = dict(supports, stages=stages, route_coverage_attribution=ROUTE_COVERAGE)
+    result = dict(supports, stages=stages, route_coverage_attribution=ROUTE_COVERAGE, slide_launch_attribution=SLIDE_LAUNCH)
     return result, dict(changed_target_indices=changed, replayed_stages=replayed,
                         reused_stages=len(stages)-replayed-int(dirty))
 
@@ -119,7 +143,7 @@ def migrate(fields, source, output, geometry, slide_data, *, workers=12, chart_i
                 or status.get('original_storage',status).get('sha256') != statuses[key]['source_sha256']):
             raise ValueError(f'{key}: Physical/fields source identity differs')
     # Only metadata identities, never a pre-scan of accepted payloads.
-    recipe = digest(dict(migration=ROUTE_COVERAGE, source_recipe=cat['producer_recipe'],
+    recipe = digest(dict(migration=[ROUTE_COVERAGE, SLIDE_LAUNCH], source_recipe=cat['producer_recipe'],
                          source_summary=digest(summary)))
     intent = dict(fields=str(fields), source=str(source), selected=sorted(selected), recipe=recipe,
                   geometry=str(Path(geometry).resolve()), slide_data=str(Path(slide_data).resolve()))
@@ -135,7 +159,7 @@ def migrate(fields, source, output, geometry, slide_data, *, workers=12, chart_i
     output_catalog = dict(cat, charts=rows, chart_count=len(rows), selected_chart_ids=sorted(selected),
         song_count=len({r['song_id'] for r in rows}), producer_recipe=recipe,
         source_producer_recipe=field_cat['producer_recipe'], source_cache=str(fields),
-        source_physical_cache=str(source), route_coverage_attribution=ROUTE_COVERAGE,
+        source_physical_cache=str(source), route_coverage_attribution=ROUTE_COVERAGE, slide_launch_attribution=SLIDE_LAUNCH,
         geometry_root=str(Path(geometry).resolve()), slide_data=str(Path(slide_data).resolve()))
     if 'versions' in cat:
         output_catalog['versions'] = dict(Counter(r['version'] for r in rows))
@@ -150,7 +174,7 @@ def migrate(fields, source, output, geometry, slide_data, *, workers=12, chart_i
     results.sort(key=lambda r:r['chart_id'])
     result = dict(schema=SCHEMA, views=['original'], recipe=recipe, expected=len(rows),
                   counts=dict(success=len(results), failed=0), results=results,
-                  route_coverage_attribution=ROUTE_COVERAGE)
+                  route_coverage_attribution=ROUTE_COVERAGE, slide_launch_attribution=SLIDE_LAUNCH)
     write_json(output/'production-summary.json', result)
     write_json(output/'training-index.json', dict(views=['original'], charts=[
         dict(chart_id=r['chart_id'], path=r['path']) for r in results]))

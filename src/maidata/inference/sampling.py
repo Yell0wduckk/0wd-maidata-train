@@ -104,7 +104,18 @@ class Sampler:
 
     def allowed(self, evaluation):
         d = evaluation.raw.decision() if hasattr(evaluation, 'raw') else evaluation
-        return not d.basic_errors and (not self.physical_hard_mask or not d.physical)
+        return not d.basic_errors and 'multitouch' not in d.physical and (not self.physical_hard_mask or not d.physical)
+
+    def support_tree(self, stage, timing, **kwargs):
+        # Recompile CONT existence with only mandatory multitouch bits retained.
+        # Checking only the final remainder would admit impossible CONT paths.
+        if not self.physical_hard_mask:
+            key = 'moment' if kwargs['kind'] == 'MOMENT' else 'duration'
+            support = stage[key]
+            stage = dict(stage, **{key: dict(support, intervals=[
+                [a, b, dict(row, physical=row.get('physical', 0) & 1)]
+                for a, b, row in support['intervals']])})
+        return compile_support_tree(stage, timing, **kwargs)
 
     def contents(self, decoder, h, kind, oracle, timing, distributions, *, end_tick, cap_tick,
                  moment_remaining=None, output=None, return_cache=False, history=(), onset_end_tick=None,
@@ -159,7 +170,7 @@ class Sampler:
             stage = dict(cursor_tick=cursor, **{'moment' if kind == 'MOMENT' else 'duration': support})
             if output is None:
                 raise ValueError('time generation requires a reusable completed main prefix')
-            tree = compile_support_tree(stage,timing,kind=kind,window_end=end_tick,cap_tick=cap_tick,target=None)
+            tree = self.support_tree(stage,timing,kind=kind,window_end=end_tick,cap_tick=cap_tick,target=None)
             if kind != 'MOMENT':
                 distribution = DurationDistribution(self, decoder, output, tree, timing)
                 for leaf in distribution.sampled():
@@ -172,7 +183,7 @@ class Sampler:
                 return (token,current.cache) if return_cache else token
             def visit(depth, query, current):
                 qh=current.hidden[0,-1]
-                valid = tree.hard[depth] if self.physical_hard_mask else tree.basic[depth]
+                valid = tree.hard[depth]
                 floor = self.floor_tick if moment_floor is None else max(self.floor_tick or 0, moment_floor)
                 if kind == 'MOMENT' and floor is not None:
                     # Short value c completes at cursor+elapsed+c+1; CONT stays open.
