@@ -125,13 +125,13 @@ M使用独立CONT输入；续接锁定时间类型，每次CONT执行主干并�
 
 默认先使用Physical hard mask；窗口回退预算耗尽后，从当前因果前缀仅放宽非多押Physical拒绝，继续强制补齐和生成。每窗`physical_fallback`记录触发点与原因，实际接受的违规逐条记录在`physical_bypass`；下一窗重新开启请求的hard mask。语法、音频范围和基本时值支持始终生效。显式`--no-physical-hard-mask`则从开始放宽非多押Physical。无法完成动作时恢复完整前缀并推进合法MOMENT，预算耗尽本身不直接导致失败。放宽后仍无合法语法补全、非有限预测或超过生成上限时报错并写`generation-error.json`，不将截断谱面标为成功。
 
-经过判定区后的撞尾（`path_guard`）例外采用 NOTE 采样后的修复，不在 type / kind / pad / flags 选择时硬屏蔽。间隔按 Slide 实际进入该判定区至 NOTE 起音的秒数计算：`150 <= gap <= 200 ms` 自动设置 `ex=1`，保留 kind、pad、其他 flags 及后续 Hold / Slide 内容；`0 < gap < 150 ms` 放弃这个 NOTE，强制回到 MOMENT 并重新选择时间，不在原起音改选 Touch。已有 EX 也不能跳过150 ms以内的回退。多个路径同时命中时任一严重撞尾即回退，初次重试时间至少到所有命中路径的150 ms边界；不是将其他音符或未来窗口整体向后移动。Slide 起点 `launch_guard`、占手、重叠和其他 Physical 规则不变。
+经过判定区后的撞尾（`path_guard`）例外采用 NOTE 采样后的修复，不在 type / kind / pad / flags 选择时硬屏蔽。发生撞尾后优先在原 pad 头经重复惩罚和 top-k / top-p 筛选的支持内无放回重采样其他合法、无撞尾的 pad，固定 kind 和原 flags；所有替代位置无法完成时才回退到原来的 EX / MOMENT 处理。间隔按 Slide 实际进入该判定区至 NOTE 起音的秒数计算：`150 <= gap <= 200 ms` 自动设置 `ex=1`，保留 kind、pad、其他 flags 及后续 Hold / Slide 内容；`0 < gap < 150 ms` 放弃这个 NOTE，强制回到 MOMENT 并重新选择时间，不在原起音改选 Touch。已有 EX 也不能跳过150 ms以内的回退。pad 重采样失败后，多个路径同时命中时任一严重撞尾即回退，初次重试时间至少到所有命中路径的150 ms边界；不是将其他音符或未来窗口整体向后移动。Slide 起点 `launch_guard`、占手、重叠和其他 Physical 规则不变。
 
 Hold / Touch Hold 与 Slide 最终 route 的最后判定区另有推理时概率修复：duration 完成后比较位置字段和时长的合法原概率；换 route 排除同终点并重推 duration，换 pad 保留 duration。判定、CONT 概率与状态合同见 [最终判定区修复](inference-hold-slide-final-area.md)。
 
-若撞尾发生于 MOMENT 后的第一个 NOTE，撤回尚未落音的 MOMENT 再重采样，避免连续 MOMENT 或遗留空起音；若同一起音已有完成音符，则保留它们并选择下一 MOMENT。前缀、规则、K/V、流式文本和 IR 同步回退。每窗生成报告及交互结果的 `tail_repairs` 记录加 EX / MOMENT 修复，搜索撤回也撤销对应修复记录；这些有意修复不计为 Physical bypass。整曲、续写和范围生成共用该流程。
+若需回退 MOMENT 且撞尾发生于 MOMENT 后的第一个 NOTE，撤回尚未落音的 MOMENT 再重采样，避免连续 MOMENT 或遗留空起音；若同一起音已有完成音符，则保留它们并选择下一 MOMENT。前缀、规则、K/V、流式文本和 IR 同步回退。每窗生成报告及交互结果的 `tail_repairs` 记录 pad / EX / MOMENT 修复，搜索撤回也撤销对应修复记录；这些有意修复不计为 Physical bypass。整曲、续写和范围生成共用该流程。
 
-加 EX 不增加模型前向，只修改尚未送回模型的 NOTE。MOMENT 回退复用原前缀和 Router 前半层输出，但重新执行时间类型对应的后半层；延后起音的 NOTE 也需重新预测，长时值可能增加 CONT 步骤。不重跑 Encoder、Drafter / Planner 或整段前缀，不能将其计算量描述为完全不变。CPU 小模型测试核对了实际 begin / complete 调用次数及重算后 K/V 与接受序列的一致性。
+重采样 pad 复用已有小头概率，仅增加候选合法性查询；如果替代 Hold / Slide 后续搜索失败仍会有回退开销。加 EX 不增加模型前向，只修改尚未送回模型的 NOTE。MOMENT 回退复用原前缀和 Router 前半层输出，但重新执行时间类型对应的后半层；延后起音的 NOTE 也需重新预测，长时值可能增加 CONT 步骤。不重跑 Encoder、Drafter / Planner 或整段前缀，不能将其计算量描述为完全不变。CPU 小模型测试核对了实际 begin / complete 调用次数及重算后 K/V 与接受序列的一致性。
 
 ## Physical 推理查询与复用
 

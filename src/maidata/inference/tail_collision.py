@@ -22,7 +22,9 @@ class TailRepair:
 
     def record(self, tick):
         from maidata.chart import token_to_dict
-        return dict(strategy='ex' if self.replacement is not None else 'moment',
+        strategy = ('moment' if self.replacement is None else
+                    'pad' if self.replacement.pad != self.original.pad else 'ex')
+        return dict(strategy=strategy,
                     tick=tick, original=token_to_dict(self.original), gaps_ms=list(self.gaps_ms))
 
 

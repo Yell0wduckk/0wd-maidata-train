@@ -1,6 +1,6 @@
 """Hierarchical field sampling against current, prefix-only rule queries."""
 from itertools import product
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import torch
 
@@ -141,12 +141,28 @@ class Sampler:
                     for f in self.order(scores, [self.allowed(oracle.query(n)) for n in options]):
                         note = options[f]
                         repair = oracle.tail_repair(note) if hasattr(oracle, 'tail_repair') else None
-                        candidate = repair or note
                         self.field_choice = probabilities if name in ('hold', 'touch_hold') else None
+                        if repair is not None:
+                            # Stay in the original filtered pad support and keep
+                            # kind/flags fixed. Exhaust replacements (including
+                            # their downstream search) before EX/time fallback.
+                            alternatives = values.clone()
+                            for index, pad in enumerate(pads):
+                                replacement = replace(note, pad=pad)
+                                if (index == p or not torch.isfinite(alternatives[index])
+                                        or not self.allowed(oracle.query(replacement))
+                                        or oracle.tail_repair(replacement) is not None):
+                                    alternatives[index] = -torch.inf
+                            for index in self.order_filtered(alternatives):
+                                self.field_choice = probabilities if name in ('hold', 'touch_hold') else None
+                                candidate = TailRepair(note, repair.gaps_ms, replacement=replace(note, pad=pads[index]))
+                                yield (candidate,output.cache) if return_cache else candidate
+                        self.field_choice = probabilities if name in ('hold', 'touch_hold') else None
+                        candidate = repair or note
                         yield (candidate,output.cache) if return_cache else candidate
                         if isinstance(repair, TailRepair) and repair.minimum_tick is not None:
-                            # The caller must retry time, never another pad/kind
-                            # (especially Touch) at this colliding onset.
+                            # Pad replacements are exhausted. Retry time,
+                            # never change the colliding note's kind to Touch.
                             return
         elif kind == 'ROUTE':
             first = oracle.physical.grammar.state.phase in ('route', 'track_done')

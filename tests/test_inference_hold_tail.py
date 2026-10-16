@@ -130,7 +130,7 @@ def test_cont_probability_is_product_and_queries_reused():
 
 def generate_case(c, geometry, *, slide=False, choose_duration=False, top_k=0,
                   kind='hold', change_duration=False, start=32, stop=None, fail_pad_branch=False,
-                  extra_tail=False):
+                  extra_tail=False, fixed_pad=False):
     timing = TimingMap([(0,62.5)])
     state = GenerationPhysicalState(timing, geometry, audio_end_seconds=30)
     state.inject_boundary(Moment(0), start_tick=start, window_end=start+512)
@@ -151,6 +151,9 @@ def generate_case(c, geometry, *, slide=False, choose_duration=False, top_k=0,
         model.heads.button.bias.fill_(-1000)
         model.heads.button.bias[0 if slide else 2] = 8
         model.heads.button.bias[1] = -100 if choose_duration else 6
+        if fixed_pad:
+            model.heads.button.bias.fill_(-torch.inf)
+            model.heads.button.bias[0 if slide else 2] = 8
         if kind == 'touch_hold':
             model.heads.touch.weight.zero_(); model.heads.touch.bias.fill_(-1000)
             model.heads.touch.bias[2] = 8
@@ -304,7 +307,7 @@ def test_changed_route_can_require_a_different_legal_duration(config,geometry):
 
 
 def test_existing_ex_repair_survives_duration_only_repair(config,geometry):
-    _,_,_,tokens,report,_=generate_case(config,geometry,choose_duration=True,extra_tail=True)
+    _,_,_,tokens,report,_=generate_case(config,geometry,choose_duration=True,extra_tail=True,fixed_pad=True)
     assert tokens==(Note.make('hold','A3',ex=1),HoldDuration(32))
     assert report['hold_slide_tail_repairs'][0]['field']=='duration'
     assert len(report['tail_repairs'])==1 and report['tail_repairs'][0]['strategy']=='ex'
