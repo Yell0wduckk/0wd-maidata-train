@@ -43,7 +43,7 @@ def contacts(state, token):
         checked = advance_ticks(state.timing, entered, -96)
         # Actions include a 22-tick release guard; recover the true hold end.
         end = advance_ticks(state.timing, hold.press_end, -22)
-        if hold.press_start <= checked + EPS and checked < end - EPS:
+        if hold.press_start <= entered + EPS and checked < end - EPS:
             result.append(dict(hold_owner=hold.owner, hold_tick=hold.tick,
                 hold_pad=hold.pad, hold_start=hold.press_start, hold_end=end,
                 slide_owner=slide.owner, slide_tick=slide.tick,
@@ -66,9 +66,9 @@ def legal(state, token, sampler):
 def strict_support(state):
     """Exact inference-only duration intervals, including new-rule crossings.
 
-    Slide entry time is affine in written duration. Moving its one-beat-earlier
-    check through a BPM change is equivalent to shifting each fixed hold bound
-    forward one beat. This avoids integer-tick enumeration or approximate grids.
+    Slide entry time is affine in written duration. Its preceding beat overlaps
+    a hold when entry >= hold start and entry < hold end shifted forward a beat.
+    Only the end bound shifts, including through BPM changes. No tick enumeration.
     """
     base = state.time_support('SLIDE_DURATION' if state.grammar.state.phase == 'chain' else 'HOLD_DURATION')
     lower, upper = base['domain']
@@ -89,8 +89,8 @@ def strict_support(state):
             for hold in state.actions:
                 if hold.kind in ('hold', 'touch_hold') and mask & pad_bit(hold.pad):
                     end = advance_ticks(state.timing, hold.press_end, -22)
-                    roots.extend(lower + (advance_ticks(state.timing, bound, 96) - t) / slope
-                                 for bound in (hold.press_start, end))
+                    roots.extend(lower + (bound - t) / slope
+                                 for bound in (hold.press_start, advance_ticks(state.timing, end, 96)))
     elif not slide:
         origin = a.press_start
         scale = state.timing.written_tick_seconds(state.grammar.state.cursor)
@@ -98,7 +98,7 @@ def strict_support(state):
             if old.track and old.motions[-1].entries:
                 entered, mask = old.motions[-1].entries[-1]
                 checked = advance_ticks(state.timing, entered, -96)
-                if mask & pad_bit(a.pad) and origin <= checked + EPS:
+                if mask & pad_bit(a.pad) and origin <= entered + EPS:
                     roots.append((checked - origin) / scale)
 
     def query(ticks):

@@ -53,8 +53,8 @@ def test_hold_interval_is_real_half_open_and_raw_oracle_unchanged(geometry, kind
     raw = InferencePhysicalState(state.timing, geometry, audio_end_seconds=20)
     raw.restore(state.snapshot())
     assert raw.query(HoldDuration(96)).allowed and state.query(HoldDuration(96)).allowed
-    # A hold starting after the check instant does not cover it.
-    assert not contacts(pending(geometry, kind=kind, start=97), HoldDuration(96))
+    # Starting later in the preceding beat still intersects the window.
+    assert contacts(pending(geometry, kind=kind, start=97), HoldDuration(96))
 
 
 @pytest.mark.parametrize('kind', ['hold', 'touch_hold'])
@@ -130,14 +130,14 @@ def test_cont_probability_is_product_and_queries_reused():
 
 def generate_case(c, geometry, *, slide=False, choose_duration=False, top_k=0,
                   kind='hold', change_duration=False, start=32, stop=None, fail_pad_branch=False,
-                  extra_tail=False, fixed_pad=False):
+                  extra_tail=False, fixed_pad=False, late_hold=False):
     timing = TimingMap([(0,62.5)])
     state = GenerationPhysicalState(timing, geometry, audio_end_seconds=30)
     state.inject_boundary(Moment(0), start_tick=start, window_end=start+512)
     if slide:
         state.actions = (press(timing, geometry, start-32, 'A3', kind, duration=200, owner=42),)
     else:
-        state.actions = (track(timing, geometry, start-32, ['1-3'],192,owner=42),)
+        state.actions = (track(timing, geometry, start-(160 if late_hold else 32), ['1-3'],192,owner=42),)
     if extra_tail:
         # A prior path entry 18 ticks (180 ms) before this Hold onset, with no
         # simultaneous three-hand demand. The other, future Slide causes the
@@ -376,3 +376,74 @@ def test_interactive_rejection_and_prefix_edit_do_not_retain_repair_history(conf
     changed=session.suggest(dict(request,id=3,revision=2),threading.Event())
     assert changed['hold_slide_tail_repairs']==[]
     assert changed['onsets'][0]['content'][0]['pad']=='A3'
+
+
+@pytest.mark.parametrize('kind', ['hold', 'touch_hold'])
+@pytest.mark.parametrize('start,conflict', [(95, True), (96, True), (97, True),
+                                          (191, True), (192, True), (193, False)])
+def test_hold_start_anywhere_in_preceding_beat_including_entry(geometry, kind, start, conflict):
+    state = pending(geometry, kind=kind, start=start)
+    assert bool(contacts(state, HoldDuration(2))) is conflict
+
+
+@pytest.mark.parametrize('kind', ['hold', 'touch_hold'])
+@pytest.mark.parametrize('duration,conflict', [(63, False), (64, True), (65, True),
+                                             (455, True), (456, False)])
+def test_slide_entry_crosses_unshifted_hold_start_and_shifted_end(geometry, kind, duration, conflict):
+    state = pending(geometry, slide=True, kind=kind)
+    state.actions = (press(state.timing, geometry, 160, 'A3', kind, duration=100, owner=42),)
+    assert bool(contacts(state, SlideDuration(duration))) is conflict
+
+
+@pytest.mark.parametrize('kind', ['hold', 'touch_hold'])
+@pytest.mark.parametrize('slide', [False, True])
+@pytest.mark.parametrize('change', [False, True])
+def test_late_hold_partition_matches_direct_check_at_every_duration(geometry, kind, slide, change):
+    timing = TimingMap([(0, 62.5), (Fraction(150, 96), 125)]) if change else TimingMap([(0, 62.5)])
+    state = pending(geometry, slide=slide, kind=kind, timing=timing, start=32 if slide else 160)
+    if slide:
+        state.actions = (press(timing, geometry, 160, 'A3', kind, duration=100, owner=42),)
+    state.set_duration_cap(timing.second(800))
+    support = strict_support(state)
+    constructor = SlideDuration if slide else HoldDuration
+    assert any(row.get('hold_slide_final_area') for _, _, row in support['intervals'])
+    for ticks in range(support['domain'][0], support['domain'][1]+1):
+        decision = state.query(constructor(ticks))
+        if contacts(state, constructor(ticks)):
+            decision = replace(decision, physical=decision.physical | {'slide_too_fast'})
+        assert interval_decision(support, ticks) == decision
+
+
+@pytest.mark.parametrize('kind', ['hold', 'touch_hold'])
+def test_late_hold_generation_replaces_pad_and_retains_duration(config, geometry, kind):
+    # The Hold starts inside the final area's preceding beat. Even a two-tick
+    # duration conflicts, so duration alone cannot fix it; pad must change.
+    model, session, memory, tokens, report, events = generate_case(config, geometry,
+        start=200, kind=kind, late_hold=True, choose_duration=True)
+    assert tokens == (Note.make(kind, 'A2'), HoldDuration(96))
+    assert report['hold_slide_tail_repairs'][0]['field'] == 'pad'
+    witness = report['hold_slide_tail_repairs'][0]['conflicts'][0]
+    assert witness['checked_seconds'] < witness['hold_start'] < witness['entry_seconds']
+    assert report['physical_bypass'] == []
+    assert_replay(model, session, memory, tokens, 200)
+    assert not any(e.get('complete') and e.get('token') == HoldDuration(96)
+                   for e in events[:next(i for i,e in enumerate(events) if e['event']=='rollback')])
+
+
+def test_user_eighth_hold_fragment_conflicts_in_final_judge_area(geometry):
+    # {4}8<5[8:1],3>7[4:1],{8}7h[8:7],
+    # Preserve the configured geometry's final entry proportion for 3>7.
+    geometry.paths['3>7'] = replace(geometry.paths['3>7'],
+        entries=((0., 1 << 2), (.92110403881279, 1 << 6)))
+    timing = TimingMap([(0, 244)])
+    state = GenerationPhysicalState(timing, geometry, audio_end_seconds=20)
+    state.inject_boundary(Moment(0), start_tick=192, window_end=1536)
+    state.actions = (track(timing, geometry, 0, ['8<5'], 48, owner=42),
+                     track(timing, geometry, 96, ['3>7'], 96, owner=43))
+    state.accept(Note.make('hold', 'A7'))
+    witness, = contacts(state, HoldDuration(336))
+    assert witness['path'] == '3>7' and witness['judge_area_mask'] == 1 << 6
+    assert witness['checked_seconds'] < witness['hold_start'] < witness['entry_seconds'] < witness['hold_end']
+    assert (witness['entry_seconds']-witness['hold_start'])*1000 == pytest.approx(226.50099315068)
+    state.set_duration_cap(timing.second(768))
+    assert interval_decision(strict_support(state), 336).physical == frozenset({'slide_too_fast'})

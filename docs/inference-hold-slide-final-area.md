@@ -7,8 +7,10 @@
 
 每条 Slide 分支仅取最终 route 的最后一个几何判定区及实际进入秒数 `t`。
 中间 route 的末判定区、route 终点坐标及 Slide 结束秒数均不代替该数据。
-若 Hold / Touch Hold 的 pad 属于该区，且真实按住区间 `[start, end)` 覆盖
-`Timing(t - 96 tick)`，即触发本规则。96 tick 按全曲 timing 反算再前移一拍，
+若 Hold / Touch Hold 的 pad 属于该区，且真实按住区间 `[start, end)` 与
+`[Timing(t - 96 tick), t]` 相交，即触发本规则，包括这一拍内才开始的 Hold。
+等价条件为 `start <= t` 且 `end > Timing(t - 96 tick)`；到区瞬间起按会触发，
+恰在窗口左端松手不触发。96 tick 按全曲 timing 反算再前移一拍，
 支持变 BPM；Hold 的 `end` 不含动作层附加的 22 tick 松手保护。
 
 只在 duration 完整选定后检查，不在前面的 pad / route 采样阶段提前 hard-mask。
